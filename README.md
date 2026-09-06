@@ -1,50 +1,30 @@
-# SaúdeJá - Classificador de No-show
+# SaudeJa — Classificador de no-show em agendamentos médicos
 
-Notebook com classificador LightGBM pra prever no-show de paciente em consulta.
+> Status: em desenvolvimento — (AI Factory: Build, Deploy and Showcase)
 
-**Acurácia 78% no test set (split 80/20, random_state=42).**
-**F1 classe positiva (no-show=1): 0.65**
-**ROC-AUC: 0.81**
+## Visão Geral
 
-## Features usadas
+SaudeJá é um SaaS voltado para clínicas particulares de saúde de médio e pequeno porte que oferece serviço de agendamento online, prontuário, faturamento e comunicação com pacientes. Atualmente visa desenvolver uma funcionalidade para prevê pacientes que se ausenta de agendamentos médicos usando o classificador LightGBM. O repositório foi herdado com um pipeline de treinamento que resulta em um modelo com desempenho de Acurácia 78% no test set, F1-score para classe positiva de 0,65 e ROC-AUC de 0,81, dentro da disciplina AI Factory: Build, Deploy and Showcase.
 
-- `idade` — idade do paciente (int)
-- `sexo` — F/M (binarizado 0/1)
-- `especialidade` — label encoding (cardiologia, dermato, ginecologia, ortopedia, oftalmo, clínica geral, pediatria)
-- `distancia_km` — distância casa-clínica
-- `dias_entre_agendamento_consulta` — quanto antes o paciente agendou
-- `historico_noshow` — quantas vezes esse paciente já faltou
 
-Target: `no_show` (0 = compareceu, 1 = faltou).
+## Problema
 
-## Como rodar
+O no-show custa em média **R$ 180 por consulta perdida** e a taxa nacional gira em torno de 25-35%. Para uma clínica média (1.500 consultas/mês), isso significa R$ 70k-100k de receita evaporando todo mês. A primeira tentativa de reduzir o no-show foi de envio de lembrete para todos os pacientes, o que resultou em alto custo, sendo insustentável para clínicas com orçamento menor. A proposta atual é treinamento de um algoritmo que classifica os pacientes com alto chance de não comparecimento e apenas disparar lembrete para estes, reduzindo, dessa forma, em até 70% o gasto com mensageria.
 
-```
-jupyter notebook
-```
+## Arquitetura
 
-Abre `notebook.ipynb` e roda tudo (Run All). Treino leva uns 30s no meu macbook.
+Veja o diagrama C4 nível 1 e 2 em [`docs/architecture.md`](docs/architecture.md).
+Decisões arquiteturais relevantes estão registradas em [`docs/adr/`](docs/adr/).
 
-Salva `model.pkl` na raiz.
+## Roadmap
 
-## Modelo
+- [x] Etapa 1: adoção do protótipo
+- [ ] Etapa 2: escolha da stack (ADR-001)
+- [ ] Etapa 3: arquitetura C4 + ADR-002 + repositório
+- [ ] Etapa 4: deploy manual
+- [ ] Etapa 5: CI/CD
+- (etc.)
 
-LightGBM com:
-- n_estimators=200
-- learning_rate=0.05
-- max_depth=6
-- num_leaves=31
+## Autor
 
-Tunei na mão olhando F1. Não rodei GridSearch ainda (TODO).
-
-## TODO
-
-- precisamos transformar isso em API pra integrar com sistema das clínicas — vou abrir ticket no Jira (SAUDEJA-241)
-- SHAP pra explicabilidade (liderança médica vai pedir)
-- oversampling SMOTE? classe positiva tá em ~30%, dá pra melhorar F1
-- pipeline de re-treino mensal — hoje é manual
-- testes? lol
-
----
-
-*Camila S. — Data Science*
+Vanessa Hoysan Lin
