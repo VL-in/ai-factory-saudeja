@@ -16,10 +16,22 @@ O no-show custa em média **R$ 180 por consulta perdida** e a taxa nacional gira
 Veja o diagrama C4 nível 1 e 2 em [`docs/architecture.md`](docs/architecture.md).
 Decisões arquiteturais relevantes estão registradas em [`docs/adr/`](docs/adr/).
 
+## Pipeline de treino (DVC)
+
+O pipeline de treino é versionado com DVC e executado dentro de um container Docker (veja `dvc.yaml`). Fluxo de uso para quem for treinar/ajustar o modelo:
+
+1. Se o dataset (`data/consultas-historicas.csv`) mudou — novas consultas, correção de registros etc. —, atualize o arquivo e rode `dvc add data/consultas-historicas.csv` para gerar um novo hash e atualizar o `.dvc` correspondente. Pule este passo se só o código/hiperparâmetros mudaram.
+2. Altere o que for preciso (ex.: `src/train.py`, hiperparâmetros, `requirements.txt`) e rode `dvc repro` — o comando reexecuta o pipeline (build + run do container), atualiza `dvc.lock` e regenera `data/model.pkl` e `data/mlflow.db` a partir do dataset atual (novo ou não).
+3. Confira os resultados do treino: métricas no MLflow (`data/mlflow.db`, ex. via `mlflow ui --backend-store-uri sqlite:///data/mlflow.db`) e o `dvc.lock` atualizado com os novos hashes.
+4. Se o modelo/resultado for o esperado, faça commit do código alterado junto com `dvc.lock` e o `.dvc` do dataset, se houver (`git add dvc.lock data/consultas-historicas.csv.dvc <arquivos alterados>` e commit) para deixar rastreável qual dado e qual código geraram qual modelo.
+5. Rode `dvc push` para enviar os artefatos rastreados (dataset e/ou modelo) ao remote configurado em `.dvc/config` (hoje um caminho local, trocar por um remote persistente antes de usar em equipe).
+
+> Evite `dvc add .` na raiz do repositório: além de conflitar com os `outs` já gerenciados pelo stage `train`, é um path com bug conhecido no Windows. Para rastrear um dataset novo, use `dvc add data/<arquivo>`.
+
 ## Roadmap
 
 - [x] Etapa 1: adoção do protótipo
-- [ ] Etapa 2: escolha da stack (ADR-001)
+- [x] Etapa 2: escolha da stack (ADR-001)
 - [ ] Etapa 3: arquitetura C4 + ADR-002 + repositório
 - [ ] Etapa 4: deploy manual
 - [ ] Etapa 5: CI/CD
