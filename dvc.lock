@@ -11,20 +11,20 @@ stages:
       size: 15220
     - path: dockerfile
       hash: md5
-      md5: a17937b3479d05300467e17a8c1a0dec
-      size: 367
+      md5: 027f52df0aaa85d5cbf32ec5670b820c
+      size: 409
     - path: requirements.txt
       hash: md5
-      md5: 2145dfc84069a52e6c84337645d96fe8
-      size: 133
+      md5: 066e31938e4b1845c738465b370b3449
+      size: 197
     - path: src/train.py
       hash: md5
-      md5: 9c8cc47472ab2da35fbc8b5fd74b4a29
-      size: 3839
+      md5: d77e113f97ea4c2eb9d8a857c8dd1db6
+      size: 3888
     outs:
     - path: data/mlflow.db
       hash: md5
-      md5: 8c80e37afa723cd1e3221d5fc857d48a
+      md5: b8477149149b7bbabb6a4a6a079fa909
       size: 225280
     - path: data/model.pkl
       hash: md5
