@@ -9,6 +9,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
+COPY tests/ ./tests/
+COPY pytest.ini .
 
 ENV DATA_PATH=/app/data/consultas-historicas.csv
 ENV MODEL_PATH=/app/model.pkl
