@@ -1,0 +1,18 @@
+stages:
+  train:
+    cmd: >-
+      docker build -t saudeja-train -f dockerfile . &&
+      docker run --rm
+      -v "%cd%/data:/app/data"
+      -v "%cd%:/app/output"
+      -e MODEL_PATH=/app/output/model.pkl
+      -e MLFLOW_TRACKING_URI=sqlite:////app/output/mlflow.db
+      saudeja-train
+    deps:
+      - dockerfile
+      - requirements.txt
+      - src/train.py
+      - data/consultas-historicas.csv
+    outs:
+      - data/model.pkl
+      - data/mlflow.db
