@@ -12,10 +12,15 @@ import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, roc_auc_score
 import lightgbm as lgb
+import mlflow
+import mlflow.lightgbm
 
 DATA_PATH = os.environ.get("DATA_PATH", "./data/consultas-historicas.csv")
 MODEL_PATH = os.environ.get("MODEL_PATH", "./model.pkl")
 RANDOM_STATE = 42
+
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+MLFLOW_EXPERIMENT_NAME = os.environ.get("MLFLOW_EXPERIMENT_NAME", "saudeja-no-show")
 
 
 def carregar_dados(path):
@@ -53,11 +58,16 @@ def treinar(X, y):
         X, y, test_size=0.20, random_state=RANDOM_STATE, stratify=y
     )
 
+    n_estimators = 200
+    learning_rate = 0.05
+    max_depth = 6
+    num_leaves = 31
+
     model = lgb.LGBMClassifier(
-        n_estimators=200,
-        learning_rate=0.05,
-        max_depth=6,
-        num_leaves=31,
+        n_estimators=n_estimators,
+        learning_rate=learning_rate,
+        max_depth=max_depth,
+        num_leaves=num_leaves,
         random_state=RANDOM_STATE,
     )
     model.fit(X_train, y_train)
@@ -65,18 +75,43 @@ def treinar(X, y):
     y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
 
+    auc = roc_auc_score(y_test, y_proba)
     print("\n=== Classification report ===")
     print(classification_report(y_test, y_pred, digits=3))
-    print(f"ROC-AUC: {roc_auc_score(y_test, y_proba):.3f}")
+    print(f"ROC-AUC: {auc:.3f}")
+
+    mlflow.log_params({
+        "n_estimators": n_estimators,
+        "learning_rate": learning_rate,
+        "max_depth": max_depth,
+        "num_leaves": num_leaves,
+        "random_state": RANDOM_STATE,
+    })
+    mlflow.log_param("test_size", 0.20)
+    mlflow.log_metric("roc_auc", auc)
+    report = classification_report(y_test, y_pred, digits=3, output_dict=True)
+    mlflow.log_metric("accuracy", report["accuracy"])
+    mlflow.log_metric("precision_1", report["1"]["precision"])
+    mlflow.log_metric("recall_1", report["1"]["recall"])
+    mlflow.log_metric("f1_1", report["1"]["f1-score"])
+    mlflow.lightgbm.log_model(model, artifact_path="model")
+
     return model
 
 
 def main():
-    df = carregar_dados(DATA_PATH)
-    X, y, mapa_esp = preprocessar(df)
-    model = treinar(X, y)
-    joblib.dump({"model": model, "mapa_especialidade": mapa_esp}, MODEL_PATH)
-    print(f"\n[ok] modelo salvo em {MODEL_PATH}")
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+
+    with mlflow.start_run():
+        mlflow.log_param("data_path", DATA_PATH)
+
+        df = carregar_dados(DATA_PATH)
+        X, y, mapa_esp = preprocessar(df)
+        model = treinar(X, y)
+        joblib.dump({"model": model, "mapa_especialidade": mapa_esp}, MODEL_PATH)
+        mlflow.log_artifact(MODEL_PATH)
+        print(f"\n[ok] modelo salvo em {MODEL_PATH}")
 
 
 if __name__ == "__main__":

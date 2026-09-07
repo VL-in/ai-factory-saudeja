@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.5.1] (Vanessa)
+- Implementação do DVC e MLFlow para rastreabilidade do conjunto de dados e treinamento.
+
 ## [v0.5] (Camila)
 - Notebook completo com EDA + treino LightGBM
 - Modelo serializado em model.pkl
