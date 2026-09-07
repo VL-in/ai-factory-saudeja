@@ -34,6 +34,10 @@ data/*.parquet
 data/raw/
 data/processed/
 
+# MLflow (tracking local, regerável)
+mlruns/
+data/mlflow.db
+
 # IDE
 .vscode/
 .idea/

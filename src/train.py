@@ -9,17 +9,20 @@ import os
 import pandas as pd
 import numpy as np
 import joblib
+from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, roc_auc_score
 import lightgbm as lgb
 import mlflow
 import mlflow.lightgbm
 
+load_dotenv()
+
 DATA_PATH = os.environ.get("DATA_PATH", "./data/consultas-historicas.csv")
-MODEL_PATH = os.environ.get("MODEL_PATH", "./model.pkl")
+MODEL_PATH = os.environ.get("MODEL_PATH", "./data/model.pkl")
 RANDOM_STATE = 42
 
-MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///data/mlflow.db")
 MLFLOW_EXPERIMENT_NAME = os.environ.get("MLFLOW_EXPERIMENT_NAME", "saudeja-no-show")
 
 

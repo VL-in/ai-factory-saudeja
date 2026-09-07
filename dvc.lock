@@ -1,0 +1,32 @@
+schema: '2.0'
+stages:
+  train:
+    cmd: docker build -t saudeja-train -f dockerfile . && docker run --rm -v 
+      "%cd%/data:/app/data" -e MODEL_PATH=/app/data/model.pkl -e 
+      MLFLOW_TRACKING_URI=sqlite:////app/data/mlflow.db saudeja-train
+    deps:
+    - path: data/consultas-historicas.csv
+      hash: md5
+      md5: b3ee3ee6510bfb9f61740b2d38222405
+      size: 15220
+    - path: dockerfile
+      hash: md5
+      md5: a17937b3479d05300467e17a8c1a0dec
+      size: 367
+    - path: requirements.txt
+      hash: md5
+      md5: 2145dfc84069a52e6c84337645d96fe8
+      size: 133
+    - path: src/train.py
+      hash: md5
+      md5: 9c8cc47472ab2da35fbc8b5fd74b4a29
+      size: 3839
+    outs:
+    - path: data/mlflow.db
+      hash: md5
+      md5: 8c80e37afa723cd1e3221d5fc857d48a
+      size: 225280
+    - path: data/model.pkl
+      hash: md5
+      md5: 65d8a76d86580cddc7de0a1604f8ce84
+      size: 240062
