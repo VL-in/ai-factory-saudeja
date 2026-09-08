@@ -1,0 +1,22 @@
+services:
+  mlflow-server:
+    build:
+      context: .
+      dockerfile: dockerfile.mlflow
+    container_name: saudeja-mlflow-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-db:/mlflow/db
+      - mlflow-artifacts:/mlflow/artifacts
+    restart: unless-stopped
+    networks:
+      - saudeja-net
+
+networks:
+  saudeja-net:
+    name: saudeja-net
+
+volumes:
+  mlflow-db:
+  mlflow-artifacts:
