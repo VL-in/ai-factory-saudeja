@@ -2,16 +2,24 @@ stages:
   train:
     cmd: >-
       docker build -t saudeja-train -f dockerfile . &&
+      docker compose up -d mlflow-server &&
       docker run --rm
+      --network saudeja-net
       -v "%cd%/data:/app/data"
       -e MODEL_PATH=/app/data/model.pkl
-      -e MLFLOW_TRACKING_URI=sqlite:////app/data/mlflow.db
+      -e MLFLOW_TRACKING_URI=http://mlflow-server:5000
       saudeja-train
     deps:
       - dockerfile
       - requirements.txt
       - src/train.py
       - data/consultas-historicas.csv
+    params:
+      - model.n_estimators
+      - model.learning_rate
+      - model.max_depth
+      - model.num_leaves
+      - balancing.strategy
+      - balancing.k_neighbors
     outs:
       - data/model.pkl
-      - data/mlflow.db

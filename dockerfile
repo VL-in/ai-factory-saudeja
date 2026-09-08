@@ -15,4 +15,7 @@ COPY pytest.ini .
 ENV DATA_PATH=/app/data/consultas-historicas.csv
 ENV MODEL_PATH=/app/model.pkl
 
+COPY params.yaml .
+
+
 CMD ["python", "src/train.py"]

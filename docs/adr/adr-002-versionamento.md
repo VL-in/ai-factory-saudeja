@@ -1,4 +1,4 @@
-# ADR-XXX: Título curto da decisão
+# ADR-002: Versionamento e rastreabilidade do pipeline de pre-processamento e treino de modelo
 
 ## Status
 Aceito

@@ -9,20 +9,25 @@ import os
 import pandas as pd
 import numpy as np
 import joblib
+import yaml
 from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.metrics import classification_report, roc_auc_score, average_precision_score
+from imblearn.over_sampling import SMOTENC
 import lightgbm as lgb
 import mlflow
 import mlflow.lightgbm
 
 load_dotenv()
 
+with open("params.yaml") as f:
+    PARAMS = yaml.safe_load(f)
+
 DATA_PATH = os.environ.get("DATA_PATH", "./data/consultas-historicas.csv")
 MODEL_PATH = os.environ.get("MODEL_PATH", "./data/model.pkl")
 RANDOM_STATE = 42
 
-MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "sqlite:///data/mlflow.db")
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 MLFLOW_EXPERIMENT_NAME = os.environ.get("MLFLOW_EXPERIMENT_NAME", "saudeja-no-show")
 
 
@@ -56,47 +61,64 @@ def preprocessar(df):
     return X, y, mapa_esp
 
 
-def treinar(X, y):
+TEST_SIZE = 0.20
+
+
+def treinar(X, y, balancing="none", k_neighbors=3):
+    # Split 80/20 estratificado pela classe alvo -- mesma estratégia do
+    # notebook original da Camila (train_test_split com stratify=y).
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.20, random_state=RANDOM_STATE, stratify=y
+        X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y
     )
 
-    n_estimators = 200
-    learning_rate = 0.05
-    max_depth = 6
-    num_leaves = 31
-
-    model = lgb.LGBMClassifier(
-        n_estimators=n_estimators,
-        learning_rate=learning_rate,
-        max_depth=max_depth,
-        num_leaves=num_leaves,
+    model_kwargs = dict(
+        n_estimators=PARAMS["model"]["n_estimators"],
+        learning_rate=PARAMS["model"]["learning_rate"],
+        max_depth=PARAMS["model"]["max_depth"],
+        num_leaves=PARAMS["model"]["num_leaves"],
         random_state=RANDOM_STATE,
     )
+
+    if balancing == "class_weight":
+        model_kwargs["class_weight"] = "balanced"
+
+    if balancing == "smotenc":
+        cat_idx = [X_train.columns.get_loc(c) for c in ["sexo", "especialidade"]]
+        smote = SMOTENC(categorical_features=cat_idx, k_neighbors=k_neighbors, random_state=RANDOM_STATE)
+        X_train, y_train = smote.fit_resample(X_train, y_train)
+
+    model = lgb.LGBMClassifier(**model_kwargs)
     model.fit(X_train, y_train)
 
     y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
+    report = classification_report(y_test, y_pred, digits=3, output_dict=True, zero_division=0)
 
-    auc = roc_auc_score(y_test, y_proba)
-    print("\n=== Classification report ===")
-    print(classification_report(y_test, y_pred, digits=3))
-    print(f"ROC-AUC: {auc:.3f}")
+    if "1" not in report:
+        # stratify=y evita isso na maioria dos casos, mas não há garantia
+        # matemática absoluta em amostras muito pequenas -- torna o problema
+        # visível em vez de reportar 0.0 como se fosse desempenho real do modelo.
+        aviso = (
+            "classe positiva ausente no fold de teste -- "
+            "precision_1/recall_1/f1_1 desta run não são confiáveis"
+        )
+        print(f"[aviso] {aviso}")
+        mlflow.set_tag("aviso_split", aviso)
+    metrics_1 = report.get("1", {"precision": 0.0, "recall": 0.0, "f1-score": 0.0})
+    metrics_0 = report.get("0", {"precision": 0.0, "recall": 0.0, "f1-score": 0.0})
 
-    mlflow.log_params({
-        "n_estimators": n_estimators,
-        "learning_rate": learning_rate,
-        "max_depth": max_depth,
-        "num_leaves": num_leaves,
-        "random_state": RANDOM_STATE,
-    })
-    mlflow.log_param("test_size", 0.20)
-    mlflow.log_metric("roc_auc", auc)
-    report = classification_report(y_test, y_pred, digits=3, output_dict=True)
+    mlflow.log_params(model_kwargs)
+    mlflow.log_param("balancing", balancing)          # <- chave pra comparar depois
     mlflow.log_metric("accuracy", report["accuracy"])
-    mlflow.log_metric("precision_1", report["1"]["precision"])
-    mlflow.log_metric("recall_1", report["1"]["recall"])
-    mlflow.log_metric("f1_1", report["1"]["f1-score"])
+    mlflow.log_metric("roc_auc", roc_auc_score(y_test, y_proba))
+    mlflow.log_metric("pr_auc", average_precision_score(y_test, y_proba))  # mais informativa que ROC-AUC aqui
+    mlflow.log_metric("f1_1", metrics_1["f1-score"])
+    mlflow.log_metric("precision_1", metrics_1["precision"])
+    mlflow.log_metric("recall_1", metrics_1["recall"])
+    mlflow.log_metric("f1_0", metrics_0["f1-score"])
+    mlflow.log_metric("precision_0", metrics_0["precision"])
+    mlflow.log_metric("recall_0", metrics_0["recall"])
+    mlflow.log_metric("f1_macro", report["macro avg"]["f1-score"])
     mlflow.lightgbm.log_model(model, artifact_path="model")
 
     return model
@@ -111,7 +133,11 @@ def main():
 
         df = carregar_dados(DATA_PATH)
         X, y, mapa_esp = preprocessar(df)
-        model = treinar(X, y)
+        model = treinar(
+            X, y,
+            balancing=PARAMS["balancing"]["strategy"],
+            k_neighbors=PARAMS["balancing"]["k_neighbors"],
+        )
         joblib.dump({"model": model, "mapa_especialidade": mapa_esp}, MODEL_PATH)
         mlflow.log_artifact(MODEL_PATH)
         print(f"\n[ok] modelo salvo em {MODEL_PATH}")

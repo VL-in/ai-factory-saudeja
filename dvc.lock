@@ -1,9 +1,10 @@
 schema: '2.0'
 stages:
   train:
-    cmd: docker build -t saudeja-train -f dockerfile . && docker run --rm -v 
+    cmd: docker build -t saudeja-train -f dockerfile . && docker compose up -d 
+      mlflow-server && docker run --rm --network saudeja-net -v 
       "%cd%/data:/app/data" -e MODEL_PATH=/app/data/model.pkl -e 
-      MLFLOW_TRACKING_URI=sqlite:////app/data/mlflow.db saudeja-train
+      MLFLOW_TRACKING_URI=http://mlflow-server:5000 saudeja-train
     deps:
     - path: data/consultas-historicas.csv
       hash: md5
@@ -11,22 +12,26 @@ stages:
       size: 15220
     - path: dockerfile
       hash: md5
-      md5: 027f52df0aaa85d5cbf32ec5670b820c
-      size: 409
+      md5: 24bcad5856996ceec326fd45c3e5e3e9
+      size: 433
     - path: requirements.txt
       hash: md5
-      md5: 066e31938e4b1845c738465b370b3449
-      size: 197
+      md5: b45d19914c963721c513627ae0f79229
+      size: 223
     - path: src/train.py
       hash: md5
-      md5: d77e113f97ea4c2eb9d8a857c8dd1db6
-      size: 3888
+      md5: ef987585a1effd5da8fb422a78e41f79
+      size: 5536
+    params:
+      params.yaml:
+        balancing.k_neighbors: 3
+        balancing.strategy: smotenc
+        model.learning_rate: 0.05
+        model.max_depth: 6
+        model.n_estimators: 200
+        model.num_leaves: 31
     outs:
-    - path: data/mlflow.db
-      hash: md5
-      md5: b8477149149b7bbabb6a4a6a079fa909
-      size: 225280
     - path: data/model.pkl
       hash: md5
-      md5: 65d8a76d86580cddc7de0a1604f8ce84
-      size: 240062
+      md5: 65ddd71e09f254b284917b5466c90909
+      size: 286574

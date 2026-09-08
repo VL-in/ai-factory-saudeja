@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.8] (Vanessa) - 2026-09-08
+  - (feat) Extração dos hiperparametros em params.yaml
+  - (feat) se a classe positiva ficar ausente do fold de teste, o código agora chama mlflow.set_tag("aviso_split", ...) e imprime um aviso — o 0.0 continua sendo logado (pra não quebrar o pipeline), mas fica marcado como não confiável em vez de se misturar silenciosamente com métricas reais.
+  - (fix) o MLFlow não estava gravando as runs feitas, foi necessário configurar um servidor remoto no MLFlow. Mlflow ui não é mais necessário localmente — acesse http://localhost:5000 diretamente no navegador; é o próprio servidor MLflow servindo a UI.
+  - (feat) Modelo (run: http://localhost:5000/#/experiments/1/runs/6c2f69fbae3e4a69b73861059f1067c7) registrado e promovido.
+
 ## [v0.7] (Vanessa) - 2026-09-07 - test
   - Adicionada suíte de testes automatizados (pytest):
   - `test_train.py`: testes unitários de `carregar_dados`, `preprocessar` e `treinar`, incluindo teste que documenta o risco de especialidade desconhecida virar NaN silencioso.
