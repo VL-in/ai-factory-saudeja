@@ -37,6 +37,16 @@ def test_preprocessar_retorna_features_esperadas(df_consultas):
     assert y.equals(df_consultas["no_show"])
 
 
+def test_preprocessar_inclui_features_temporais_quando_flag_ativa(df_consultas, monkeypatch):
+    monkeypatch.setitem(train.PARAMS, "features", {"temporais": True})
+
+    X, y, _ = train.preprocessar(df_consultas.copy())
+
+    assert {"dia_de_semana", "horario"} <= set(X.columns)
+    assert X["dia_de_semana"].between(0, 6).all()
+    assert X["horario"].between(0, 23).all()
+
+
 def test_preprocessar_mapa_especialidade_cobre_todas_categorias(df_consultas):
     _, _, mapa_esp = train.preprocessar(df_consultas.copy())
     assert set(mapa_esp.keys()) == set(df_consultas["especialidade"].unique())

@@ -18,6 +18,8 @@ import lightgbm as lgb
 import mlflow
 import mlflow.lightgbm
 
+from features import extrair_features_temporais
+
 load_dotenv()
 
 with open("params.yaml") as f:
@@ -56,12 +58,23 @@ def preprocessar(df):
         "dias_entre_agendamento_consulta",
         "historico_noshow",
     ]
+
+    if PARAMS.get("features", {}).get("temporais", False):
+        df = extrair_features_temporais(df)
+        features += ["dia_de_semana", "horario"]
+
     X = df[features]
     y = df["no_show"]
     return X, y, mapa_esp
 
 
 TEST_SIZE = 0.20
+
+# Colunas categoricas (label-encoded como inteiros, nao numericas de verdade) --
+# usadas tanto pelo SMOTENC (evita interpolar valores fracionarios que nao
+# existem, ex. dia_de_semana=2.7) quanto pelo LightGBM (categorical_feature).
+# dia_de_semana/horario so entram se a feature estiver ativa (ver preprocessar).
+COLUNAS_CATEGORICAS = ["sexo", "especialidade", "dia_de_semana", "horario"]
 
 
 def treinar(X, y, balancing="none", k_neighbors=3):
@@ -70,6 +83,8 @@ def treinar(X, y, balancing="none", k_neighbors=3):
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y
     )
+
+    cat_cols = [c for c in COLUNAS_CATEGORICAS if c in X_train.columns]
 
     model_kwargs = dict(
         n_estimators=PARAMS["model"]["n_estimators"],
@@ -83,12 +98,12 @@ def treinar(X, y, balancing="none", k_neighbors=3):
         model_kwargs["class_weight"] = "balanced"
 
     if balancing == "smotenc":
-        cat_idx = [X_train.columns.get_loc(c) for c in ["sexo", "especialidade"]]
+        cat_idx = [X_train.columns.get_loc(c) for c in cat_cols]
         smote = SMOTENC(categorical_features=cat_idx, k_neighbors=k_neighbors, random_state=RANDOM_STATE)
         X_train, y_train = smote.fit_resample(X_train, y_train)
 
     model = lgb.LGBMClassifier(**model_kwargs)
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, categorical_feature=cat_cols)
 
     y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]

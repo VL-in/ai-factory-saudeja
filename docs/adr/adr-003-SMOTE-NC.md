@@ -72,12 +72,14 @@ class_weight: http://localhost:5000/#/experiments/1/runs/4ebbb8db627b4695962ec52
 
 smotenc : http://localhost:5000/#/experiments/1/runs/7be193263fa949e692b4baeef0f42cac
 
+smotenc_2 : http://localhost:5000/#/experiments/1/runs/6c2f69fbae3e4a69b73861059f1067c7
+
 
 Passo 7 — Promover o vencedor
 Depois de decidir (com base em f1_1 da classe positiva + pr_auc, priorizando o que faz mais sentido para o custo de negócio — falso negativo de no-show custa mais que falso positivo):
 
 
-- dvc exp apply <nome-do-experimento-vencedor>
+- dvc exp apply <nome do experimento>
 - git add params.yaml dvc.yaml dvc.lock requirements.txt dockerfile src/train.py
 - git commit -m "..."
 

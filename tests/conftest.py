@@ -30,6 +30,14 @@ def df_consultas():
             "dias_entre_agendamento_consulta": [14, 65, 7, 30, 21, 3],
             "historico_noshow": [2, 1, 0, 3, 0, 1],
             "no_show": [0, 0, 1, 0, 1, 0],
+            "data_hora_agendada": [
+                "2026-01-05 09:00:00",  # segunda
+                "2026-01-06 14:30:00",  # terca
+                "2026-01-09 18:00:00",  # sexta, fim de expediente (no_show=1)
+                "2026-01-08 10:00:00",  # quinta
+                "2026-01-09 17:30:00",  # sexta, fim de expediente (no_show=1)
+                "2026-01-10 08:30:00",  # sabado
+            ],
         }
     )
 

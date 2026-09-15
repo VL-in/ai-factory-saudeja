@@ -7,3 +7,6 @@ model:
 balancing:
   strategy: smotenc      # none | class_weight | smotenc
   k_neighbors: 3        # só usado quando strategy == smotenc
+
+features:
+  temporais: true       # true | false -- inclui dia_de_semana e horario

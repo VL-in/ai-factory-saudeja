@@ -8,8 +8,8 @@ stages:
     deps:
     - path: data/consultas-historicas.csv
       hash: md5
-      md5: b3ee3ee6510bfb9f61740b2d38222405
-      size: 15220
+      md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
+      size: 22841
     - path: dockerfile
       hash: md5
       md5: 24bcad5856996ceec326fd45c3e5e3e9
@@ -18,14 +18,19 @@ stages:
       hash: md5
       md5: b45d19914c963721c513627ae0f79229
       size: 223
+    - path: src/features.py
+      hash: md5
+      md5: dbc45e4d8945274824084bfcddae58a9
+      size: 558
     - path: src/train.py
       hash: md5
-      md5: ef987585a1effd5da8fb422a78e41f79
-      size: 5536
+      md5: b48f1ced57f8a7e86a41d85d322d9554
+      size: 6232
     params:
       params.yaml:
         balancing.k_neighbors: 3
         balancing.strategy: smotenc
+        features.temporais: true
         model.learning_rate: 0.05
         model.max_depth: 6
         model.n_estimators: 200
@@ -33,5 +38,5 @@ stages:
     outs:
     - path: data/model.pkl
       hash: md5
-      md5: 65ddd71e09f254b284917b5466c90909
-      size: 286574
+      md5: 6fea2f2af234bddb8f96a56410d33727
+      size: 349166

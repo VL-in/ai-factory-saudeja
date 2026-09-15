@@ -8,6 +8,7 @@ build/
 dist/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 
@@ -43,3 +44,6 @@ data/mlflow.db
 .idea/
 *.swp
 .DS_Store
+
+# Documentacao (rascunho pessoal, nao versionar)
+docs/playbook/

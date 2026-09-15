@@ -1,5 +1,5 @@
 outs:
-- md5: b3ee3ee6510bfb9f61740b2d38222405
-  size: 15220
+- md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
+  size: 22841
   hash: md5
   path: consultas-historicas.csv

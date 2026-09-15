@@ -13,6 +13,7 @@ stages:
       - dockerfile
       - requirements.txt
       - src/train.py
+      - src/features.py
       - data/consultas-historicas.csv
     params:
       - model.n_estimators
@@ -21,5 +22,6 @@ stages:
       - model.num_leaves
       - balancing.strategy
       - balancing.k_neighbors
+      - features.temporais
     outs:
       - data/model.pkl
