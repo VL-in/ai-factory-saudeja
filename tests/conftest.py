@@ -43,6 +43,30 @@ def df_consultas():
 
 
 @pytest.fixture
+def df_consultas_smote():
+    """Amostra maior que df_consultas -- SMOTE-NC (k_neighbors=3) precisa de
+    amostras suficientes na classe minoritária do fold de treino."""
+    n = 40
+    especialidades = ["cardiologia", "clinica geral", "dermatologia"]
+    return pd.DataFrame(
+        {
+            "id_consulta": range(1, n + 1),
+            "id_paciente": [f"P{i}" for i in range(1, n + 1)],
+            "idade": [20 + (i % 50) for i in range(n)],
+            "sexo": ["F" if i % 2 == 0 else "M" for i in range(n)],
+            "especialidade": [especialidades[i % 3] for i in range(n)],
+            "distancia_km": [round(2 + (i % 15) * 1.3, 1) for i in range(n)],
+            "dias_entre_agendamento_consulta": [1 + (i % 60) for i in range(n)],
+            "historico_noshow": [i % 4 for i in range(n)],
+            "no_show": [1 if i % 3 == 0 else 0 for i in range(n)],
+            "data_hora_agendada": [
+                f"2026-01-{5 + (i % 20):02d} {8 + (i % 9):02d}:00:00" for i in range(n)
+            ],
+        }
+    )
+
+
+@pytest.fixture
 def csv_consultas(tmp_path, df_consultas):
     caminho = tmp_path / "consultas-historicas.csv"
     df_consultas.to_csv(caminho, index=False)

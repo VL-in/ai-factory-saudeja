@@ -12,6 +12,16 @@ services:
     restart: unless-stopped
     networks:
       - saudeja-net
+    healthcheck:
+      # Sem curl/wget na imagem (python:3.10-slim) -- usa o proprio python.
+      # Sem isso, "docker compose up -d" retorna assim que o container inicia,
+      # nao quando o gunicorn ja aceita conexoes, e o docker run seguinte
+      # (train/validate) pode tentar falar com o MLflow antes dele estar de pe.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
 networks:
   saudeja-net:

@@ -45,13 +45,25 @@ def test_env_nao_esta_rastreado_pelo_git():
 
 
 def test_dvc_yaml_deps_e_outs_existem_no_repo():
+    """Toda dep precisa existir no repo OU ser out de outro stage do próprio
+    pipeline (caso de deps entre stages, ex.: train depende de um out do
+    preprocess -- só existe fisicamente depois do primeiro `dvc repro`)."""
     dvc_yaml = yaml.safe_load((REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8"))
     stages = dvc_yaml.get("stages", {})
+
+    outs_de_outros_stages = set()
+    for stage in stages.values():
+        for out in stage.get("outs", []):
+            outs_de_outros_stages.add(out if isinstance(out, str) else next(iter(out)))
+
     for nome_stage, stage in stages.items():
         for dep in stage.get("deps", []):
+            if dep in outs_de_outros_stages:
+                continue
             caminho = REPO_ROOT / dep
             assert caminho.exists(), (
-                f"dep '{dep}' do stage '{nome_stage}' não existe no repositório"
+                f"dep '{dep}' do stage '{nome_stage}' não existe no repositório "
+                "nem é out de outro stage do pipeline"
             )
         # outs não precisam existir antes do primeiro `dvc repro`, mas se
         # existirem devem estar registrados no dvc.lock (checado abaixo).

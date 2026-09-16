@@ -11,11 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY tests/ ./tests/
 COPY pytest.ini .
-
-ENV DATA_PATH=/app/data/consultas-historicas.csv
-ENV MODEL_PATH=/app/model.pkl
-
 COPY params.yaml .
 
-
-CMD ["python", "src/train.py"]
+# Sem CMD/ENV de stage default -- imagem compartilhada pelas 3 etapas do
+# pipeline (preprocess/train/validate), cada uma invocada explicitamente
+# via "docker run ... saudeja-train python src/<etapa>.py" (ver dvc.yaml).
+ENTRYPOINT ["python"]

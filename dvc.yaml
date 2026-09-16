@@ -1,27 +1,76 @@
 stages:
+  preprocess:
+    cmd: >-
+      docker build -t saudeja-train -f dockerfile . &&
+      docker run --rm
+      -v "%cd%/data:/app/data"
+      -e DATA_PATH=/app/data/consultas-historicas.csv
+      -e TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl
+      -e TEST_PATH=/app/data/interim/test.pkl
+      -e MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json
+      saudeja-train
+      src/preprocess.py
+    deps:
+      - dockerfile
+      - requirements.txt
+      - src/preprocess.py
+      - src/features.py
+      - data/consultas-historicas.csv
+    params:
+      - features.temporais
+    outs:
+      - data/interim/train_raw.pkl
+      - data/interim/test.pkl
+      - data/interim/mapa_especialidade.json
+
   train:
     cmd: >-
       docker build -t saudeja-train -f dockerfile . &&
-      docker compose up -d mlflow-server &&
+      docker compose up -d --wait mlflow-server &&
       docker run --rm
       --network saudeja-net
       -v "%cd%/data:/app/data"
+      -e TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl
+      -e MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json
       -e MODEL_PATH=/app/data/model.pkl
+      -e RUN_ID_PATH=/app/data/interim/mlflow_run_id.txt
       -e MLFLOW_TRACKING_URI=http://mlflow-server:5000
       saudeja-train
+      src/train.py
     deps:
       - dockerfile
       - requirements.txt
       - src/train.py
-      - src/features.py
-      - data/consultas-historicas.csv
+      - src/preprocess.py
+      - data/interim/train_raw.pkl
+      - data/interim/mapa_especialidade.json
     params:
       - model.n_estimators
       - model.learning_rate
       - model.max_depth
       - model.num_leaves
-      - balancing.strategy
       - balancing.k_neighbors
-      - features.temporais
     outs:
       - data/model.pkl
+      - data/interim/mlflow_run_id.txt
+
+  validate:
+    cmd: >-
+      docker build -t saudeja-train -f dockerfile . &&
+      docker compose up -d --wait mlflow-server &&
+      docker run --rm
+      --network saudeja-net
+      -v "%cd%/data:/app/data"
+      -e TEST_PATH=/app/data/interim/test.pkl
+      -e MODEL_PATH=/app/data/model.pkl
+      -e RUN_ID_PATH=/app/data/interim/mlflow_run_id.txt
+      -e MLFLOW_TRACKING_URI=http://mlflow-server:5000
+      saudeja-train
+      src/validate.py
+    deps:
+      - dockerfile
+      - requirements.txt
+      - src/validate.py
+      - data/model.pkl
+      - data/interim/test.pkl
+      - data/interim/mlflow_run_id.txt
