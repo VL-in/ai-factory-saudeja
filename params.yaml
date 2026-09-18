@@ -1,11 +1,14 @@
 model:
-  n_estimators: 200
-  learning_rate: 0.05
+  n_estimators: 120
+  learning_rate: 0.02
   max_depth: 6
-  num_leaves: 31
+  num_leaves: 32
 
 balancing:
   k_neighbors: 3         # SMOTE-NC (ver ADR-003) -- único método usado
+
+decision:
+  threshold: 0.6         # corte de probabilidade para classificar como no-show (classe 1)
 
 features:
   temporais: true       # true | false -- inclui dia_de_semana e horario

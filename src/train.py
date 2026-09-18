@@ -97,9 +97,15 @@ def main():
 
         run_id = run.info.run_id
 
+    # Escrita atômica (tmp + replace) -- o validate.py roda num container Docker
+    # separado que lê este arquivo via bind mount logo em seguida; uma escrita
+    # não-atômica pode deixar o arquivo momentaneamente vazio/truncado para
+    # esse leitor (visto na prática no Docker Desktop/Windows).
     os.makedirs(os.path.dirname(RUN_ID_PATH) or ".", exist_ok=True)
-    with open(RUN_ID_PATH, "w") as f:
+    tmp_path = f"{RUN_ID_PATH}.tmp"
+    with open(tmp_path, "w") as f:
         f.write(run_id)
+    os.replace(tmp_path, RUN_ID_PATH)
 
     print(f"\n[ok] modelo salvo em {MODEL_PATH} (mlflow run_id={run_id})")
 

@@ -16,6 +16,18 @@ O no-show custa em média **R$ 180 por consulta perdida** e a taxa nacional gira
 Veja o diagrama C4 nível 1 e 2 em [`docs/architecture.md`](docs/architecture.md).
 Decisões arquiteturais relevantes estão registradas em [`docs/adr/`](docs/adr/).
 
+A solução busca cumprir os seguintes funcionalidades:
+ - O paciente acessa a área de pacientes, realizar o cadastro de informações junto ao agendamento.
+ - O funcionário da clínica acessa a área de funcionários e consulta a lista de pacientes por data (por default, aparece os do dia de hoje) junto ao probabilidade de no-show.
+ - O funcionário da clínica pode pedir ao LLM para consultar um paciente em específico.
+ - O modelo de predição de no-show consulta o banco de dados para fazer predição automática de pacientes com maior probabilidade de no-show 2 dias antes da consulta acontecer (exemplo: no dia 15/09 o sistema resgata os pacientes do dia 17/09).
+ - O modelo retorna uma lista de pacientes com probabilidade no-show.
+ - É disparado uma mensagem de confirmação para os pacientes dessa lista via Zenvia.
+
+A solução permite, portanto, que o paciente acessa o portal do Saude Já e consegue fazer o cadastro e o agendamento de consulta. Essas informações são armazenados no banco de dados relacional e tanto o interface quanto o modelo de predição consegue acessar. Além disso, de forma automática, é disparado um pipeline de  busca de pacientes que tem a consulta marcada para dois dias depois e já aciona a inferencia para predição de no-show. O modelo, então, retorna com uma lista de pacientes que atenderam o critério de no-show. O dado de no-show potencial é guardado de volta no banco. Para finalizar o pipeline, o disparo de mensageria é acionado para pacientes que foram classificado como alto chance de no-show.
+
+# Como usar o repositório
+
 ## Pipeline de treino (DVC/MLFLOW)
 
 O pipeline de treino é versionado com DVC e segregado em 3 stages independentes, cada um rodando em um container Docker próprio a partir da mesma imagem (veja `dvc.yaml`):
@@ -48,10 +60,22 @@ Os stages `train` e `validate` do `dvc.yaml` já builda a imagem, sobem o `mlflo
 
 > Se `docker compose up -d mlflow-server` for rodado a partir de um terminal Bash, note que o `docker run` embutido nos `cmd` dos stages `train`/`validate` usa sintaxe `%cd%` (cmd.exe) no mount de volume — funciona normalmente quando o DVC dispara o comando pelo shell do sistema, mas não copie esse comando manualmente para um terminal Bash.
 
+### `dvc run` x `dvc repro` x `dvc exp run`
+
+| Comando | Quando usar | Efeito |
+|---|---|---|
+| `dvc run` | Criar um stage **novo** no `dvc.yaml` | Não reexecuta o pipeline existente — só define um stage |
+| `dvc repro` | Reexecutar o pipeline após mudar código/dados/hiperparâmetros de forma definitiva | Roda os stages afetados e sobrescreve `dvc.lock` diretamente, sem manter as tentativas anteriores |
+| `dvc exp run` | Tuning manual de hiperparâmetros, testar variações | Roda o pipeline como experimento isolado (não altera `dvc.lock` do workspace); use `dvc exp show` para comparar métricas entre rodadas antes de promover uma com `dvc exp apply`/`dvc repro` |
+
+Para ajuste de hiperparâmetros (ex.: `params.yaml`), prefira `dvc exp run` — permite comparar várias rodadas sem sujar o `dvc.lock` a cada tentativa. Use `dvc repro` só quando já decidiu a mudança e quer consolidá-la no pipeline principal.
+
 ### Fluxo de treino/ajuste do modelo
 
 1. Se o dataset (`data/consultas-historicas.csv`) mudou — novas consultas, correção de registros etc. —, atualize o arquivo e rode `dvc add data/consultas-historicas.csv` para gerar um novo hash e atualizar o `.dvc` correspondente. Pule este passo se só o código/hiperparâmetros mudaram.
-2. Altere o que for preciso (ex.: `src/preprocess.py`, `src/train.py`, `src/validate.py`, hiperparâmetros, `requirements.txt`) e rode `dvc repro` — o comando reexecuta apenas os stages afetados pela mudança (DVC detecta isso pelas `deps`/`params` de cada stage), atualiza `dvc.lock` e regenera `data/model.pkl`.
+2. Altere o que for preciso (ex.: `src/preprocess.py`, `src/train.py`, `src/validate.py`, hiperparâmetros, `requirements.txt`):
+   - Se for **tuning de hiperparâmetros** (`params.yaml`) ou qualquer mudança ainda em exploração, rode `dvc exp run` para cada variação e compare os resultados com `dvc exp show` antes de decidir qual manter (ver seção acima).
+   - Uma vez decidida a mudança (hiperparâmetro final ou alteração de código/dados), rode `dvc repro` — reexecuta apenas os stages afetados (DVC detecta isso pelas `deps`/`params` de cada stage), atualiza `dvc.lock` e regenera `data/model.pkl`. Se a mudança veio de um experimento já rodado com `dvc exp run`, use `dvc exp apply <exp>` para trazê-la ao workspace em vez de repetir o treino.
 3. Confira os resultados no MLflow UI (`http://localhost:5000`, run com a tag `pipeline_arquitetura`) e no `dvc.lock` atualizado. O histórico de métricas fica só no MLflow -- não há `metrics.json` local para comparar.
 4. Se o modelo/resultado for o esperado, faça commit do código alterado junto com `dvc.yaml`, `dvc.lock` e o `.dvc` do dataset, se houver, para deixar rastreável qual dado e qual código geraram qual modelo.
 5. Rode `dvc push` para enviar os artefatos rastreados (dataset e/ou modelo) ao remote configurado em `.dvc/config` (hoje um caminho local, trocar por um remote persistente antes de usar em equipe).
@@ -60,7 +84,20 @@ Os stages `train` e `validate` do `dvc.yaml` já builda a imagem, sobem o `mlflo
 
 O histórico dos runs fica registrado no MLflow remote, que roda no container Docker `saudeja-mlflow-server` (dados persistidos nos volumes `mlflow-db` e `mlflow-artifacts`).
 
+### Tuning de hiperparâmetros (GridSearch)
 
+`src/tune.py` roda `GridSearchCV` sobre um Pipeline `SMOTENC` + `LGBMClassifier`, com cross-validation estratificada (5 folds) aplicada **somente** sobre o fold de treino gerado por `preprocess.py` — o fold de teste isolado nunca é usado no tuning, mesma garantia dos demais stages. O SMOTE-NC entra como um step do pipeline (não antes do CV), para o balanceamento ser recalculado a cada fold e não vazar amostras sintéticas entre treino/validação da CV. Scoring multi-métrica (`f1_1`, `recall_1`, `pr_auc`), com refit em `f1_1` — a métrica de interesse do projeto (ADR-003).
+
+Este script **não é um stage do `dvc.yaml`** — é exploratório, no mesmo espírito de `scripts/gerar_timestamp_sintetico.py`. Re-otimizar hiperparâmetros a cada re-treino mensal automatizado geraria instabilidade de modelo sem ganho comprovado; a escolha de hiperparâmetros é revisada por um humano e só é promovida a `params.yaml` manualmente.
+
+```powershell
+docker build -t saudeja-train -f dockerfile .
+docker run --rm -v "%cd%/data:/app/data" -e MLFLOW_TRACKING_URI=http://mlflow-server:5000 --network saudeja-net saudeja-train src/tune.py
+```
+
+Imprime e loga no MLflow (run com tag `pipeline_arquitetura=gridsearch-tuning`) os melhores hiperparâmetros encontrados e as métricas médias de CV. Para promover um resultado: atualize `model.*` em `params.yaml` com os valores encontrados e rode `dvc exp run` para validar oficialmente no fold de teste isolado (`validate.py`) antes de decidir manter ou não — a métrica de CV é uma estimativa, não a métrica de decisão final.
+
+> **Nota de resultado (2026-09-16):** rodado contra o dataset atual (~380 linhas sintéticas), o GridSearch encontrou `learning_rate=0.05, max_depth=4, num_leaves=16` (mantendo `n_estimators=120`) como melhor combinação por CV (`f1_1` médio ≈0.40). Validado no fold de teste isolado, esse resultado (`f1_1=0.372`) na verdade **performou pior** que os hiperparâmetros já em `params.yaml` (`f1_1=0.419`) — sinal de que, com um dataset tão pequeno (fold de teste de ~76 linhas), a variância entre CV e holdout supera o ganho que o tuning fino de hiperparâmetros consegue entregar. Os hiperparâmetros atuais foram mantidos; o script fica disponível para re-rodar quando houver mais volume de dados reais de produção.
 
 ## Roadmap
 

@@ -2,7 +2,7 @@ schema: '2.0'
 stages:
   train:
     cmd: docker build -t saudeja-train -f dockerfile . && docker compose up -d 
-      mlflow-server && docker run --rm --network saudeja-net -v 
+      --wait mlflow-server && docker run --rm --network saudeja-net -v 
       "%cd%/data:/app/data" -e TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl -e
       MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json -e 
       MODEL_PATH=/app/data/model.pkl -e 
@@ -31,24 +31,24 @@ stages:
       size: 3299
     - path: src/train.py
       hash: md5
-      md5: fbe4cc2adb5ef9f5c4f8754b46661930
-      size: 4049
+      md5: 1f792b00945ae9daaeabc9d66774aa33
+      size: 4543
     params:
       params.yaml:
         balancing.k_neighbors: 3
-        model.learning_rate: 0.05
+        model.learning_rate: 0.02
         model.max_depth: 6
-        model.n_estimators: 200
-        model.num_leaves: 31
+        model.n_estimators: 120
+        model.num_leaves: 32
     outs:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 2e1ed3bcf74d295adc7bc8bf9346f7de
+      md5: 50875921c2fca351550b5bc0520e4e0a
       size: 32
     - path: data/model.pkl
       hash: md5
-      md5: 6fea2f2af234bddb8f96a56410d33727
-      size: 349166
+      md5: e0ae48310683b6791fcf5790b8fcb16a
+      size: 225550
   preprocess:
     cmd: docker build -t saudeja-train -f dockerfile . && docker run --rm -v 
       "%cd%/data:/app/data" -e DATA_PATH=/app/data/consultas-historicas.csv -e 
@@ -95,17 +95,16 @@ stages:
       size: 31276
   validate:
     cmd: docker build -t saudeja-train -f dockerfile . && docker compose up -d 
-      mlflow-server && docker run --rm --network saudeja-net -v 
+      --wait mlflow-server && docker run --rm --network saudeja-net -v 
       "%cd%/data:/app/data" -e TEST_PATH=/app/data/interim/test.pkl -e 
       MODEL_PATH=/app/data/model.pkl -e 
       RUN_ID_PATH=/app/data/interim/mlflow_run_id.txt -e 
-      METRICS_PATH=/app/data/metrics.json -e 
       MLFLOW_TRACKING_URI=http://mlflow-server:5000 saudeja-train 
       src/validate.py
     deps:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 2e1ed3bcf74d295adc7bc8bf9346f7de
+      md5: 50875921c2fca351550b5bc0520e4e0a
       size: 32
     - path: data/interim/test.pkl
       hash: md5
@@ -113,8 +112,8 @@ stages:
       size: 9371
     - path: data/model.pkl
       hash: md5
-      md5: 6fea2f2af234bddb8f96a56410d33727
-      size: 349166
+      md5: e0ae48310683b6791fcf5790b8fcb16a
+      size: 225550
     - path: dockerfile
       hash: md5
       md5: 33a725e5f6b524c0313ffe4a976d2176
@@ -125,10 +124,8 @@ stages:
       size: 223
     - path: src/validate.py
       hash: md5
-      md5: a121476052cb3a04e9f8b743ea5e31b9
-      size: 3183
-    outs:
-    - path: data/metrics.json
-      hash: md5
-      md5: 1706da4f19ccb53025631529c3b266d1
-      size: 337
+      md5: 66adb2fdd2e7363bea985cb8ec84b261
+      size: 4986
+    params:
+      params.yaml:
+        decision.threshold: 0.6

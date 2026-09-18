@@ -8,24 +8,40 @@ ai-factory-saudeja/
 ├── data/
 │   ├── consultas-historicas.csv       # versionado via DVC (não versionado no git)
 │   ├── consultas-historicas.csv.dvc   # metadados do DVC
+│   ├── interim/                       # artefatos intermediários do pipeline (train_raw.pkl, test.pkl, mapa_especialidade.json, mlflow_run_id.txt)
+│   ├── model.pkl                      # modelo treinado (saída do stage train)
 │   ├── AVISO-DADOS-SINTETICOS.md
 │   └── AVISO-MODELO.md
 ├── docs/
 │   ├── BRIEFING.md
-│   ├── notas-camila.md
+│   ├── SLA.md
+│   ├── SLO.md
 │   ├── adr/                           # Architecture Decision Records
 │   ├── diagrams/
-│   │   └── architecture.md            # este arquivo
-│   └── logs/
-│       └── CHANGELOG.md
+│   │   └── SaudeJa-c1.png
+│   ├── herdado/                       # documentação do protótipo herdado
+│   ├── logs/
+│   │   └── CHANGELOG.md
+│   └── architecture.md                # este arquivo
 ├── infra/
 │   ├── ML/
 │   │   └── dockerfile                 # imagem do container do modelo
 │   └── deploy/
+├── scripts/
+│   └── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 ├── src/
-│   ├── train.py                       # script de treinamento do modelo
+│   ├── preprocess.py                  # feature engineering + split treino/teste (stage 1)
+│   ├── train.py                       # SMOTE-NC + treino LightGBM, loga no MLflow (stage 2)
+│   ├── validate.py                    # métricas no fold de teste isolado (stage 3)
+│   ├── tune.py                        # GridSearchCV de hiperparâmetros (exploratório, fora do dvc.yaml)
+│   ├── features.py
 │   └── notebook.ipynb
+├── tests/                             # testes unitários e de integração do pipeline
 ├── .dvc/                              # configuração e cache do DVC
+├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
+├── params.yaml                        # hiperparâmetros do modelo
+├── dockerfile / dockerfile.mlflow     # imagens de treino e do servidor MLflow
+├── docker-compose.yml                 # orquestração local (mlflow-server)
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -33,6 +49,7 @@ ai-factory-saudeja/
 
 ## 2. High-Level System Diagram
 
+Camada C1
 ```mermaid
 flowchart LR
     UserP[Paciente] -->|agenda| Sys[SaudeJa]
@@ -42,7 +59,32 @@ flowchart LR
     Sys --> |requisicao/features| ML[Modelo classificacao<br/>no-show API]
     Admin[Time MLOps] -->|retreina| ML
 ```
+Camada C2
+```mermaid
+flowchart LR
+    Paciente["Paciente"]
+    Funcionario["Funcionário<br/>da Clínica"]
+    LLM["LLM / TrueFoundry"]
 
+    subgraph SaudeJa["Saúde Já - limite do sistema"]
+        direction TB
+        web["App Web / Streamlit"]
+        DB[("Supabase")]
+        Sched["Scheduler (cron)<br/>trigger diário D-2"]
+        ML["Job de inferência<br/>no-show (consulta,<br/>prediz, grava e dispara)"]
+        Aut["Infobip"]
+
+        web -->|SQL| DB
+        web -->|RESTful, consulta lista<br/>+ probabilidade| ML
+        Sched -->|aciona job<br/>de inferência| ML
+        ML -->|consulta agendamentos<br/>de D+2 / grava resultado| DB
+        ML -->|RESTful, se acima<br/>do threshold| Aut
+    end
+
+    Paciente -->|HTTPS, agenda/cadastra| web
+    Funcionario -->|HTTPS, consulta lista| web
+    web -->|RESTful| LLM
+```
 
 ## 3. Core Components
 (List and briefly describe the main components of the system. For each, include its primary responsibility and key technologies used.)

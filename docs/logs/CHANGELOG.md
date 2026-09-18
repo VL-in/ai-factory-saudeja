@@ -1,5 +1,23 @@
 # Changelog
 
+## [v0.12] (Vanessa) - 2026-09-16
+
+- (feat) `src/tune.py` criado: GridSearchCV sobre Pipeline SMOTENC+LightGBM, com CV estratificado (5 folds) restrito ao fold de treino isolado por `preprocess.py` (SMOTENC dentro do Pipeline, recalculado a cada fold, para não vazar sintéticos entre treino/validação da CV). Scoring multi-métrica (`f1_1`/`recall_1`/`pr_auc`), refit em `f1_1` (métrica de interesse do projeto, ADR-003). Não é stage do `dvc.yaml` -- script exploratório, mesmo padrão de `scripts/gerar_timestamp_sintetico.py`.
+- (test) `tests/test_tune.py`: mecânica do GridSearch (best_params_/cv_results_ preenchidos, isolamento do fold de teste) e teste ponta-a-ponta de `main()` logando no MLflow.
+- (resultado) Comparação no fold de teste isolado: os hiperparâmetros encontrados pelo GridSearch (`learning_rate=0.05, max_depth=4, num_leaves=16`) tiveram `f1_1=0.372`, pior que os hiperparâmetros já em `params.yaml` (`f1_1=0.419`). `model.*` **não foi alterado** -- dataset atual (~380 linhas, fold de teste de ~76) é pequeno demais para o tuning fino generalizar de forma confiável do CV para o holdout. Ver nota em `README.md`.
+
+## [v0.11] (Vanessa) - 2026-09-16
+
+- (feat) Inclusão de threshold de decisão como parametro.
+
+## [v0.10] (Vanessa) - 2026-09-15
+
+- (feat) Pipeline segregado em 3 stages DVC:
+  - reprocess (src/preprocess.py) — carrega o CSV, aplica o feature engineering e faz o split treino/teste estratificado antes de qualquer balanceamento. Não fala com o MLflow. Gera data/interim/{train_raw,test}.pkl + mapa_especialidade.json.
+  - train (src/train.py, refatorado) — aplica SMOTE-NC só no fold de treino recebido do preprocess, treina o LightGBM, abre a run no MLflow remoto, loga hiperparâmetros/modelo e a tag pipeline_arquitetura=segregado-preprocess-train-validate, e grava o run_id em data/interim/mlflow_run_id.txt.
+  - validate (src/validate.py) — carrega modelo + fold de teste isolado (nunca balanceado), calcula as métricas e reabre a mesma run do MLflow
+- (test) dividsão de tests/test_train.py em test_preprocess.py (+ novos testes de split: sem sobreposição treino/teste, estratificação preservada, fold de teste não-balanceado), test_train.py (agora testa treinar() isolado, sem split embutido) e test_validate.py (métricas, tag aviso_split, e um teste ponta-a-ponta que confirma que treino e validação escrevem na mesma run do MLflow). 
+
 ## [v0.9] (Vanessa) - 2026-09-15
 - (feat) scripts/gerar_timestamp_sintetico.py criado para gerar data_hora_agendada (380 linhas, formato "YYYY-MM-DD HH:MM:SS"), respeitando a grade real de agendamento da clínica (seg-sex 08h-11h30/13h-18h, sábado 08h-11h30, sem domingo). Reforço da hipótese da Camila (sexta no fim do expediente) calibrado em 15% das linhas com no_show=1 (26 registros em sexta 17h-18h, taxa de no-show 61,5% vs. 24,9% no resto do dataset).
 - (feat) src/features.py criado com extrair_features_temporais(), compartilhada entre o pipeline de treino e a futura API de inferência.

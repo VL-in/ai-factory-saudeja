@@ -74,3 +74,5 @@ stages:
       - data/model.pkl
       - data/interim/test.pkl
       - data/interim/mlflow_run_id.txt
+    params:
+      - decision.threshold

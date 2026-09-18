@@ -13,7 +13,12 @@ import os
 
 import joblib
 import mlflow
+import yaml
+from mlflow.tracking import MlflowClient
 from sklearn.metrics import average_precision_score, classification_report, roc_auc_score
+
+with open("params.yaml") as f:
+    PARAMS = yaml.safe_load(f)
 
 TEST_PATH = os.environ.get("TEST_PATH", "./data/interim/test.pkl")
 MODEL_PATH = os.environ.get("MODEL_PATH", "./data/model.pkl")
@@ -22,13 +27,13 @@ RUN_ID_PATH = os.environ.get("RUN_ID_PATH", "./data/interim/mlflow_run_id.txt")
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 
 
-def validar(model, X_test, y_test):
+def validar(model, X_test, y_test, threshold=0.5):
     """Calcula métricas de negócio/classificação sobre o fold de teste.
     Loga um aviso (tag MLflow) se a classe positiva estiver ausente no fold --
     torna visível uma falha de amostragem em vez de reportar 0.0 como
     desempenho real do modelo."""
-    y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
+    y_pred = (y_proba >= threshold).astype(int)
     report = classification_report(y_test, y_pred, digits=3, output_dict=True, zero_division=0)
 
     if "1" not in report:
@@ -56,6 +61,24 @@ def validar(model, X_test, y_test):
     }
 
 
+def _logar_threshold(run_id, threshold):
+    """Loga decision_threshold como param apenas na primeira vez que este run
+    o recebe -- params do MLflow são imutáveis, e o run_id é reaproveitado
+    entre reruns de validate.py quando só o threshold muda no params.yaml
+    (train.py não é reexecutado, então o run_id em RUN_ID_PATH não muda).
+    Se o valor já registrado divergir do atual, a divergência vira uma tag
+    em vez de derrubar o stage."""
+    client = MlflowClient()
+    threshold_existente = client.get_run(run_id).data.params.get("decision_threshold")
+
+    if threshold_existente is None:
+        mlflow.log_param("decision_threshold", threshold)
+    elif float(threshold_existente) != threshold:
+        aviso = f"decision_threshold registrado ({threshold_existente}) diverge do atual ({threshold})"
+        print(f"[aviso] {aviso}")
+        mlflow.set_tag("decision_threshold_divergente", str(threshold))
+
+
 def main():
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
@@ -68,8 +91,22 @@ def main():
     with open(RUN_ID_PATH) as f:
         run_id = f.read().strip()
 
+    if not run_id:
+        # mlflow.start_run(run_id="") não dá erro -- string vazia é "falsy",
+        # então o MLflow silenciosamente cria uma run nova e desgarrada (sem
+        # os hiperparâmetros do treino) em vez de resumir a run certa. Isso
+        # produz runs órfãs no MLflow indistinguíveis do treino que as gerou.
+        # Falha alto aqui em vez de deixar isso acontecer sem avisar.
+        raise RuntimeError(
+            f"{RUN_ID_PATH} veio vazio -- não é possível resumir a run do "
+            "MLflow. Rode a stage 'train' de novo antes de 'validate'."
+        )
+
+    threshold = PARAMS["decision"]["threshold"]
+
     with mlflow.start_run(run_id=run_id):
-        metrics = validar(model, X_test, y_test)
+        metrics = validar(model, X_test, y_test, threshold=threshold)
+        _logar_threshold(run_id, threshold)
         mlflow.log_metrics(metrics)
 
     print(f"[ok] métricas de validação logadas no MLflow (run_id={run_id})")
