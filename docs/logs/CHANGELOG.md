@@ -1,14 +1,26 @@
 # Changelog
 
+## [v0.13] (Vanessa) - 2026-09-18
+
+- (docs) Passo 0 do `PLANO-IMPLEMENTACAO.md`: reconciliação entre ADR-001 e ADR-004. `adr-001-stack.md` marcado como parcialmente substituído por ADR-004 nos pontos de banco de dados, mensageria, gateway de LLM e plataforma de deploy -- mantém válido o que não foi contestado (Python-first, GitHub+DVC+MLflow, Streamlit, FastAPI).
+- (docs) `adr-004-decisão-técnica.md`: `Status` → Aceito; preenchida a seção "Para deploy, foram considerados" (Modal e HF Inference Endpoints descartados, HF Space escolhido); registrada decisão de observabilidade -- MLflow segue cobrindo o pipeline de ML, Langfuse fica reservado só para tracing do LLM opcional (Passo 13), n8n descartado a favor do job D-2 acionando a Infobip diretamente.
+- (docs) Novo `adr-005-integracoes-implicitas.md`: registra scheduler D-2 via GitHub Actions cron (HF Space free pode hibernar) e a decisão de Streamlit/job chamarem o modelo em processo (`src/inference.py`) enquanto a API FastAPI fica exposta via REST para integrações externas.
+- (docs) `architecture.md`: preenchidas as seções §3 a §11 (removidos os placeholders `[e.g., ...]` do template), estrutura do projeto atualizada para `infra/api/`/`infra/deploy/` no lugar do `infra/ML/` morto, e o gap de recall (0.522 vs. alvo 0.75 do SLO) registrado como debt conhecido em §9.
+- (fix) Removido `infra/ML/dockerfile`: `COPY` auto-referencial (copiava o próprio dockerfile em vez do código) sobre base `python:3.9-slim` divergente da imagem real do pipeline; não era referenciado por `dvc.yaml`/`docker-compose.yml`, resíduo do protótipo herdado.
+- (test) `tests/test_coerencia_repo.py`: novo `test_architecture_md_sem_placeholder_generico`, que falha se `docs/architecture.md` voltar a conter o padrão `[e.g.,` -- trava regressão de placeholder não preenchido.
+
 ## [v0.12] (Vanessa) - 2026-09-16
 
 - (feat) `src/tune.py` criado: GridSearchCV sobre Pipeline SMOTENC+LightGBM, com CV estratificado (5 folds) restrito ao fold de treino isolado por `preprocess.py` (SMOTENC dentro do Pipeline, recalculado a cada fold, para não vazar sintéticos entre treino/validação da CV). Scoring multi-métrica (`f1_1`/`recall_1`/`pr_auc`), refit em `f1_1` (métrica de interesse do projeto, ADR-003). Não é stage do `dvc.yaml` -- script exploratório, mesmo padrão de `scripts/gerar_timestamp_sintetico.py`.
 - (test) `tests/test_tune.py`: mecânica do GridSearch (best_params_/cv_results_ preenchidos, isolamento do fold de teste) e teste ponta-a-ponta de `main()` logando no MLflow.
 - (resultado) Comparação no fold de teste isolado: os hiperparâmetros encontrados pelo GridSearch (`learning_rate=0.05, max_depth=4, num_leaves=16`) tiveram `f1_1=0.372`, pior que os hiperparâmetros já em `params.yaml` (`f1_1=0.419`). `model.*` **não foi alterado** -- dataset atual (~380 linhas, fold de teste de ~76) é pequeno demais para o tuning fino generalizar de forma confiável do CV para o holdout. Ver nota em `README.md`.
+- (docs) Adiciona ADR-004 propondo Streamlit + Supabase + TrueFoundry (LLM) + FastAPI + Infobip + Hugging Face Space como stack de produto, com alternativas descartadas.
+- (docs) Adiciona PLANO-IMPLEMENTACAO.md detalhando os passos verticais para evoluir do pipeline de ML atual até o produto deployável (API, banco, interface, mensageria, LGPD, CI/CD).
+
 
 ## [v0.11] (Vanessa) - 2026-09-16
 
-- (feat) Inclusão de threshold de decisão como parametro.
+- (feat) Inclusão de threshold de decisão como parametro rastravel.
 
 ## [v0.10] (Vanessa) - 2026-09-15
 

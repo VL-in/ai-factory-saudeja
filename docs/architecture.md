@@ -24,9 +24,8 @@ ai-factory-saudeja/
 │   │   └── CHANGELOG.md
 │   └── architecture.md                # este arquivo
 ├── infra/
-│   ├── ML/
-│   │   └── dockerfile                 # imagem do container do modelo
-│   └── deploy/
+│   ├── api/                            # dockerfile da API FastAPI (Passo 3)
+│   └── deploy/                         # dockerfile combinado Streamlit+FastAPI para o HF Space (Passo 11)
 ├── scripts/
 │   └── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 ├── src/
@@ -87,126 +86,143 @@ flowchart LR
 ```
 
 ## 3. Core Components
-(List and briefly describe the main components of the system. For each, include its primary responsibility and key technologies used.)
 
 ### 3.1. Frontend
 
-Name: [e.g., Web App, Mobile App]
+Name: App Web (Streamlit)
 
-Description: Briefly describe its primary purpose, key functionalities, and how users or other systems interact with it. E.g., 'The main user interface for interacting with the system, allowing users to manage their profiles, view data dashboards, and initiate workflows.'
+Description: Interface única para dois perfis de usuário — Paciente (cadastro/agendamento) e Funcionário da clínica (consulta da fila do dia com probabilidade de no-show, disparo manual do job de inferência em modo dev, consulta ao LLM sobre um paciente específico). Organizada em abas (`st.tabs`) que crescem incrementalmente conforme backend/banco/job ficam prontos (ver [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 4). Consome a API FastAPI (3.2.1) via `httpx`/`requests` e, opcionalmente, o LLM (5) para consultas livres.
 
-Technologies: [e.g., React, Next.js, Vue.js, Swift/Kotlin, HTML/CSS/JS]
+Technologies: Python, Streamlit
 
-Deployment: [e.g., Vercel, Netlify, S3/CloudFront]
+Deployment: mesmo container do Hugging Face Space da API (ver 6), processo único, sem hospedagem separada.
 
 ### 3.2. Backend Services
 
-(Repeat for each significant backend service. Add more as needed.)
+#### 3.2.1. API de predição (FastAPI)
 
-#### 3.2.1. [Service Name 1]
+Name: API de predição de no-show
 
-Name: [e.g., User Management Service, Data Processing API]
+Description: Expõe `/predict` (recebe dados de um agendamento, retorna probabilidade de no-show + explicação SHAP) e `/health` (status + versão do modelo carregado). Carrega `data/model.pkl` uma vez no startup (`lifespan`), não por request, para atender o SLO de latência p95<2s. Serve tanto o Streamlit (chamado via REST para o formulário de teste/consulta) quanto integrações externas futuras ao ecossistema Saúde Já — ver decisão de acoplamento em [ADR-005](adr/adr-005-integracoes-implicitas.md).
 
-Description: [Briefly describe its purpose, e.g., "Handles user authentication and profile management."]
+Technologies: Python, FastAPI, LightGBM (via `src/inference.py`), SHAP
 
-Technologies: [e.g., Node.js (Express), Python (Django/Flask), Java (Spring Boot), Go]
+Deployment: Hugging Face Space (SDK Docker), junto com o Streamlit no mesmo container (ver 6).
 
-Deployment: [e.g., AWS EC2, Kubernetes, Serverless (Lambda/Cloud Functions)]
+#### 3.2.2. Job de inferência diária (D-2)
 
-#### 3.2.2. [Service Name 2]
+Name: Job de inferência no-show
 
-Name: [e.g., Analytics Service, Notification Service]
+Description: Executado diariamente (agendado externamente, ver ADR-005-a), busca no Supabase os agendamentos marcados para dois dias à frente, roda a predição+explicação (import direto de `src/inference.py`, mesmo módulo usado pela API), grava o resultado na tabela `predicoes` e aciona o disparo de mensageria (5) quando a probabilidade ultrapassa o threshold de `params.yaml`. Também exposto na aba "Dev: disparo manual" do Streamlit para acompanhamento sem depender de CLI/cron separados.
 
-Description: [Briefly describe its purpose.]
+Technologies: Python (`src/jobs/inferencia_diaria.py`)
 
-Technologies: [e.g., Python, Kafka, Redis]
+Deployment: roda como parte da imagem do HF Space, disparado por GitHub Actions cron (ver 6 e ADR-005-a) via `workflow_dispatch`/chamada HTTP ao Space.
 
-Deployment: [e.g., AWS ECS, Google Cloud Run]
+#### 3.2.3. Gate de re-treino mensal
+
+Name: Gate de promoção de modelo
+
+Description: Re-treina o pipeline DVC/MLflow contra dados frescos, compara métricas (`recall_1`, `f1_1`, `roc_auc`) contra o campeão atual (`data/champion_metrics.json`, versionado em git) e só promove `data/model.pkl` se não houver regressão além da tolerância do SLO. Bloqueia promoção e alerta a equipe via mensageria (5) em caso de regressão. Ver detalhamento no [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 9.
+
+Technologies: Python (`src/retrain_gate.py`), DVC, MLflow (efêmero via `docker-compose`, só durante o workflow)
+
+Deployment: GitHub Actions (cron mensal + `workflow_dispatch`), sem infraestrutura própria always-on.
 
 ## 4. Data Stores
 
-(List and describe the databases and other persistent storage solutions used.)
+### 4.1. Banco relacional principal
 
-### 4.1. [Data Store Type 1]
+Name: Supabase (decisão vigente: [ADR-004](adr/adr-004-decisão-técnica.md), via SDK `supabase-py`)
 
-Name: [e.g., Primary User Database, Analytics Data Warehouse]
+Type: PostgreSQL gerenciado (SDK oficial, não camada Postgres genérica)
 
-Type: [e.g., PostgreSQL, MongoDB, Redis, S3, Firestore]
+Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda só `id_paciente_externo` (referência ao sistema core da clínica) + atributos demográficos não identificáveis, nunca nome/CPF (ver [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 5, e [ADR-005-c](adr/adr-005-integracoes-implicitas.md) para a checagem de região LGPD).
 
-Purpose: [Briefly describe what data it stores and why.]
+Key Schemas/Collections: `pacientes`, `agendamentos`, `predicoes` (inclui `explicacao_shap jsonb` e `explicacao_texto` nullable — plug do LLM, Passo 13), `mensagens_disparadas` (auditoria de envio, SLA §6).
 
-Key Schemas/Collections: [List important tables/collections, e.g., users, products, orders (no need for full schema, just names)]
+### 4.2. Tracking de experimentos de ML
 
-### 4.2. [Data Store Type 2]
+Name: MLflow (backend sqlite + artifacts em volumes Docker locais)
 
-Name: [e.g., Cache, Message Queue]
+Type: tracking server efêmero (sobe via `docker-compose` só durante treino/validação/gate de re-treino)
 
-Type: [e.g., Redis, Kafka, RabbitMQ]
-
-Purpose: [Briefly describe its purpose, e.g., "Used for caching frequently accessed data" or "Inter-service communication."]
+Purpose: rastreabilidade de hiperparâmetros/métricas/modelo de cada run de treino (ver README, seção "Pipeline de treino"). A fonte de verdade do "modelo campeão" para produção é `data/champion_metrics.json` (versionado em git), não uma run do MLflow — que não sobrevive entre execuções do workflow mensal (ver Passo 9).
 
 ## 5. External Integrations / APIs
 
-(List any third-party services or external APIs the system interacts with.)
+Service Name: Infobip
 
-Service Name 1: [e.g., Stripe, SendGrid, Google Maps API]
+Purpose: disparo de lembrete/confirmação via WhatsApp/SMS para pacientes classificados com alta probabilidade de no-show pelo job diário (D-2).
 
-Purpose: [Briefly describe its function, e.g., "Payment processing."]
+Integration Method: REST API, atrás de uma interface própria (`src/messaging/client.py`) com stub sem custo para dev/test e implementação real ativada por variável de ambiente (Passo 7).
 
-Integration Method: [e.g., REST API, SDK]
+Service Name: TrueFoundry (LLM gateway)
+
+Purpose: opcional (Passo 13, não exigido pelo SLA/SLO) — permite ao funcionário consultar um paciente específico em linguagem natural, e futuramente traduzir as contribuições SHAP em uma frase explicativa (plug inativo já reservado no Passo 2).
+
+Integration Method: REST API, mesmo padrão interface+stub usado para a Infobip.
+
+Service Name: MLflow
+
+Purpose: ver 4.2.
+
+Integration Method: API Python do MLflow, servidor local via Docker Compose.
 
 ## 6. Deployment & Infrastructure
 
-Cloud Provider: [e.g., AWS, GCP, Azure, On-premise]
+Cloud Provider: Hugging Face Space (SDK Docker) para a aplicação; Supabase (gerenciado) para o banco.
 
-Key Services Used: [e.g., EC2, Lambda, S3, RDS, Kubernetes, Cloud Functions, App Engine]
+Key Services Used: Hugging Face Space (Streamlit + FastAPI no mesmo container, modelo `data/model.pkl` versionado via DVC e empacotado direto na imagem — não depende de MLflow ao vivo em produção, ver Passo 9); GitHub Actions (CI de PR, deploy por sync ao HF Hub via `huggingface/huggingface-sync-action`, cron mensal do gate de re-treino, cron diário do job D-2 — ver [ADR-005-a](adr/adr-005-integracoes-implicitas.md)).
 
-CI/CD Pipeline: [e.g., GitHub Actions, GitLab CI, Jenkins, CircleCI]
+CI/CD Pipeline: GitHub Actions — `ci.yml` (lint + pytest em PRs) e `deploy.yml` (sync `main` → HF Space, só após `ci.yml` passar). Ver Passo 10.
 
-Monitoring & Logging: [e.g., Prometheus, Grafana, CloudWatch, Stackdriver, ELK Stack]
+Monitoring & Logging: MLflow para métricas de ML (4.2); logging estruturado JSON com redação de PII (`src/logging_config.py`, Passo 8) para a aplicação. Sem Langfuse/APM dedicado no núcleo — reservado para tracing do LLM opcional (Passo 13).
 
 ## 7. Security Considerations
 
-(Highlight any critical security aspects, authentication mechanisms, or data encryption practices.)
+Authentication: chaves de serviço do Supabase (`SUPABASE_URL`/`SUPABASE_KEY`) e token do HF Space (`HF_TOKEN`) como secrets, nunca versionados (`.env.example` documenta as variáveis, não os valores).
 
-Authentication: [e.g., OAuth2, JWT, API Keys]
+Authorization: não há multiusuário/RBAC no núcleo do produto — dois perfis de UI (Paciente/Funcionário) sem autenticação forte ainda desenhada; fica como debt conhecido (ver §9).
 
-Authorization: [e.g., RBAC, ACLs]
+Data Encryption: TLS em trânsito (HTTPS do HF Space, conexão do `supabase-py` ao Postgres gerenciado); repouso sob responsabilidade do Supabase gerenciado.
 
-Data Encryption: [e.g., TLS in transit, AES-256 at rest]
-
-Key Security Tools/Practices: [e.g., WAF, regular security audits]
+Key Security Tools/Practices: minimização de PII por design no schema (4.1), redação de PII em log (`src/logging_config.py`), auditoria de LGPD via `scripts/auditoria_lgpd.py` — ver [`docs/LGPD.md`](LGPD.md) (criado no Passo 8) para base legal, retenção e contato DPO.
 
 ## 8. Development & Testing Environment
 
-Local Setup Instructions: [Link to CONTRIBUTING.md or brief steps]
+Local Setup Instructions: ver [`README.md`](../README.md), seção "Como usar o repositório" (Docker + DVC + MLflow local via `docker compose up -d mlflow-server` e `dvc exp run`/`dvc repro`).
 
-Testing Frameworks: [e.g., Jest, Pytest, JUnit]
+Testing Frameworks: Pytest (`pytest.ini` define o marcador `integracao` para testes que sobem serviços reais efêmeros — MLflow com sqlite temporário, futuramente Supabase CLI local no Passo 5 — em vez de mocks pesados).
 
-Code Quality Tools: [e.g., ESLint, Black, SonarQube]
+Code Quality Tools: `ruff` (a ser formalizado em `requirements.txt`/config no Passo 10, junto do CI).
 
 ## 9. Future Considerations / Roadmap
 
-(Briefly note any known architectural debts, planned major changes, or significant future features that might impact the architecture.)
+**Debt conhecido — gap de recall**: o recall atual da classe positiva (no-show) é 0.522 (ver [ADR-003](adr/adr-003-SMOTE-NC.md)), abaixo do alvo do SLO (≥0.75). Não é um bug de implementação — é limite do dataset sintético pequeno (380 linhas). Não será resolvido agora; o [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md) cria checkpoints explícitos para revisitar a questão (Passo 6, com dados fluindo pelo job real; Passo 12, fechamento obrigatório antes do pitch — threshold recalibrado ou gap aceito e documentado).
 
-[e.g., "Migrate from monolith to microservices."]
-
-[e.g., "Implement event-driven architecture for real-time updates."]
+Outros itens de roadmap: autenticação/RBAC para os dois perfis de usuário (não desenhada ainda); LLM/TrueFoundry (Passo 13, opcional, fora do SLA/SLO); Langfuse para tracing do LLM quando este for ativado.
 
 ## 10. Project Identification
 
-Project Name: [Insert Project Name]
+Project Name: SaudeJá — Classificador de no-show em agendamentos médicos
 
-Repository URL: [Insert Repository URL]
+Repository URL: (repositório local/privado da disciplina AI Factory: Build, Deploy and Showcase — sem URL pública no momento)
 
-Primary Contact/Team: [Insert Lead Developer/Team Name]
+Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: [YYYY-MM-DD]
+Date of Last Update: 2026-09-18
 
 ## 11. Glossary / Acronyms
 
-Define any project-specific terms or acronyms.)
+No-show: ausência do paciente a uma consulta agendada sem cancelamento prévio.
 
-[Acronym]: [Full Definition]
+D-2 / D+2: dois dias antes da data da consulta — momento em que o job de inferência roda a predição para os agendamentos daquele intervalo.
 
-[Term]: [Explanation]
+SMOTE-NC: técnica de balanceamento de classes (SMOTE) adaptada para lidar com variáveis categóricas e numéricas mistas (Nominal-Continuous).
+
+SLA/SLO: Service Level Agreement / Service Level Objective — ver [`docs/SLA.md`](SLA.md) e [`docs/SLO.md`](SLO.md).
+
+ADR: Architecture Decision Record — ver [`docs/adr/`](adr/).
+
+LGPD: Lei Geral de Proteção de Dados (Brasil) — ver [`docs/LGPD.md`](LGPD.md), a ser criado no Passo 8 do plano de implementação.

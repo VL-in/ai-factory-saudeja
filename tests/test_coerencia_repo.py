@@ -95,3 +95,13 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
     dvc_yaml_texto = (REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8")
     assert "-f dockerfile" in dvc_yaml_texto
     assert (REPO_ROOT / "dockerfile").exists()
+
+
+def test_architecture_md_sem_placeholder_generico():
+    """docs/architecture.md é um template genérico -- este teste falha se algum
+    placeholder tipo '[e.g., ...]' ainda não foi preenchido com conteúdo real
+    do projeto (ver Passo 0 do PLANO-IMPLEMENTACAO.md)."""
+    texto = (REPO_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+    assert "[e.g.," not in texto, (
+        "docs/architecture.md ainda contém placeholder(s) '[e.g., ...]' não preenchido(s)"
+    )

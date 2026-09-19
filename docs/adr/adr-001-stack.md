@@ -1,7 +1,15 @@
 # ADR-001: Adoção de Stacks para o classificador no-show do Saúde Já
 
 ## Status
-Proposto - 2026-09-06
+Parcialmente substituído por [ADR-004](adr-004-decisão-técnica.md) — 2026-09-18.
+
+As decisões abaixo foram **substituídas** pelo ADR-004, que resolveu com escolha concreta o que aqui ainda estava em aberto (Supabase _ou_ ChromaDB+DuckDB, n8n para mensageria, gateway de LLM não escolhido, plataforma de deploy não escolhida entre as opções listadas):
+- Banco de dados: ADR-001 deixava em aberto Supabase vs. ChromaDB+DuckDB → ADR-004 decide **Supabase** (via SDK `supabase-py`).
+- Mensageria: ADR-001 apontava **n8n** → ADR-004 decide **Infobip** direto (n8n descartado, ver decisão de observabilidade no próprio ADR-004).
+- Gateway de LLM: não decidido aqui → ADR-004 decide **TrueFoundry**.
+- Plataforma de deploy: ADR-001 deixava em aberto HF Spaces/HF Inference Endpoints/Modal → ADR-004 decide **Hugging Face Space** (SDK Docker).
+
+Seguem **válidas** (não contestadas pelo ADR-004): Python-first, GitHub+DVC+MLflow para versionamento/rastreabilidade, Streamlit como frontend, FastAPI para as chamadas RESTful do modelo.
 
 ## Contexto
 Qual é o problema que estamos resolvendo? Qual é o estado atual?
