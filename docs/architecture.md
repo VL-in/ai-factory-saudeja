@@ -34,6 +34,9 @@ ai-factory-saudeja/
 │   ├── validate.py                    # métricas no fold de teste isolado (stage 3)
 │   ├── tune.py                        # GridSearchCV de hiperparâmetros (exploratório, fora do dvc.yaml)
 │   ├── features.py
+│   ├── inference.py                   # payload -> features -> predição, reusado por API/job (Passo 1)
+│   ├── explain.py                     # explicabilidade SHAP + plug LLM inativo (Passo 2)
+│   ├── api/                           # API FastAPI: schemas.py + main.py (Passo 3)
 │   └── notebook.ipynb
 ├── tests/                             # testes unitários e de integração do pipeline
 ├── .dvc/                              # configuração e cache do DVC
@@ -41,7 +44,7 @@ ai-factory-saudeja/
 ├── params.yaml                        # hiperparâmetros do modelo
 ├── dockerfile / dockerfile.mlflow     # imagens de treino e do servidor MLflow
 ├── docker-compose.yml                 # orquestração local (mlflow-server)
-├── requirements.txt
+├── requirements/                      # base.txt / train.txt / api.txt (Passo 3)
 ├── .env.example
 └── README.md
 ```

@@ -12,7 +12,8 @@ stages:
       src/preprocess.py
     deps:
       - dockerfile
-      - requirements.txt
+      - requirements/base.txt
+      - requirements/train.txt
       - src/preprocess.py
       - src/features.py
       - data/consultas-historicas.csv
@@ -39,7 +40,8 @@ stages:
       src/train.py
     deps:
       - dockerfile
-      - requirements.txt
+      - requirements/base.txt
+      - requirements/train.txt
       - src/train.py
       - src/preprocess.py
       - data/interim/train_raw.pkl
@@ -69,7 +71,8 @@ stages:
       src/validate.py
     deps:
       - dockerfile
-      - requirements.txt
+      - requirements/base.txt
+      - requirements/train.txt
       - src/validate.py
       - data/model.pkl
       - data/interim/test.pkl

@@ -1,0 +1,21 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements/ ./requirements/
+RUN pip install --no-cache-dir -r requirements/api.txt
+
+COPY src/ ./src/
+COPY params.yaml .
+
+# data/model.pkl não é copiado aqui -- montado via volume em dev (mesmo
+# padrão dos containers de treino, ver dvc.yaml) e empacotado direto na
+# imagem combinada de deploy (infra/deploy/, Passo 11), não nesta imagem.
+ENV MODEL_PATH=/app/data/model.pkl
+
+EXPOSE 8000
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "src"]

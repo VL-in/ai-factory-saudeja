@@ -1,0 +1,13 @@
+# Núcleo de ML compartilhado por todas as camadas (pipeline de treino e API) --
+# usado por src/preprocess.py, src/inference.py, src/explain.py etc.
+pandas==2.2.3
+numpy==2.0.2
+scikit-learn==1.5.2
+lightgbm==4.5.0
+joblib==1.4.2
+mlflow==2.17.2
+python-dotenv==1.2.3
+pyyaml==6.0.3
+
+# Testes -- roda em cima de qualquer camada (train/API/coerência do repo)
+pytest==8.3.3

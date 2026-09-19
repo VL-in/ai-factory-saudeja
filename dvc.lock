@@ -19,12 +19,16 @@ stages:
       size: 31276
     - path: dockerfile
       hash: md5
-      md5: 33a725e5f6b524c0313ffe4a976d2176
-      size: 544
-    - path: requirements.txt
+      md5: cb09473e637096045fcc78fea529be08
+      size: 561
+    - path: requirements/base.txt
       hash: md5
-      md5: ff989a50dd4e67fc2222105298c398e5
-      size: 237
+      md5: e62d28872b975b5b11ff377374713718
+      size: 367
+    - path: requirements/train.txt
+      hash: md5
+      md5: 4b62798e08ad85a30e4561ad36a001b7
+      size: 229
     - path: src/preprocess.py
       hash: md5
       md5: 2c1f533821f8213d5bbfe64285c8ef4f
@@ -43,7 +47,7 @@ stages:
     outs:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 0600fbabd57e147cad6b541f6131b634
+      md5: 53d14da30ea963e59d3ee530dc70e6c0
       size: 32
     - path: data/model.pkl
       hash: md5
@@ -63,12 +67,16 @@ stages:
       size: 22841
     - path: dockerfile
       hash: md5
-      md5: 33a725e5f6b524c0313ffe4a976d2176
-      size: 544
-    - path: requirements.txt
+      md5: cb09473e637096045fcc78fea529be08
+      size: 561
+    - path: requirements/base.txt
       hash: md5
-      md5: ff989a50dd4e67fc2222105298c398e5
-      size: 237
+      md5: e62d28872b975b5b11ff377374713718
+      size: 367
+    - path: requirements/train.txt
+      hash: md5
+      md5: 4b62798e08ad85a30e4561ad36a001b7
+      size: 229
     - path: src/features.py
       hash: md5
       md5: dbc45e4d8945274824084bfcddae58a9
@@ -104,7 +112,7 @@ stages:
     deps:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 0600fbabd57e147cad6b541f6131b634
+      md5: 53d14da30ea963e59d3ee530dc70e6c0
       size: 32
     - path: data/interim/test.pkl
       hash: md5
@@ -116,16 +124,20 @@ stages:
       size: 225550
     - path: dockerfile
       hash: md5
-      md5: 33a725e5f6b524c0313ffe4a976d2176
-      size: 544
-    - path: requirements.txt
+      md5: cb09473e637096045fcc78fea529be08
+      size: 561
+    - path: requirements/base.txt
       hash: md5
-      md5: ff989a50dd4e67fc2222105298c398e5
-      size: 237
+      md5: e62d28872b975b5b11ff377374713718
+      size: 367
+    - path: requirements/train.txt
+      hash: md5
+      md5: 4b62798e08ad85a30e4561ad36a001b7
+      size: 229
     - path: src/validate.py
       hash: md5
-      md5: 66adb2fdd2e7363bea985cb8ec84b261
-      size: 4986
+      md5: 41d1cf1c87cba9e01cbdec62779af6ec
+      size: 5473
     params:
       params.yaml:
         decision.threshold: 0.6

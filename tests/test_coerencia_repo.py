@@ -81,14 +81,18 @@ def test_dvc_lock_consistente_com_dvc_yaml():
 
 
 def test_requirements_nao_tem_pacotes_duplicados():
-    linhas = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    pacotes = [
-        linha.split("==")[0].strip().lower()
-        for linha in linhas
-        if linha.strip() and not linha.strip().startswith("#")
-    ]
-    duplicados = {p for p in pacotes if pacotes.count(p) > 1}
-    assert not duplicados, f"Pacotes duplicados em requirements.txt: {duplicados}"
+    """requirements.txt foi dividido em requirements/{base,train,api}.txt
+    (Passo 3) -- cada arquivo próprio (ignorando linhas "-r ...", que só
+    referenciam outro arquivo) não deve ter pacote repetido dentro de si."""
+    for caminho in (REPO_ROOT / "requirements").glob("*.txt"):
+        linhas = caminho.read_text(encoding="utf-8").splitlines()
+        pacotes = [
+            linha.split("==")[0].strip().lower()
+            for linha in linhas
+            if linha.strip() and not linha.strip().startswith(("#", "-r"))
+        ]
+        duplicados = {p for p in pacotes if pacotes.count(p) > 1}
+        assert not duplicados, f"Pacotes duplicados em {caminho.name}: {duplicados}"
 
 
 def test_dockerfile_referenciado_pelo_dvc_yaml_existe():

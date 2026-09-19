@@ -1,0 +1,7 @@
+# Imagem de treino (dockerfile na raiz, stages preprocess/train/validate/tune
+# do dvc.yaml) -- inclui o que a imagem de deploy da API não precisa carregar.
+-r base.txt
+
+matplotlib==3.9.2
+jupyter==1.1.1
+imbalanced-learn==0.13.0

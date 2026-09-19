@@ -73,7 +73,7 @@ Para ajuste de hiperparâmetros (ex.: `params.yaml`), prefira `dvc exp run` — 
 ### Fluxo de treino/ajuste do modelo
 
 1. Se o dataset (`data/consultas-historicas.csv`) mudou — novas consultas, correção de registros etc. —, atualize o arquivo e rode `dvc add data/consultas-historicas.csv` para gerar um novo hash e atualizar o `.dvc` correspondente. Pule este passo se só o código/hiperparâmetros mudaram.
-2. Altere o que for preciso (ex.: `src/preprocess.py`, `src/train.py`, `src/validate.py`, hiperparâmetros, `requirements.txt`):
+2. Altere o que for preciso (ex.: `src/preprocess.py`, `src/train.py`, `src/validate.py`, hiperparâmetros, `requirements/train.txt`):
    - Se for **tuning de hiperparâmetros** (`params.yaml`) ou qualquer mudança ainda em exploração, rode `dvc exp run` para cada variação e compare os resultados com `dvc exp show` antes de decidir qual manter (ver seção acima).
    - Uma vez decidida a mudança (hiperparâmetro final ou alteração de código/dados), rode `dvc repro` — reexecuta apenas os stages afetados (DVC detecta isso pelas `deps`/`params` de cada stage), atualiza `dvc.lock` e regenera `data/model.pkl`. Se a mudança veio de um experimento já rodado com `dvc exp run`, use `dvc exp apply <exp>` para trazê-la ao workspace em vez de repetir o treino.
 3. Confira os resultados no MLflow UI (`http://localhost:5000`, run com a tag `pipeline_arquitetura`) e no `dvc.lock` atualizado. O histórico de métricas fica só no MLflow -- não há `metrics.json` local para comparar.
@@ -98,6 +98,42 @@ docker run --rm -v "%cd%/data:/app/data" -e MLFLOW_TRACKING_URI=http://mlflow-se
 Imprime e loga no MLflow (run com tag `pipeline_arquitetura=gridsearch-tuning`) os melhores hiperparâmetros encontrados e as métricas médias de CV. Para promover um resultado: atualize `model.*` em `params.yaml` com os valores encontrados e rode `dvc exp run` para validar oficialmente no fold de teste isolado (`validate.py`) antes de decidir manter ou não — a métrica de CV é uma estimativa, não a métrica de decisão final.
 
 > **Nota de resultado (2026-09-16):** rodado contra o dataset atual (~380 linhas sintéticas), o GridSearch encontrou `learning_rate=0.05, max_depth=4, num_leaves=16` (mantendo `n_estimators=120`) como melhor combinação por CV (`f1_1` médio ≈0.40). Validado no fold de teste isolado, esse resultado (`f1_1=0.372`) na verdade **performou pior** que os hiperparâmetros já em `params.yaml` (`f1_1=0.419`) — sinal de que, com um dataset tão pequeno (fold de teste de ~76 linhas), a variância entre CV e holdout supera o ganho que o tuning fino de hiperparâmetros consegue entregar. Os hiperparâmetros atuais foram mantidos; o script fica disponível para re-rodar quando houver mais volume de dados reais de produção.
+
+## Dependências (`requirements/`)
+
+Divididas por camada para manter a imagem de deploy da API enxuta (cold start, SLO §2):
+
+| Arquivo | Usado por | Conteúdo |
+|---|---|---|
+| `requirements/base.txt` | todas as camadas | pandas, scikit-learn, lightgbm, mlflow, pyyaml, pytest |
+| `requirements/train.txt` | `dockerfile` (stages `preprocess`/`train`/`validate`/`tune`) | `-r base.txt` + jupyter, matplotlib, imbalanced-learn |
+| `requirements/api.txt` | `infra/api/dockerfile` | `-r base.txt` + fastapi, uvicorn, shap, httpx |
+
+Para desenvolver localmente com a suíte de testes completa (pipeline + API), instale os três: `pip install -r requirements/train.txt -r requirements/api.txt`.
+
+## API de predição (FastAPI)
+
+`src/api/main.py` expõe `/health` (status + `model_version`, um hash curto de `data/model.pkl`) e `/predict` (recebe os dados de um agendamento, devolve probabilidade de no-show + explicação SHAP), reaproveitando `src/inference.py` (Passo 1) e `src/explain.py` (Passo 2) sem duplicar lógica. O modelo é carregado uma única vez no startup (`lifespan`), não a cada request, para atender o SLO de latência p95<2s.
+
+Rodar localmente (a partir da raiz do repositório, com `requirements/api.txt` instalado):
+
+```powershell
+python -m uvicorn api.main:app --reload --app-dir src
+```
+
+`--app-dir src` é necessário porque os módulos em `src/` (`inference.py`, `explain.py`) são importados "soltos" (sem prefixo de pacote) -- mesma convenção que os stages do pipeline já usam ao rodar como `python src/<script>.py`.
+
+```powershell
+curl http://127.0.0.1:8000/health
+curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d "{\"idade\":45,\"sexo\":\"F\",\"especialidade\":\"cardiologia\",\"distancia_km\":5.5,\"dias_entre_agendamento_consulta\":14,\"historico_noshow\":1,\"data_hora_agendada\":\"2026-01-09T18:00:00\"}"
+```
+
+Ou via Docker (`infra/api/dockerfile`, monta `data/` para ler o `model.pkl` já treinado):
+
+```powershell
+docker build -t saudeja-api -f infra/api/dockerfile .
+docker run --rm -p 8000:8000 -v "%cd%/data:/app/data" saudeja-api
+```
 
 ## Roadmap
 

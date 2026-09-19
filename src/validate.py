@@ -35,11 +35,12 @@ def validar(model, X_test, y_test, threshold=0.5):
     y_proba = model.predict_proba(X_test)[:, 1]
     y_pred = (y_proba >= threshold).astype(int)
     report = classification_report(y_test, y_pred, digits=3, output_dict=True, zero_division=0)
+    classe_positiva_ausente = "1" not in report
 
-    if "1" not in report:
+    if classe_positiva_ausente:
         aviso = (
             "classe positiva ausente no fold de teste -- "
-            "precision_1/recall_1/f1_1 desta run não são confiáveis"
+            "precision_1/recall_1/f1_1/roc_auc/pr_auc desta run não são confiáveis"
         )
         print(f"[aviso] {aviso}")
         mlflow.set_tag("aviso_split", aviso)
@@ -47,10 +48,21 @@ def validar(model, X_test, y_test, threshold=0.5):
     metrics_1 = report.get("1", {"precision": 0.0, "recall": 0.0, "f1-score": 0.0})
     metrics_0 = report.get("0", {"precision": 0.0, "recall": 0.0, "f1-score": 0.0})
 
+    # roc_auc_score levanta ValueError (em vez de só avisar) quando y_test
+    # tem uma única classe -- mesmo caso já sinalizado acima via aviso_split,
+    # então cai no mesmo fallback 0.0 das demais métricas da classe 1 em vez
+    # de derrubar o stage inteiro.
+    if classe_positiva_ausente:
+        roc_auc = 0.0
+        pr_auc = 0.0
+    else:
+        roc_auc = roc_auc_score(y_test, y_proba)
+        pr_auc = average_precision_score(y_test, y_proba)  # mais informativa que ROC-AUC aqui
+
     return {
         "accuracy": report["accuracy"],
-        "roc_auc": roc_auc_score(y_test, y_proba),
-        "pr_auc": average_precision_score(y_test, y_proba),  # mais informativa que ROC-AUC aqui
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
         "f1_1": metrics_1["f1-score"],
         "precision_1": metrics_1["precision"],
         "recall_1": metrics_1["recall"],
