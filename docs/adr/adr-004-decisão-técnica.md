@@ -17,15 +17,15 @@ Orçamento previsto não deve estourar $100 dólares/mês.
 
 ## Decisão
 
-Implementamos o Streamlit como interface UX da aplicação, o qual comunica com o Supabase para cadastro de informações utilizando LLM hosteado por TrueFoundry. O modelo de predição é empacotado com FastAPI e, por meio de chamadas RESTful com o banco de dados e interface Streamlit, fará predição e retornará o resultado para Streamlit. A mensageria é disparado pela Infobip quando o paciente é classificado como potencial no-show.
+Implementamos o Streamlit como interface UX da aplicação, o qual comunica com o Supabase para cadastro de informações. O modelo de predição é empacotado com FastAPI e, por meio de chamadas RESTful com o banco de dados e interface Streamlit, fará predição e retornará o resultado para Streamlit. A mensageria é disparado pela Infobip quando o paciente é classificado como potencial no-show.
 O deploy da aplicação é feita no Hugging Face Space.
 
-Observabilidade: o MLflow (já em uso no pipeline de treino, ADR-002) cobre o rastreamento de experimentos/métricas de ML — não é substituído nem duplicado por outra ferramenta. O Langfuse (cogitado no ADR-001) fica **reservado só para tracing do LLM/TrueFoundry**, item opcional do roadmap (Passo 13), e não é bloqueante para o núcleo do produto. O n8n (cogitado no ADR-001 para mensageria) é **descartado**: o disparo de lembretes é feito pelo job agendado (D-2, via GitHub Actions cron) chamando a Infobip diretamente, sem camada extra de automação visual — reduz peça móvel e custo de operação para um fluxo que é, na prática, uma chamada HTTP condicional.
+Observabilidade: o MLflow cobre o rastreamento de experimentos/métricas de ML — não é substituído nem duplicado por outra ferramenta. O Langfuse fica reservado só para tracing do LLM/TrueFoundry, implementado mais adiante, e não é bloqueante para o núcleo do produto. O disparo de lembretes é feito pelo job agendado (D-2, via GitHub Actions cron) chamando a Infobip diretamente, sem camada extra de automação visual — reduz peça móvel e custo de operação para um fluxo que é, na prática, uma chamada HTTP condicional.
 
 ## Consequências
 Pros:
 - Stack alinhado ao desenvolvimento com linguagem Python.
-- Orçamento mensal de acordo com o previsto
+- Orçamento mensal de acordo com o previsto.
 
 
 Cons:
@@ -43,8 +43,3 @@ Para frontend, foram considerados:
 
 Para mensageria, foram considerados:
  - Zenvia: empresa brasileira, com conformidade a LGPD. Descartado por não ter plano gratuito (começa em 20 dolares por mês).
-
-Para deploy, foram considerados:
- - Modal: bom suporte a workloads de ML (GPU sob demanda, cold start rápido para funções Python), mas cobrança por uso de compute foge do padrão "free tier fixo" que o orçamento de $100/mês pede como folga — mais adequado a cargas de inferência pesada do que ao volume baixo deste projeto (fila diária de uma clínica). Descartado.
- - Hugging Face Inference Endpoints: pensado só para servir o modelo (sem hospedar Streamlit/FastAPI juntos), exigiria uma segunda plataforma para a interface — duplica peça de infraestrutura sem necessidade para o volume do projeto. Descartado.
- - Hugging Face Space (SDK Docker): permite empacotar Streamlit+FastAPI num único serviço, tier free/community sem custo, integra nativamente com o fluxo de versionamento já usado (Hub) e com CI/CD via GitHub Actions (`huggingface/huggingface-sync-action`). Escolhido.
