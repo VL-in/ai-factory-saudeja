@@ -12,7 +12,6 @@ então precisa fazer esse ajuste explicitamente para funcionar independente
 de como for iniciado (uvicorn a partir da raiz do repo, TestClient nos
 testes, ou o CMD do container em infra/api/dockerfile).
 """
-import hashlib
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -34,19 +33,6 @@ MODEL_PATH = caminho_de_env("MODEL_PATH", "data/model.pkl")
 explicador_llm = ExplicadorLLMDesativado()
 
 
-def _calcular_model_version(path: str) -> str:
-    """Versão determinística e barata do modelo carregado: hash do próprio
-    artefato. A fonte de verdade formal do "campeão" em produção fica para
-    data/champion_metrics.json (Passo 9) -- aqui só precisamos de algo
-    estável para detectar troca de modelo em /health e nas respostas.
-
-    sha256 em vez de md5: o uso aqui não é criptográfico, mas hashlib.md5
-    levanta ValueError em host com OpenSSL em modo FIPS, o que derrubaria
-    o startup da API por um detalhe sem relação com o modelo."""
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()[:12]
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Carregado uma vez no startup, não por request -- crítico para o SLO
@@ -57,7 +43,7 @@ async def lifespan(app: FastAPI):
     app.state.mapa_especialidade = mapa_especialidade
     app.state.explainer = construir_explicador(model)
     app.state.threshold = inference.PARAMS["decision"]["threshold"]
-    app.state.model_version = _calcular_model_version(MODEL_PATH)
+    app.state.model_version = inference.calcular_model_version(MODEL_PATH)
     yield
 
 

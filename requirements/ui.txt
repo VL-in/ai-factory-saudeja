@@ -1,0 +1,10 @@
+# Interface Streamlit (src/ui/) -- Passo 4. Fica separada de api.txt para a
+# imagem da API isolada (infra/api/dockerfile) continuar enxuta (cold start,
+# SLO §2); a imagem combinada do deploy (Passo 11) instala os dois.
+-r base.txt
+
+streamlit==1.56.0
+
+# Backend REST de src/ui/logic.py (PREDICT_BACKEND=api) -- em processo
+# (default, ADR-005) a UI não abre rede nenhuma.
+httpx==0.28.1

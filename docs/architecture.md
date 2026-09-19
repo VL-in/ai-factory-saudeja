@@ -25,8 +25,8 @@ ai-factory-saudeja/
 │   │   └── CHANGELOG.md
 │   └── architecture.md                # este arquivo
 ├── infra/
-│   ├── api/                            # dockerfile da API FastAPI (Passo 3)
-│   └── deploy/                         # dockerfile combinado Streamlit+FastAPI para o HF Space (Passo 11)
+│   ├── api/                            # dockerfile da API FastAPI isolada (Passo 3)
+│   └── deploy/                         # dockerfile + entrypoint.sh combinados Streamlit+FastAPI (Passo 11, antecipado no Passo 4)
 ├── scripts/
 │   └── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 ├── src/
@@ -38,7 +38,8 @@ ai-factory-saudeja/
 │   ├── features.py
 │   ├── inference.py                   # payload -> features -> predição, reusado por API/job (Passo 1)
 │   ├── explain.py                     # explicabilidade SHAP + plug LLM inativo (Passo 2)
-│   └── api/                           # API FastAPI: schemas.py + main.py (Passo 3)
+│   ├── api/                           # API FastAPI: schemas.py + main.py (Passo 3)
+│   └── ui/                            # interface Streamlit: app.py (telas) + logic.py (lógica testável) (Passo 4)
 ├── tests/                             # testes unitários e de integração do pipeline
 ├── .dvc/                              # configuração e cache do DVC
 ├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
@@ -48,6 +49,7 @@ ai-factory-saudeja/
 ├── requirements/                      # base.txt / train.txt / api.txt / dev.txt
 ├── pytest.ini                         # marcador `integracao`
 ├── ruff.toml                          # configuração do lint
+├── .dockerignore / .gitattributes  # contexto de build enxuto; LF nos .sh mesmo no Windows
 ├── .env.example
 └── README.md
 ```
@@ -97,9 +99,13 @@ flowchart LR
 
 Name: App Web (Streamlit)
 
-Description: Interface única para dois perfis de usuário — Paciente (cadastro/agendamento) e Funcionário da clínica (consulta da fila do dia com probabilidade de no-show, disparo manual do job de inferência em modo dev, consulta ao LLM sobre um paciente específico). Organizada em abas (`st.tabs`) que crescem incrementalmente conforme backend/banco/job ficam prontos (ver [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 4). Consome a API FastAPI (3.2.1) via `httpx`/`requests` e, opcionalmente, o LLM (5) para consultas livres.
+Description: Interface única para dois perfis de usuário — Paciente (cadastro/agendamento) e Funcionário da clínica (consulta da fila do dia com probabilidade de no-show, disparo manual do job de inferência em modo dev, consulta ao LLM sobre um paciente específico). Organizada em abas (`st.tabs`) que crescem incrementalmente conforme backend/banco/job ficam prontos (ver [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 4): "Testar predição" e "Explicabilidade" já funcionais desde o Passo 4; "Fila do dia" ligada no Passo 5; "Dev: disparo manual" (visível só com `APP_ENV=dev`) ligada no Passo 6.
 
-Technologies: Python, Streamlit
+Separação interna: `src/ui/app.py` é só apresentação; toda a lógica (montagem do payload, tradução de erro para mensagem, escolha do backend) vive em `src/ui/logic.py`, que não importa `streamlit` e é testado sem o runtime dele.
+
+Como obtém a predição: **em processo por padrão** (import direto de `src/inference.py`/`src/explain.py`, conforme [ADR-005](adr/adr-005-integracoes-implicitas.md) (b) — a UI não depende de a API estar de pé nem paga round-trip HTTP dentro do próprio container). O backend REST contra a API (3.2.1) fica disponível em `PREDICT_BACKEND=api` como ferramenta de desenvolvimento/diagnóstico, com teste de paridade automatizado entre os dois caminhos. O LLM (5) é opcional, para consultas livres (Passo 13).
+
+Technologies: Python, Streamlit, `httpx` (só no backend REST opcional)
 
 Deployment: mesmo container do Hugging Face Space da API (ver 6), processo único, sem hospedagem separada.
 
@@ -181,6 +187,10 @@ Cloud Provider: Hugging Face Space (SDK Docker) para a aplicação; Supabase (ge
 
 Key Services Used: Hugging Face Space (Streamlit + FastAPI no mesmo container, modelo `data/model.pkl` versionado via DVC e empacotado direto na imagem — não depende de MLflow ao vivo em produção, ver Passo 9); GitHub Actions (CI de PR, deploy por sync ao HF Hub via `huggingface/huggingface-sync-action`, cron mensal do gate de re-treino, cron diário do job D-2 — ver [ADR-005-a](adr/adr-005-integracoes-implicitas.md)).
 
+A imagem combinada vive em `infra/deploy/` (`dockerfile` + `entrypoint.sh`) e já existe desde o Passo 4 — antecipada do Passo 11 para o conjunto poder ser exercitado localmente como ele vai rodar em produção (`docker compose up -d app`: UI em 7860, API em 8000). Um container, dois processos, sem supervisord: `entrypoint.sh` sobe os dois, derruba o container inteiro se qualquer um deles sair (`wait -n`) e encerra ambos em SIGTERM. O `model.pkl` é empacotado na imagem (ao contrário de `infra/api/dockerfile`, que o monta por volume em dev) porque não há DVC nem acesso ao remote no runtime do Space.
+
+**Ponto em aberto para o Passo 11**: o HF Space (SDK Docker) publica **uma única porta** (`app_port`, default 7860). Com UI e API em portas diferentes, só uma fica acessível de fora — a UI. Como a UI chama o modelo em processo (ADR-005 b), o produto funciona; o que fica sem endereço público é o papel da API como porta de entrada para integrações externas ao Saúde Já (diagrama C2). Decidir no Passo 11 entre: expor só a UI e adiar a API pública, colocar um proxy reverso na frente dos dois, ou publicar a API e servir a UI por outro caminho. Localmente as duas portas são publicadas e o dilema não aparece.
+
 CI/CD Pipeline: GitHub Actions — `ci.yml` (lint + pytest em PRs) e `deploy.yml` (sync `main` → HF Space, só após `ci.yml` passar). Ver Passo 10.
 
 Monitoring & Logging: MLflow para métricas de ML (4.2); logging estruturado JSON com redação de PII (`src/logging_config.py`, Passo 8) para a aplicação. Sem Langfuse/APM dedicado no núcleo — reservado para tracing do LLM opcional (Passo 13).
@@ -201,6 +211,8 @@ Local Setup Instructions: ver [`README.md`](../README.md), seção "Como usar o 
 
 Testing Frameworks: Pytest (`pytest.ini` define o marcador `integracao` para testes que sobem serviços reais efêmeros — MLflow com sqlite temporário, futuramente Supabase CLI local no Passo 5 — em vez de mocks pesados).
 
+A interface é testada em duas camadas: `tests/test_ui_logic.py` (lógica pura, sem runtime do Streamlit, incluindo o teste de paridade entre os backends de predição) e `tests/test_ui_smoke.py` (`streamlit.testing.v1.AppTest`, que roda o script de verdade sem browser — abas presentes, gating de `APP_ENV`, caminho feliz do formulário).
+
 Code Quality Tools: `ruff`, configurado em [`ruff.toml`](../ruff.toml) (line-length 100, target `py310`, regras `E,W,F,I,UP,B,SIM,C4,RUF`) e pinado em `requirements/dev.txt`. Roda com `ruff check src tests scripts`; o CI (Passo 10) usa o mesmo comando, sem flags extras, para que local e CI não possam divergir.
 
 Nota de convenção: os módulos de `src/` são importados "soltos" (sem prefixo de pacote) — `src/config_projeto.py` centraliza `REPO_ROOT` e `carregar_params()`, de modo que `params.yaml` e os caminhos default de `data/` sejam resolvidos a partir da raiz do repositório e não do CWD do processo. Isso mantém API, scripts e containers funcionando independentemente de onde forem iniciados; variáveis de ambiente (usadas pelo `dvc.yaml` para apontar para dentro do bind mount) continuam tendo precedência.
@@ -219,7 +231,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-18
+Date of Last Update: 2026-09-19
 
 ## 11. Glossary / Acronyms
 

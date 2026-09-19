@@ -11,6 +11,8 @@ especialidade recebida para 0, incorporando um enviesamento sistemático
 silencioso. Este módulo só APLICA o mapa já treinado e salvo em
 data/model.pkl (ver src/train.py:95), nunca recalcula.
 """
+import hashlib
+
 import joblib
 import pandas as pd
 
@@ -44,6 +46,22 @@ def carregar_modelo(path):
     especialidade usados naquele treino (nunca recalculado aqui)."""
     artefato = joblib.load(path)
     return artefato["model"], artefato["mapa_especialidade"]
+
+
+def calcular_model_version(path) -> str:
+    """Versão determinística e barata do modelo carregado: hash do próprio
+    artefato. A fonte de verdade formal do "campeão" em produção fica para
+    data/champion_metrics.json (Passo 9) -- aqui só precisamos de algo
+    estável para detectar troca de modelo em /health, na UI (Passo 4) e na
+    coluna model_version de `predicoes` (Passo 5). Vive neste módulo, e não
+    em api/main.py, justamente porque os três caminhos precisam produzir a
+    MESMA string para o mesmo artefato.
+
+    sha256 em vez de md5: o uso aqui não é criptográfico, mas hashlib.md5
+    levanta ValueError em host com OpenSSL em modo FIPS, o que derrubaria
+    o startup da API por um detalhe sem relação com o modelo."""
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()[:12]
 
 
 def aplicar_mapa_especialidade(df, mapa_especialidade):

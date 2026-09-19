@@ -1,0 +1,42 @@
+# Imagem combinada de deploy: API FastAPI + interface Streamlit no mesmo
+# container (Passo 11 do PLANO-IMPLEMENTACAO.md, antecipada no Passo 4 para
+# permitir testar o conjunto localmente do jeito que ele vai rodar no Hugging
+# Face Space). Ver infra/deploy/entrypoint.sh para o porque de dois processos.
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# api.txt + ui.txt (ambos puxam base.txt); train.txt fica de fora -- jupyter/
+# matplotlib/imbalanced-learn so servem ao pipeline de treino e pesariam no
+# cold start (SLO §2).
+COPY requirements/ ./requirements/
+RUN pip install --no-cache-dir -r requirements/api.txt -r requirements/ui.txt
+
+COPY src/ ./src/
+COPY params.yaml .
+COPY infra/deploy/entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
+# model.pkl EMPACOTADO na imagem, ao contrario de infra/api/dockerfile (que o
+# monta por volume em dev): no HF Space nao ha DVC nem acesso ao remote em
+# runtime, e o Passo 9 decidiu que a fonte de verdade do modelo campeao e o
+# artefato versionado, nao um MLflow ao vivo. Build sem `dvc pull` falha aqui,
+# de proposito -- melhor que subir um container sem modelo.
+COPY data/model.pkl /app/data/model.pkl
+
+ENV MODEL_PATH=/app/data/model.pkl \
+    APP_ENV=prod \
+    PREDICT_BACKEND=processo \
+    API_PORT=8000 \
+    UI_PORT=7860 \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+
+# 7860 e a porta que o HF Space publica por padrao (SDK Docker) -- a UI fica
+# nela. 8000 e a API; ver a ressalva sobre porta unica no Space em
+# PLANO-IMPLEMENTACAO.md, Passo 11.
+EXPOSE 7860 8000
+
+CMD ["./entrypoint.sh"]

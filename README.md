@@ -108,9 +108,10 @@ Divididas por camada para manter a imagem de deploy da API enxuta (cold start, S
 | `requirements/base.txt` | todas as camadas | pandas, scikit-learn, lightgbm, mlflow, pyyaml, pytest |
 | `requirements/train.txt` | `dockerfile` (stages `preprocess`/`train`/`validate`/`tune`) | `-r base.txt` + jupyter, matplotlib, imbalanced-learn |
 | `requirements/api.txt` | `infra/api/dockerfile` | `-r base.txt` + fastapi, uvicorn, shap, httpx |
-| `requirements/dev.txt` | desenvolvimento local e CI (nenhuma imagem Docker) | `-r train.txt` + `-r api.txt` + ruff |
+| `requirements/ui.txt` | interface Streamlit (`src/ui/`) e imagem combinada do deploy | `-r base.txt` + streamlit, httpx |
+| `requirements/dev.txt` | desenvolvimento local e CI (nenhuma imagem Docker) | `-r train.txt` + `-r api.txt` + `-r ui.txt` + ruff |
 
-Para desenvolver localmente com a suíte de testes completa (pipeline + API) e o lint:
+Para desenvolver localmente com a suíte de testes completa (pipeline + API + interface) e o lint:
 
 ```powershell
 pip install -r requirements/dev.txt
@@ -149,6 +150,74 @@ Ou via Docker (`infra/api/dockerfile`, monta `data/` para ler o `model.pkl` já 
 docker build -t saudeja-api -f infra/api/dockerfile .
 docker run --rm -p 8000:8000 -v "%cd%/data:/app/data" saudeja-api
 ```
+
+
+## Interface (Streamlit)
+
+`src/ui/app.py` é a interface da clínica (Passo 4): visão **Funcionário** em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (placeholder até o banco, Passo 5) e "Dev: disparo manual" (placeholder até o job D-2, Passo 6, visível só com `APP_ENV=dev`) — e visão **Paciente** como casca até haver onde persistir o cadastro. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
+
+```powershell
+streamlit run src/ui/app.py
+```
+
+### Como a interface obtém a predição
+
+`PREDICT_BACKEND` escolhe entre duas implementações do mesmo contrato, ambas convergindo para `src/inference.py` (sem lógica de predição duplicada):
+
+| Valor | O que faz | Quando usar |
+|---|---|---|
+| `processo` (default) | Importa `src/inference.py`/`src/explain.py` direto, sem HTTP | Produção e uso normal — decisão do [ADR-005](docs/adr/adr-005-integracoes-implicitas.md) (b): a UI não depende de a API estar de pé nem paga round-trip HTTP dentro do mesmo container |
+| `api` | Chama `POST /predict` da API FastAPI (`API_BASE_URL`, default `http://127.0.0.1:8000`) | Desenvolvimento/diagnóstico — exercita a API do Passo 3 do formulário até a resposta |
+
+`tests/test_ui_logic.py::test_backends_produzem_a_mesma_predicao` trava os dois caminhos na mesma resposta (probabilidade, classe, threshold, `model_version` e explicação) para o mesmo payload.
+
+Para testar a interface contra a API de verdade, em dois terminais:
+
+```powershell
+python -m uvicorn api.main:app --app-dir src            # terminal 1
+$env:PREDICT_BACKEND="api"; streamlit run src/ui/app.py # terminal 2
+```
+
+Variáveis relevantes (documentadas em `.env.example`): `APP_ENV` (`dev` expõe a aba de disparo manual; use `prod` no deploy), `PREDICT_BACKEND`, `API_BASE_URL`, `MODEL_PATH`.
+
+Para rodar interface e API juntas em container, do jeito que vão para produção, veja a seção seguinte.
+
+
+## Aplicação completa em container (API + Streamlit)
+
+A imagem de `infra/deploy/dockerfile` roda **os dois processos no mesmo container**, do jeito que o Hugging Face Space vai rodar (Passo 11). Ela foi antecipada para o Passo 4 justamente para dar para ver o conjunto montado — e não só cada peça isolada por `pytest`/`curl`.
+
+```powershell
+docker compose up -d app      # builda e sobe; aguarde o healthcheck ficar "healthy"
+```
+
+| Endereço | O quê |
+|---|---|
+| http://localhost:7860 | Interface Streamlit (7860 é a porta que o HF Space publica por padrão) |
+| http://localhost:8000/health | API FastAPI — status + `model_version` |
+| http://localhost:8000/docs | OpenAPI da API (integrações externas, diagrama C2) |
+
+```powershell
+docker compose logs -f app
+docker compose stop app
+```
+
+O que essa imagem prova, e as imagens isoladas não provam:
+
+- **O `model.pkl` viaja dentro da imagem**, não montado por volume (`infra/api/dockerfile` monta; esta empacota). No Space não há DVC nem remote em runtime. Por isso o build falha se você não tiver rodado `dvc pull`/`dvc repro` antes — falha proposital, melhor que um container sem modelo.
+- **UI e API servem a mesma predição**: `model_version` idêntico nos dois e a mesma probabilidade para o mesmo payload, dentro e fora do container.
+- **O container não fica "meio vivo"**: `infra/deploy/entrypoint.sh` derruba tudo assim que qualquer um dos dois processos sai (`wait -n`) e encerra os dois em SIGTERM — sem supervisord, que não se pagaria para dois processos sem ordem de inicialização entre si.
+
+Variáveis úteis no `docker-compose.yml`: `APP_ENV` (`dev` local mostra a aba de disparo manual; o Space usa `prod`), `PREDICT_BACKEND` (`processo` por padrão — troque para `api` se quiser que a UI fale com a API deste mesmo container por HTTP).
+
+Para buildar/rodar sem o compose:
+
+```powershell
+docker build -t saudeja-app -f infra/deploy/dockerfile .
+docker run --rm -e APP_ENV=dev -p 7860:7860 -p 8000:8000 saudeja-app
+```
+
+> As três imagens do repositório têm papéis distintos: `dockerfile` (treino, stages do DVC), `infra/api/dockerfile` (só a API, enxuta, modelo por volume) e `infra/deploy/dockerfile` (API + UI + modelo, a que vai para o Space).
 
 ## Roadmap
 

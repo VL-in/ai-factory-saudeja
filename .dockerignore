@@ -1,0 +1,21 @@
+# Contexto de build enxuto -- as tres imagens (dockerfile, infra/api/,
+# infra/deploy/) copiam so o que precisam, mas o contexto inteiro e enviado ao
+# daemon a cada build. data/model.pkl NAO entra aqui: a imagem combinada de
+# deploy o empacota.
+.git/
+.dvc/cache/
+mlruns/
+data/mlflow.db
+docs/
+notebooks/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+.idea/
+.vscode/

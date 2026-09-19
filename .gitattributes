@@ -1,0 +1,3 @@
+# Scripts que rodam dentro de container Linux precisam de LF mesmo com
+# core.autocrlf=true no Windows -- CRLF no shebang quebra o entrypoint.
+*.sh text eol=lf

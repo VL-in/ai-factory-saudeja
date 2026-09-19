@@ -1,4 +1,33 @@
 services:
+  # Aplicacao completa (API FastAPI + interface Streamlit no mesmo container),
+  # exatamente como vai rodar no Hugging Face Space -- ver infra/deploy/.
+  # Nao monta ./data por volume de proposito: a imagem empacota o model.pkl, e
+  # montar o diretorio local esconderia justamente o que se quer verificar
+  # aqui (que a imagem se sustenta sozinha). Trocou o modelo? Rebuilda.
+  app:
+    build:
+      context: .
+      dockerfile: infra/deploy/dockerfile
+    container_name: saudeja-app
+    environment:
+      # dev local: mostra a aba "Dev: disparo manual". No Space, APP_ENV=prod.
+      APP_ENV: dev
+      # ADR-005 (b): a UI chama o modelo em processo. Troque para "api" para
+      # fazer a UI conversar com a API deste mesmo container por HTTP.
+      PREDICT_BACKEND: processo
+    ports:
+      - "7860:7860"   # interface Streamlit (mesma porta que o HF Space publica)
+      - "8000:8000"   # API FastAPI (integracoes externas, diagrama C2)
+    networks:
+      - saudeja-net
+    healthcheck:
+      # Sem curl/wget na imagem (python:3.10-slim) -- usa o proprio python.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
   mlflow-server:
     build:
       context: .
