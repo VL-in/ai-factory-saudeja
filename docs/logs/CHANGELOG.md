@@ -1,5 +1,20 @@
 # Changelog
 
+## [v0.17] (Vanessa + Claude) - 2026-09-19
+
+- (fix) src/config_projeto.py: params.yaml e caminhos de data/ resolvidos a partir de
+REPO_ROOT em vez do CWD do processo -- a API iniciada fora da raiz do repo quebrava
+no import; explain.explicar() passa a exigir 1 linha e ganha explicar_lote(), porque
+devolver silenciosamente a explicacao da linha 0 gravaria a explicacao do paciente
+errado na fila do job D-2 (SLO §4); preprocessar()/extrair_features_temporais() nao
+mutam mais o DataFrame do chamador; sha256 no lugar de md5 em _calcular_model_version
+(md5 derruba o startup em host FIPS)
+
+- (chore) ruff.toml + requirements/dev.txt formalizam o lint pendente 
+(architecture.md §8); 21 achados corrigidos; +9 testes de regressao
+
+
+
 ## [v0.16] (Vanessa + Claude) - 2026-09-19
 
 - (feat) `src/api/schemas.py`: `PacienteConsultaIn` (Pydantic, valida idade/distância/dias/histórico ≥0, `sexo: Literal["F","M"]`, `data_hora_agendada: datetime`) e `PredictOut` (probabilidade, classe_prevista, threshold_usado, explicacao, `explicacao_texto: str | None` -- campo já reservado para o plug do LLM, `model_version`).

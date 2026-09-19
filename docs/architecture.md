@@ -14,6 +14,7 @@ ai-factory-saudeja/
 │   └── AVISO-MODELO.md
 ├── docs/
 │   ├── BRIEFING.md
+│   ├── PLANO-IMPLEMENTACAO.md
 │   ├── SLA.md
 │   ├── SLO.md
 │   ├── adr/                           # Architecture Decision Records
@@ -29,6 +30,7 @@ ai-factory-saudeja/
 ├── scripts/
 │   └── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 ├── src/
+│   ├── config_projeto.py              # REPO_ROOT + carregar_params(): caminhos independentes do CWD
 │   ├── preprocess.py                  # feature engineering + split treino/teste (stage 1)
 │   ├── train.py                       # SMOTE-NC + treino LightGBM, loga no MLflow (stage 2)
 │   ├── validate.py                    # métricas no fold de teste isolado (stage 3)
@@ -36,15 +38,16 @@ ai-factory-saudeja/
 │   ├── features.py
 │   ├── inference.py                   # payload -> features -> predição, reusado por API/job (Passo 1)
 │   ├── explain.py                     # explicabilidade SHAP + plug LLM inativo (Passo 2)
-│   ├── api/                           # API FastAPI: schemas.py + main.py (Passo 3)
-│   └── notebook.ipynb
+│   └── api/                           # API FastAPI: schemas.py + main.py (Passo 3)
 ├── tests/                             # testes unitários e de integração do pipeline
 ├── .dvc/                              # configuração e cache do DVC
 ├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
 ├── params.yaml                        # hiperparâmetros do modelo
 ├── dockerfile / dockerfile.mlflow     # imagens de treino e do servidor MLflow
 ├── docker-compose.yml                 # orquestração local (mlflow-server)
-├── requirements/                      # base.txt / train.txt / api.txt (Passo 3)
+├── requirements/                      # base.txt / train.txt / api.txt / dev.txt
+├── pytest.ini                         # marcador `integracao`
+├── ruff.toml                          # configuração do lint
 ├── .env.example
 └── README.md
 ```
@@ -198,7 +201,9 @@ Local Setup Instructions: ver [`README.md`](../README.md), seção "Como usar o 
 
 Testing Frameworks: Pytest (`pytest.ini` define o marcador `integracao` para testes que sobem serviços reais efêmeros — MLflow com sqlite temporário, futuramente Supabase CLI local no Passo 5 — em vez de mocks pesados).
 
-Code Quality Tools: `ruff` (a ser formalizado em `requirements.txt`/config no Passo 10, junto do CI).
+Code Quality Tools: `ruff`, configurado em [`ruff.toml`](../ruff.toml) (line-length 100, target `py310`, regras `E,W,F,I,UP,B,SIM,C4,RUF`) e pinado em `requirements/dev.txt`. Roda com `ruff check src tests scripts`; o CI (Passo 10) usa o mesmo comando, sem flags extras, para que local e CI não possam divergir.
+
+Nota de convenção: os módulos de `src/` são importados "soltos" (sem prefixo de pacote) — `src/config_projeto.py` centraliza `REPO_ROOT` e `carregar_params()`, de modo que `params.yaml` e os caminhos default de `data/` sejam resolvidos a partir da raiz do repositório e não do CWD do processo. Isso mantém API, scripts e containers funcionando independentemente de onde forem iniciados; variáveis de ambiente (usadas pelo `dvc.yaml` para apontar para dentro do bind mount) continuam tendo precedência.
 
 ## 9. Future Considerations / Roadmap
 

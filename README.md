@@ -108,8 +108,23 @@ Divididas por camada para manter a imagem de deploy da API enxuta (cold start, S
 | `requirements/base.txt` | todas as camadas | pandas, scikit-learn, lightgbm, mlflow, pyyaml, pytest |
 | `requirements/train.txt` | `dockerfile` (stages `preprocess`/`train`/`validate`/`tune`) | `-r base.txt` + jupyter, matplotlib, imbalanced-learn |
 | `requirements/api.txt` | `infra/api/dockerfile` | `-r base.txt` + fastapi, uvicorn, shap, httpx |
+| `requirements/dev.txt` | desenvolvimento local e CI (nenhuma imagem Docker) | `-r train.txt` + `-r api.txt` + ruff |
 
-Para desenvolver localmente com a suíte de testes completa (pipeline + API), instale os três: `pip install -r requirements/train.txt -r requirements/api.txt`.
+Para desenvolver localmente com a suíte de testes completa (pipeline + API) e o lint:
+
+```powershell
+pip install -r requirements/dev.txt
+```
+
+## Lint e testes
+
+```powershell
+ruff check src tests scripts    # regras em ruff.toml
+pytest                          # testes de integração ficam de fora por padrão (pytest.ini)
+pytest -m integracao            # sobe serviços reais efêmeros (Docker/MLflow)
+```
+
+`ruff check --fix` aplica as correções automáticas. O CI (Passo 10) roda exatamente os mesmos comandos, sem flags extras, para local e CI não divergirem.
 
 ## API de predição (FastAPI)
 

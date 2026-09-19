@@ -15,8 +15,8 @@ stages:
       size: 126
     - path: data/interim/train_raw.pkl
       hash: md5
-      md5: 17c2ce6018d69aff154db690278e8f1f
-      size: 31276
+      md5: b790d4fbbc4e3c0b58dc99ab8a2e6fcb
+      size: 31132
     - path: dockerfile
       hash: md5
       md5: cb09473e637096045fcc78fea529be08
@@ -29,14 +29,18 @@ stages:
       hash: md5
       md5: 4b62798e08ad85a30e4561ad36a001b7
       size: 229
+    - path: src/config_projeto.py
+      hash: md5
+      md5: e5fd691a895955dce24fb5b6154d1c4e
+      size: 1660
     - path: src/preprocess.py
       hash: md5
-      md5: 2c1f533821f8213d5bbfe64285c8ef4f
-      size: 3299
+      md5: 707efc2644c66857f83109d1549dcede
+      size: 3617
     - path: src/train.py
       hash: md5
-      md5: 1f792b00945ae9daaeabc9d66774aa33
-      size: 4543
+      md5: d2c2cf0efb35ad4b6878f658b14b4bbb
+      size: 4573
     params:
       params.yaml:
         balancing.k_neighbors: 3
@@ -47,7 +51,7 @@ stages:
     outs:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 53d14da30ea963e59d3ee530dc70e6c0
+      md5: 51f2127a6384584e120aea1897d05fb7
       size: 32
     - path: data/model.pkl
       hash: md5
@@ -77,14 +81,18 @@ stages:
       hash: md5
       md5: 4b62798e08ad85a30e4561ad36a001b7
       size: 229
+    - path: src/config_projeto.py
+      hash: md5
+      md5: e5fd691a895955dce24fb5b6154d1c4e
+      size: 1660
     - path: src/features.py
       hash: md5
-      md5: dbc45e4d8945274824084bfcddae58a9
-      size: 558
+      md5: 8c807feea37c449cf261557fa5a3f3b5
+      size: 797
     - path: src/preprocess.py
       hash: md5
-      md5: 2c1f533821f8213d5bbfe64285c8ef4f
-      size: 3299
+      md5: 707efc2644c66857f83109d1549dcede
+      size: 3617
     params:
       params.yaml:
         features.temporais: true
@@ -95,12 +103,12 @@ stages:
       size: 126
     - path: data/interim/test.pkl
       hash: md5
-      md5: f0061ca551ca65ac6effa7a76db26d7c
-      size: 9371
+      md5: 73bdeff28cd4299479b00e91970bdeae
+      size: 9243
     - path: data/interim/train_raw.pkl
       hash: md5
-      md5: 17c2ce6018d69aff154db690278e8f1f
-      size: 31276
+      md5: b790d4fbbc4e3c0b58dc99ab8a2e6fcb
+      size: 31132
   validate:
     cmd: docker build -t saudeja-train -f dockerfile . && docker compose up -d 
       --wait mlflow-server && docker run --rm --network saudeja-net -v 
@@ -112,12 +120,12 @@ stages:
     deps:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 53d14da30ea963e59d3ee530dc70e6c0
+      md5: 51f2127a6384584e120aea1897d05fb7
       size: 32
     - path: data/interim/test.pkl
       hash: md5
-      md5: f0061ca551ca65ac6effa7a76db26d7c
-      size: 9371
+      md5: 73bdeff28cd4299479b00e91970bdeae
+      size: 9243
     - path: data/model.pkl
       hash: md5
       md5: e0ae48310683b6791fcf5790b8fcb16a
@@ -134,10 +142,14 @@ stages:
       hash: md5
       md5: 4b62798e08ad85a30e4561ad36a001b7
       size: 229
+    - path: src/config_projeto.py
+      hash: md5
+      md5: e5fd691a895955dce24fb5b6154d1c4e
+      size: 1660
     - path: src/validate.py
       hash: md5
-      md5: 41d1cf1c87cba9e01cbdec62779af6ec
-      size: 5473
+      md5: 30610c0fd328faed4357bf4eb5626e02
+      size: 5523
     params:
       params.yaml:
         decision.threshold: 0.6

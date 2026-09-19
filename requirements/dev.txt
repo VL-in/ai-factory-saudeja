@@ -1,0 +1,7 @@
+# Ferramental de desenvolvimento -- NÃO entra em nenhuma imagem Docker
+# (nem a de treino, nem a da API). Usado localmente e pelo CI (Passo 10).
+-r train.txt
+-r api.txt
+
+# Lint/format -- configuração em ruff.toml (docs/architecture.md §8)
+ruff==0.16.7

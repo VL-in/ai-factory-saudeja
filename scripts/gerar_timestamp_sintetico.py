@@ -107,7 +107,7 @@ minuto_amostrado[idx_reforcar] = [SLOTS_NOITE_SEXTA[i][1] for i in slot_noite]
 # --- 4. materializa como timestamp unico (formato tipo banco de dados) ---
 timestamps = [
     ANCORA + timedelta(days=int(d), hours=int(h), minutes=int(m))
-    for d, h, m in zip(dia_amostrado, hora_amostrada, minuto_amostrado)
+    for d, h, m in zip(dia_amostrado, hora_amostrada, minuto_amostrado, strict=True)
 ]
 df["data_hora_agendada"] = pd.Series(timestamps).dt.strftime("%Y-%m-%d %H:%M:%S")
 

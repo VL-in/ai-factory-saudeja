@@ -30,17 +30,16 @@ import os
 import joblib
 import lightgbm as lgb
 import mlflow
-import yaml
 from imblearn.over_sampling import SMOTENC
 from imblearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
+from config_projeto import caminho_de_env, carregar_params
 from preprocess import COLUNAS_CATEGORICAS
 
-with open("params.yaml") as f:
-    PARAMS = yaml.safe_load(f)
+PARAMS = carregar_params()
 
-TRAIN_RAW_PATH = os.environ.get("TRAIN_RAW_PATH", "./data/interim/train_raw.pkl")
+TRAIN_RAW_PATH = caminho_de_env("TRAIN_RAW_PATH", "data/interim/train_raw.pkl")
 RANDOM_STATE = 42
 N_FOLDS = 5
 
@@ -68,7 +67,9 @@ REFIT_METRIC = "f1_1"  # métrica de interesse do projeto -- ver ADR-003
 
 
 def _construir_pipeline(cat_idx, k_neighbors):
-    smote = SMOTENC(categorical_features=cat_idx, k_neighbors=k_neighbors, random_state=RANDOM_STATE)
+    smote = SMOTENC(
+        categorical_features=cat_idx, k_neighbors=k_neighbors, random_state=RANDOM_STATE
+    )
     model = lgb.LGBMClassifier(random_state=RANDOM_STATE)
     return Pipeline([("smotenc", smote), ("model", model)])
 

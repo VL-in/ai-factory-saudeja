@@ -1,0 +1,31 @@
+# Lint/format do projeto (docs/architecture.md §8 "Code Quality Tools").
+# Arquivo dedicado em vez de pyproject.toml: este repo nao e um pacote
+# Python instalavel (os modulos de src/ sao importados "soltos", ver
+# tests/conftest.py e src/api/main.py), entao um pyproject.toml na raiz so
+# confundiria pip/build tools.
+line-length = 100
+target-version = "py310"
+
+# src/ e o diretorio de primeira parte -- sem isso o isort (regra I) trata
+# "import preprocess"/"import inference" como dependencia de terceiros e
+# briga com a ordem real dos imports.
+src = ["src", "tests", "scripts"]
+
+[lint]
+select = [
+    "E",    # pycodestyle (erros)
+    "W",    # pycodestyle (avisos)
+    "F",    # pyflakes -- import/variavel nao usada, nome indefinido
+    "I",    # isort -- ordem dos imports
+    "UP",   # pyupgrade -- sintaxe obsoleta para o target-version
+    "B",    # flake8-bugbear -- armadilhas reais (zip sem strict, default mutavel)
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "RUF",  # regras do proprio ruff (ex.: RUF013 Optional implicito)
+]
+
+[lint.per-file-ignores]
+# Os testes importam modulos de src/ que so entram no sys.path via
+# tests/conftest.py, e alguns instanciam mlflow dentro da funcao de
+# proposito (fixture cara) -- import no topo da funcao e intencional aqui.
+"tests/*" = ["E402"]

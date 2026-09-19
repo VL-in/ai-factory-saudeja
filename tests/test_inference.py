@@ -45,7 +45,9 @@ def test_aplicar_mapa_especialidade_desconhecida_levanta_erro_claro(df_consultas
 
 
 @pytest.mark.parametrize("features_temporais", [False, True])
-def test_construir_features_bate_com_preprocessar_para_mesma_linha(df_consultas, features_temporais, monkeypatch):
+def test_construir_features_bate_com_preprocessar_para_mesma_linha(
+    df_consultas, features_temporais, monkeypatch
+):
     """Teste de paridade treino-serving: construir_features() deve produzir
     exatamente as mesmas colunas/valores que preprocess.preprocessar() para
     a mesma linha, usando o mapa fit sobre o dataset inteiro. Detecta
@@ -57,7 +59,9 @@ def test_construir_features_bate_com_preprocessar_para_mesma_linha(df_consultas,
     X_completo, _, mapa_esp = preprocess.preprocessar(df_consultas.copy())
 
     payload = _payload_da_linha(df_consultas, 0)
-    X_inferencia = inference.construir_features(payload, mapa_esp, features_temporais=features_temporais)
+    X_inferencia = inference.construir_features(
+        payload, mapa_esp, features_temporais=features_temporais
+    )
 
     esperado = X_completo.iloc[[0]].reset_index(drop=True)
     obtido = X_inferencia.reset_index(drop=True)
@@ -104,7 +108,8 @@ def test_pipeline_ponta_a_ponta_sem_retreinar(df_consultas):
     for i in range(len(df_consultas)):
         payload = _payload_da_linha(df_consultas, i)
         if payload["especialidade"] not in mapa_esp:
-            continue  # dataset sintético do fixture pode ter especialidade fora do mapa do modelo real
+            # o fixture pode ter especialidade fora do mapa do modelo real
+            continue
         X = inference.construir_features(payload, mapa_esp, features_temporais=True)
         probabilidade = inference.predizer(model, X)[0]
         assert 0.0 <= probabilidade <= 1.0

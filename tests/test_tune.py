@@ -1,7 +1,6 @@
 import preprocess
 import tune
 
-
 GRID_PEQUENO = {
     "model__n_estimators": [50, 80],
     "model__num_leaves": [16, 31],
@@ -30,7 +29,7 @@ def test_buscar_melhores_parametros_nao_recebe_fold_de_teste(df_consultas_smote)
     """O CV interno do GridSearch só deve enxergar o fold de treino recebido
     -- mesma garantia de isolamento do fold de teste que train.py já tem."""
     X, y, _ = preprocess.preprocessar(df_consultas_smote.copy())
-    X_train, X_test, y_train, y_test = preprocess.dividir_treino_teste(X, y)
+    X_train, X_test, y_train, _y_test = preprocess.dividir_treino_teste(X, y)
 
     tune.buscar_melhores_parametros(
         X_train, y_train, k_neighbors=1, param_grid=GRID_PEQUENO, n_folds=3

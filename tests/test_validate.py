@@ -70,7 +70,9 @@ def test_validar_sinaliza_aviso_quando_classe_positiva_ausente(tmp_path):
     assert "aviso_split" in tags
 
 
-def test_main_end_to_end_loga_metricas_na_mesma_run_do_treino(df_consultas_smote, tmp_path, monkeypatch):
+def test_main_end_to_end_loga_metricas_na_mesma_run_do_treino(
+    df_consultas_smote, tmp_path, monkeypatch
+):
     import mlflow
 
     tracking_uri = f"sqlite:///{tmp_path / 'mlflow-e2e.db'}"

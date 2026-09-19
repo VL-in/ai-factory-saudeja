@@ -13,13 +13,12 @@ data/model.pkl (ver src/train.py:95), nunca recalcula.
 """
 import joblib
 import pandas as pd
-import yaml
 
+from config_projeto import carregar_params
 from features import extrair_features_temporais
 from preprocess import COLUNAS_CATEGORICAS  # noqa: F401 -- reexportado p/ API/job (Passo 3/6)
 
-with open("params.yaml") as f:
-    PARAMS = yaml.safe_load(f)
+PARAMS = carregar_params()
 
 COLUNAS_BASE = [
     "idade",
@@ -62,7 +61,9 @@ def aplicar_mapa_especialidade(df, mapa_especialidade):
     return df
 
 
-def construir_features(payload: dict, mapa_especialidade: dict, features_temporais: bool = None):
+def construir_features(
+    payload: dict, mapa_especialidade: dict, features_temporais: bool | None = None
+):
     """Monta 1 linha com exatamente as colunas/ordem que
     preprocess.preprocessar() produz, a partir de um payload cru (dict).
     features_temporais, se omitido, vem de params.yaml (mesma fonte que o

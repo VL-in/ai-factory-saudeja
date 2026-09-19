@@ -1,11 +1,12 @@
 import numpy as np
-import pytest
 
 import preprocess
 import train
 
 
-def test_treinar_retorna_modelo_treinado_com_dados_balanceados(df_consultas_smote, tmp_path, monkeypatch):
+def test_treinar_retorna_modelo_treinado_com_dados_balanceados(
+    df_consultas_smote, tmp_path, monkeypatch
+):
     import mlflow
 
     mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow-test.db'}")
@@ -33,7 +34,7 @@ def test_treinar_nao_recebe_nem_gera_fold_de_teste(df_consultas_smote, tmp_path,
     mlflow.set_experiment("teste-unitario-saudeja-2")
 
     X, y, _ = preprocess.preprocessar(df_consultas_smote.copy())
-    X_train, X_test, y_train, y_test = preprocess.dividir_treino_teste(X, y)
+    X_train, X_test, y_train, _y_test = preprocess.dividir_treino_teste(X, y)
 
     with mlflow.start_run():
         train.treinar(X_train, y_train)
@@ -43,7 +44,9 @@ def test_treinar_nao_recebe_nem_gera_fold_de_teste(df_consultas_smote, tmp_path,
     assert len(X_test) == round(len(df_consultas_smote) * preprocess.TEST_SIZE)
 
 
-def test_main_end_to_end_gera_modelo_run_id_e_tag_de_pipeline(df_consultas_smote, tmp_path, monkeypatch):
+def test_main_end_to_end_gera_modelo_run_id_e_tag_de_pipeline(
+    df_consultas_smote, tmp_path, monkeypatch
+):
     import json
 
     import joblib

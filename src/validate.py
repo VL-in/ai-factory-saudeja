@@ -13,16 +13,16 @@ import os
 
 import joblib
 import mlflow
-import yaml
 from mlflow.tracking import MlflowClient
 from sklearn.metrics import average_precision_score, classification_report, roc_auc_score
 
-with open("params.yaml") as f:
-    PARAMS = yaml.safe_load(f)
+from config_projeto import caminho_de_env, carregar_params
 
-TEST_PATH = os.environ.get("TEST_PATH", "./data/interim/test.pkl")
-MODEL_PATH = os.environ.get("MODEL_PATH", "./data/model.pkl")
-RUN_ID_PATH = os.environ.get("RUN_ID_PATH", "./data/interim/mlflow_run_id.txt")
+PARAMS = carregar_params()
+
+TEST_PATH = caminho_de_env("TEST_PATH", "data/interim/test.pkl")
+MODEL_PATH = caminho_de_env("MODEL_PATH", "data/model.pkl")
+RUN_ID_PATH = caminho_de_env("RUN_ID_PATH", "data/interim/mlflow_run_id.txt")
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 
@@ -86,7 +86,10 @@ def _logar_threshold(run_id, threshold):
     if threshold_existente is None:
         mlflow.log_param("decision_threshold", threshold)
     elif float(threshold_existente) != threshold:
-        aviso = f"decision_threshold registrado ({threshold_existente}) diverge do atual ({threshold})"
+        aviso = (
+            f"decision_threshold registrado ({threshold_existente}) "
+            f"diverge do atual ({threshold})"
+        )
         print(f"[aviso] {aviso}")
         mlflow.set_tag("decision_threshold_divergente", str(threshold))
 

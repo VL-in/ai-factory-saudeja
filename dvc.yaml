@@ -16,6 +16,7 @@ stages:
       - requirements/train.txt
       - src/preprocess.py
       - src/features.py
+      - src/config_projeto.py
       - data/consultas-historicas.csv
     params:
       - features.temporais
@@ -44,6 +45,7 @@ stages:
       - requirements/train.txt
       - src/train.py
       - src/preprocess.py
+      - src/config_projeto.py
       - data/interim/train_raw.pkl
       - data/interim/mapa_especialidade.json
     params:
@@ -74,6 +76,7 @@ stages:
       - requirements/base.txt
       - requirements/train.txt
       - src/validate.py
+      - src/config_projeto.py
       - data/model.pkl
       - data/interim/test.pkl
       - data/interim/mlflow_run_id.txt

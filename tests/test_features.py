@@ -36,3 +36,14 @@ def test_dia_de_semana_e_horario_respeitam_grade_de_negocio_no_dataset_real():
     assert df.loc[sabado, "horario"].between(8, 11).all(), (
         "sabado so funciona ate 11:30 -- nao deveria haver horario >= 12"
     )
+
+
+def test_extrair_features_temporais_nao_muta_o_df_recebido(df_consultas):
+    """Regressão: a função anexava as colunas no DataFrame do chamador e o
+    devolvia. Quem passasse um df sem .copy() (preprocessar(), e antes
+    construir_features()) via o objeto original ganhar colunas derivadas."""
+    colunas_antes = list(df_consultas.columns)
+
+    extrair_features_temporais(df_consultas)
+
+    assert list(df_consultas.columns) == colunas_antes

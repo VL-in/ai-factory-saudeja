@@ -10,19 +10,18 @@ import os
 
 import joblib
 import pandas as pd
-import yaml
 from sklearn.model_selection import train_test_split
 
+from config_projeto import caminho_de_env, carregar_params
 from features import extrair_features_temporais
 
-with open("params.yaml") as f:
-    PARAMS = yaml.safe_load(f)
+PARAMS = carregar_params()
 
-DATA_PATH = os.environ.get("DATA_PATH", "./data/consultas-historicas.csv")
-TRAIN_RAW_PATH = os.environ.get("TRAIN_RAW_PATH", "./data/interim/train_raw.pkl")
-TEST_PATH = os.environ.get("TEST_PATH", "./data/interim/test.pkl")
-MAPA_ESPECIALIDADE_PATH = os.environ.get(
-    "MAPA_ESPECIALIDADE_PATH", "./data/interim/mapa_especialidade.json"
+DATA_PATH = caminho_de_env("DATA_PATH", "data/consultas-historicas.csv")
+TRAIN_RAW_PATH = caminho_de_env("TRAIN_RAW_PATH", "data/interim/train_raw.pkl")
+TEST_PATH = caminho_de_env("TEST_PATH", "data/interim/test.pkl")
+MAPA_ESPECIALIDADE_PATH = caminho_de_env(
+    "MAPA_ESPECIALIDADE_PATH", "data/interim/mapa_especialidade.json"
 )
 
 RANDOM_STATE = 42
@@ -42,6 +41,11 @@ def carregar_dados(path):
 
 
 def preprocessar(df):
+    # Copia defensiva: preprocessar() nao deve alterar o DataFrame do
+    # chamador -- carregar_dados() devolve um df que pode ser reusado cru
+    # (EDA, auditoria) depois desta chamada.
+    df = df.copy()
+
     # sexo -> 0/1
     df["sexo"] = df["sexo"].map({"F": 0, "M": 1})
 

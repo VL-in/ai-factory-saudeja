@@ -13,7 +13,6 @@ de como for iniciado (uvicorn a partir da raiz do repo, TestClient nos
 testes, ou o CMD do container em infra/api/dockerfile).
 """
 import hashlib
-import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,11 +24,12 @@ if str(SRC_DIR) not in sys.path:
 from fastapi import FastAPI, HTTPException  # noqa: E402
 
 import inference  # noqa: E402
+from config_projeto import caminho_de_env  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
 
 from .schemas import PacienteConsultaIn, PredictOut  # noqa: E402
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "./data/model.pkl")
+MODEL_PATH = caminho_de_env("MODEL_PATH", "data/model.pkl")
 
 explicador_llm = ExplicadorLLMDesativado()
 
@@ -38,9 +38,13 @@ def _calcular_model_version(path: str) -> str:
     """Versão determinística e barata do modelo carregado: hash do próprio
     artefato. A fonte de verdade formal do "campeão" em produção fica para
     data/champion_metrics.json (Passo 9) -- aqui só precisamos de algo
-    estável para detectar troca de modelo em /health e nas respostas."""
+    estável para detectar troca de modelo em /health e nas respostas.
+
+    sha256 em vez de md5: o uso aqui não é criptográfico, mas hashlib.md5
+    levanta ValueError em host com OpenSSL em modo FIPS, o que derrubaria
+    o startup da API por um detalhe sem relação com o modelo."""
     with open(path, "rb") as f:
-        return hashlib.md5(f.read()).hexdigest()[:12]
+        return hashlib.sha256(f.read()).hexdigest()[:12]
 
 
 @asynccontextmanager

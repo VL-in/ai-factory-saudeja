@@ -51,14 +51,36 @@ def _valores_classe_positiva(explainer, X):
 
 
 def explicar(explainer, X):
-    """Retorna a explicação da primeira (e única) linha de X: lista de
+    """Retorna a explicação da única linha de X: lista de
     {"feature", "contribuicao"} ordenada por abs(contribuicao) desc.
     JSON-serializável (valores nativos float, não np.floatXX) -- vai
-    trafegar na API e ser persistido em coluna jsonb (Passo 5)."""
+    trafegar na API e ser persistido em coluna jsonb (Passo 5).
+
+    Exige exatamente 1 linha: o job diário (Passo 6) processa uma fila e
+    precisa de uma explicação POR agendamento (SLO §4). Aceitar X com n
+    linhas e devolver só a explicação da primeira gravaria a explicação do
+    paciente errado nas demais predições, sem erro visível -- use
+    explicar_lote() para a fila."""
+    if len(X) != 1:
+        raise ValueError(
+            f"explicar() espera exatamente 1 linha, recebeu {len(X)} -- "
+            "use explicar_lote() para explicar uma fila inteira"
+        )
+    return explicar_lote(explainer, X)[0]
+
+
+def explicar_lote(explainer, X):
+    """Uma explicação por linha de X, na mesma ordem das linhas -- o SHAP é
+    calculado de uma vez só para o lote inteiro (bem mais barato que n
+    chamadas a explicar()) e depois fatiado por linha."""
     valores, _ = _valores_classe_positiva(explainer, X)
+    return [_explicar_linha(X.columns, linha) for linha in valores]
+
+
+def _explicar_linha(colunas, valores_da_linha):
     contribuicoes = [
         {"feature": feature, "contribuicao": float(valor)}
-        for feature, valor in zip(X.columns, valores[0])
+        for feature, valor in zip(colunas, valores_da_linha, strict=True)
     ]
     contribuicoes.sort(key=lambda c: abs(c["contribuicao"]), reverse=True)
     return contribuicoes

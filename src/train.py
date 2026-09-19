@@ -11,23 +11,22 @@ import json
 import os
 
 import joblib
-import yaml
-from imblearn.over_sampling import SMOTENC
 import lightgbm as lgb
 import mlflow
 import mlflow.lightgbm
+from imblearn.over_sampling import SMOTENC
 
+from config_projeto import caminho_de_env, carregar_params
 from preprocess import COLUNAS_CATEGORICAS
 
-with open("params.yaml") as f:
-    PARAMS = yaml.safe_load(f)
+PARAMS = carregar_params()
 
-TRAIN_RAW_PATH = os.environ.get("TRAIN_RAW_PATH", "./data/interim/train_raw.pkl")
-MAPA_ESPECIALIDADE_PATH = os.environ.get(
-    "MAPA_ESPECIALIDADE_PATH", "./data/interim/mapa_especialidade.json"
+TRAIN_RAW_PATH = caminho_de_env("TRAIN_RAW_PATH", "data/interim/train_raw.pkl")
+MAPA_ESPECIALIDADE_PATH = caminho_de_env(
+    "MAPA_ESPECIALIDADE_PATH", "data/interim/mapa_especialidade.json"
 )
-MODEL_PATH = os.environ.get("MODEL_PATH", "./data/model.pkl")
-RUN_ID_PATH = os.environ.get("RUN_ID_PATH", "./data/interim/mlflow_run_id.txt")
+MODEL_PATH = caminho_de_env("MODEL_PATH", "data/model.pkl")
+RUN_ID_PATH = caminho_de_env("RUN_ID_PATH", "data/interim/mlflow_run_id.txt")
 RANDOM_STATE = 42
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
@@ -41,18 +40,20 @@ PIPELINE_TAG_VALUE = "segregado-preprocess-train-validate"
 
 
 def _construir_modelo_kwargs():
-    return dict(
-        n_estimators=PARAMS["model"]["n_estimators"],
-        learning_rate=PARAMS["model"]["learning_rate"],
-        max_depth=PARAMS["model"]["max_depth"],
-        num_leaves=PARAMS["model"]["num_leaves"],
-        random_state=RANDOM_STATE,
-    )
+    return {
+        "n_estimators": PARAMS["model"]["n_estimators"],
+        "learning_rate": PARAMS["model"]["learning_rate"],
+        "max_depth": PARAMS["model"]["max_depth"],
+        "num_leaves": PARAMS["model"]["num_leaves"],
+        "random_state": RANDOM_STATE,
+    }
 
 
 def _balancear(X_train, y_train, cat_cols, k_neighbors):
     cat_idx = [X_train.columns.get_loc(c) for c in cat_cols]
-    smote = SMOTENC(categorical_features=cat_idx, k_neighbors=k_neighbors, random_state=RANDOM_STATE)
+    smote = SMOTENC(
+        categorical_features=cat_idx, k_neighbors=k_neighbors, random_state=RANDOM_STATE
+    )
     return smote.fit_resample(X_train, y_train)
 
 

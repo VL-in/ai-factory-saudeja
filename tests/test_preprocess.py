@@ -1,6 +1,7 @@
 import json
 
 import joblib
+import pandas as pd
 import pytest
 
 import preprocess
@@ -18,7 +19,7 @@ def test_carregar_dados_arquivo_inexistente_leva_a_erro_claro():
 
 
 def test_preprocessar_mapeia_sexo_para_binario(df_consultas):
-    X, y, _ = preprocess.preprocessar(df_consultas.copy())
+    X, _, _ = preprocess.preprocessar(df_consultas.copy())
     assert set(X["sexo"].unique()) <= {0, 1}
     assert X.loc[df_consultas["sexo"] == "F", "sexo"].eq(0).all()
     assert X.loc[df_consultas["sexo"] == "M", "sexo"].eq(1).all()
@@ -27,7 +28,7 @@ def test_preprocessar_mapeia_sexo_para_binario(df_consultas):
 def test_preprocessar_retorna_features_esperadas(df_consultas, monkeypatch):
     monkeypatch.setitem(preprocess.PARAMS, "features", {"temporais": False})
 
-    X, y, mapa_esp = preprocess.preprocessar(df_consultas.copy())
+    X, y, _ = preprocess.preprocessar(df_consultas.copy())
     esperado = {
         "idade",
         "sexo",
@@ -43,7 +44,7 @@ def test_preprocessar_retorna_features_esperadas(df_consultas, monkeypatch):
 def test_preprocessar_inclui_features_temporais_quando_flag_ativa(df_consultas, monkeypatch):
     monkeypatch.setitem(preprocess.PARAMS, "features", {"temporais": True})
 
-    X, y, _ = preprocess.preprocessar(df_consultas.copy())
+    X, _, _ = preprocess.preprocessar(df_consultas.copy())
 
     assert {"dia_de_semana", "horario"} <= set(X.columns)
     assert X["dia_de_semana"].between(0, 6).all()
@@ -128,3 +129,14 @@ def test_main_gera_train_raw_test_e_mapa_especialidade(csv_consultas, tmp_path, 
     with open(mapa_path) as f:
         mapa_esp = json.load(f)
     assert isinstance(mapa_esp, dict) and len(mapa_esp) > 0
+
+
+def test_preprocessar_nao_muta_o_df_recebido(df_consultas):
+    """Regressão: preprocessar() reescrevia sexo/especialidade in-place no
+    DataFrame do chamador, então carregar_dados() -> preprocessar() deixava
+    o df "cru" já label-encoded para qualquer uso posterior (EDA/auditoria)."""
+    original = df_consultas.copy()
+
+    preprocess.preprocessar(df_consultas)
+
+    pd.testing.assert_frame_equal(df_consultas, original)

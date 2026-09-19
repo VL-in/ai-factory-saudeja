@@ -1,5 +1,6 @@
 import json
 
+import pandas as pd
 import pytest
 
 import explain
@@ -97,3 +98,33 @@ def test_explicador_llm_desativado_nao_chama_rede(monkeypatch):
 def test_explicador_llm_e_interface_abstrata():
     with pytest.raises(TypeError):
         explain.ExplicadorLLM()
+
+
+def test_explicar_recusa_x_com_mais_de_uma_linha(explicacao_real):
+    """Regressão: explicar() devolvia silenciosamente a explicação só da
+    primeira linha. No job diário (Passo 6), que roda sobre a fila de D+2,
+    isso gravaria a explicação do paciente errado em todas as predições
+    seguintes -- sem erro visível e violando o SLO §4 na prática."""
+    _, explainer, X = explicacao_real
+    X_duas_linhas = pd.concat([X, X], ignore_index=True)
+
+    with pytest.raises(ValueError, match="explicar_lote"):
+        explain.explicar(explainer, X_duas_linhas)
+
+
+def test_explicar_lote_devolve_uma_explicacao_por_linha(explicacao_real):
+    _, explainer, X = explicacao_real
+    X_tres_linhas = pd.concat([X, X, X], ignore_index=True)
+
+    explicacoes = explain.explicar_lote(explainer, X_tres_linhas)
+
+    assert len(explicacoes) == 3
+    assert all(len(e) == len(X.columns) for e in explicacoes)
+
+
+def test_explicar_lote_de_uma_linha_bate_com_explicar(explicacao_real):
+    """explicar() é explicar_lote() de 1 linha -- garante que o caminho da
+    API (uma predição) e o do job (fila) não divergem."""
+    _, explainer, X = explicacao_real
+
+    assert explain.explicar_lote(explainer, X)[0] == explain.explicar(explainer, X)
