@@ -154,7 +154,9 @@ docker run --rm -p 8000:8000 -v "%cd%/data:/app/data" saudeja-api
 
 ## Interface (Streamlit)
 
-`src/ui/app.py` é a interface da clínica (Passo 4): visão **Funcionário** em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (placeholder até o banco, Passo 5) e "Dev: disparo manual" (placeholder até o job D-2, Passo 6, visível só com `APP_ENV=dev`) — e visão **Paciente** como casca até haver onde persistir o cadastro. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
+`src/ui/app.py` é a interface da clínica: visão **Funcionário** em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (Passo 5: agendamentos do dia ordenados por risco, com resumo de quantos são alto risco/sem predição e a explicação SHAP gravada de cada paciente ao selecionar a linha) e "Dev: disparo manual" (placeholder até o job D-2, Passo 6, visível só com `APP_ENV=dev`) — e visão **Paciente** (Passo 5: cadastro + agendamento persistidos no Supabase). A sidebar mostra o estado da conexão com o Supabase ao lado do backend de predição. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
+
+**Datas sempre no fuso da clínica** (`TIMEZONE_CLINICA`, default `America/Sao_Paulo`): "fila do dia 19/09" são as consultas de 19/09 em São Paulo, e o cadastro grava `data_hora_agendada` com o fuso explícito. O container roda em UTC — sem isso, depois das 21h a fila do dia e o job D-2 trabalhariam com a data errada, e os horários apareceriam 3h deslocados. `dias_entre_agendamento_consulta` não é perguntado no cadastro: é derivado da data escolhida (`logic.dias_ate_consulta`), porque é feature do modelo e um valor digitado poderia contradizer a própria data da consulta.
 
 ```powershell
 streamlit run src/ui/app.py
@@ -178,9 +180,33 @@ python -m uvicorn api.main:app --app-dir src            # terminal 1
 $env:PREDICT_BACKEND="api"; streamlit run src/ui/app.py # terminal 2
 ```
 
-Variáveis relevantes (documentadas em `.env.example`): `APP_ENV` (`dev` expõe a aba de disparo manual; use `prod` no deploy), `PREDICT_BACKEND`, `API_BASE_URL`, `MODEL_PATH`.
+Variáveis relevantes (documentadas em `.env.example`): `APP_ENV` (`dev` expõe a aba de disparo manual; use `prod` no deploy), `PREDICT_BACKEND`, `API_BASE_URL`, `MODEL_PATH`, `SUPABASE_URL`/`SUPABASE_SECRET_KEY` (fila do dia e cadastro), `TIMEZONE_CLINICA`.
 
 Para rodar interface e API juntas em container, do jeito que vão para produção, veja a seção seguinte.
+
+## Banco de dados (Supabase)
+
+`src/db/client.py` (client único, `supabase-py`) e `src/db/repositories.py` (`inserir_paciente`, `inserir_agendamento`, `buscar_agendamentos_d2_pendentes`, `gravar_predicao`, `buscar_fila_do_dia`) sobre o schema de `supabase/migrations/`. Minimização de PII por design: `pacientes` guarda só `id_paciente_externo` + atributos demográficos não identificáveis, nunca nome/CPF/email/telefone — guardado automaticamente por `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`. RLS habilitado em todas as tabelas, sem policies (só a chave secreta do backend acessa, ver `.env.example`).
+
+### Ambiente local (Supabase CLI)
+
+```powershell
+supabase start   # sobe Postgres+PostgREST+Studio local via Docker, aplica supabase/migrations/
+supabase status  # mostra API_URL e SECRET_KEY locais
+supabase stop    # derruba os containers (dados locais persistem no volume até `supabase stop --no-backup`)
+```
+
+`tests/test_db.py` (marcado `integracao`) lê `supabase status -o json` para descobrir a URL/chave locais automaticamente — não precisa configurar `.env` para rodar os testes, só ter `supabase start` de pé:
+
+```powershell
+pytest -m integracao tests/test_db.py -v
+```
+
+### Ambiente real (projeto na nuvem)
+
+`SUPABASE_URL`/`SUPABASE_SECRET_KEY` no `.env` (ver `.env.example`) apontam para o projeto Supabase real — `SUPABASE_SECRET_KEY` é a chave **secreta** (`sb_secret_...`, formato novo que substitui o JWT `service_role`), nunca a `publishable` (`sb_publishable_...`, equivalente à antiga `anon`), porque o backend (UI em processo, job D-2) precisa ignorar RLS. Projeto criado na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005](docs/adr/adr-005-integracoes-implicitas.md)).
+
+Para aplicar as migrations num projeto remoto (fora do fluxo local acima): `supabase link --project-ref <ref>` seguido de `supabase db push`.
 
 
 ## Aplicação completa em container (API + Streamlit)

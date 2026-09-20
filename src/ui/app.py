@@ -1,6 +1,5 @@
 """
-SaúdeJá — interface Streamlit (Passo 4 do plano de implementação).
-
+SaúdeJá — interface Streamlit.
 Casca inicial, desenhada para CRESCER sem trocar de estrutura: as abas do
 funcionário já existem todas, as que dependem de capacidades ainda não
 construídas mostram um placeholder nomeando o passo que as liga ("Fila do
@@ -41,6 +40,14 @@ ABA_DEV = "Dev: disparo manual"
 
 CHAVE_RESULTADO = "ultimo_resultado"
 CHAVE_PAYLOAD = "ultimo_payload"
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _status_banco():
+    """cache_data com TTL curto: sem ele, cada widget mexido dispararia uma
+    consulta de rede só para repintar um rótulo da sidebar; com TTL longo
+    demais, a sidebar mentiria por minutos depois de o banco cair."""
+    return logic.status_banco()
 
 
 @st.cache_resource(show_spinner=False)
@@ -160,15 +167,29 @@ def _aba_explicabilidade():
         st.info("Rode uma predição na aba **Testar predição** para ver a explicação.")
         return
 
-    contribuicoes = pd.DataFrame(resultado.explicacao)
+    _mostrar_contribuicoes(resultado.explicacao, resultado.explicacao_texto)
+
+
+def _mostrar_contribuicoes(explicacao, explicacao_texto=None):
+    """Mesma renderização para a predição feita no formulário e para a que o
+    job D-2 já gravou no banco (aba "Fila do dia") -- são o mesmo dado, a
+    lista de contribuições de src/explain.py, mudando só a origem."""
+    if not explicacao:
+        st.warning(
+            "Predição sem explicação registrada -- o SLO §4 exige 100% de "
+            "cobertura, então isso indica um problema a investigar."
+        )
+        return
+
+    contribuicoes = pd.DataFrame(explicacao)
     contribuicoes["efeito"] = [
         "aumenta o risco" if c > 0 else "reduz o risco" for c in contribuicoes["contribuicao"]
     ]
     st.dataframe(contribuicoes, hide_index=True, width="stretch")
     st.bar_chart(contribuicoes.set_index("feature")["contribuicao"])
 
-    if resultado.explicacao_texto:
-        st.info(resultado.explicacao_texto)
+    if explicacao_texto:
+        st.info(explicacao_texto)
     else:
         st.caption(
             "Explicação em linguagem natural (LLM) ainda desativada -- plug "
@@ -178,12 +199,85 @@ def _aba_explicabilidade():
 
 def _aba_fila_do_dia():
     st.subheader("Fila do dia")
-    st.info(
-        "Conecte o banco — **Passo 5**. Esta aba passará a listar os "
-        "agendamentos do dia ordenados por risco (`buscar_fila_do_dia`), com a "
-        "probabilidade e a explicação já gravadas pelo job D-2."
+    st.caption(
+        "Agendamentos ordenados por risco (probabilidade de no-show). Quem "
+        "ainda não tem predição aparece no fim -- o job D-2 (Passo 6) ainda "
+        "não rodou para esse agendamento."
     )
-    st.date_input("Data da fila", value=date.today(), disabled=True)
+
+    dia = st.date_input("Data da fila", value=logic.hoje_na_clinica())
+
+    try:
+        fila = logic.buscar_fila_do_dia(dia)
+    except logic.ErroPersistencia as exc:
+        st.error(f"Não foi possível consultar a fila: {exc}")
+        return
+
+    if not fila:
+        st.info("Nenhum agendamento para esta data.")
+        return
+
+    resumo = logic.resumo_da_fila(fila)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Agendamentos", resumo["total"])
+    col2.metric("Alto risco", resumo["alto_risco"], help="Receberiam lembrete pago no job D-2.")
+    col3.metric(
+        "Sem predição",
+        resumo["sem_predicao"],
+        help="O job D-2 ainda não rodou para estes -- não são 'risco zero'.",
+    )
+
+    tabela = pd.DataFrame(
+        [
+            {
+                "Paciente": item.id_paciente_externo,
+                "Especialidade": item.especialidade,
+                "Horário": item.data_hora_agendada,
+                "Probabilidade": item.probabilidade,
+                "Alto risco": bool(item.classe_prevista) if item.tem_predicao else None,
+            }
+            for item in fila
+        ]
+    )
+
+    selecao = st.dataframe(
+        tabela,
+        hide_index=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "Horário": st.column_config.DatetimeColumn(format="HH:mm"),
+            # ProgressColumn dá a leitura "quão alto" de relance, que é a
+            # pergunta do funcionário ao bater o olho na fila -- um float
+            # cru obriga a comparar números linha a linha.
+            "Probabilidade": st.column_config.ProgressColumn(
+                format="percent", min_value=0.0, max_value=1.0
+            ),
+            "Alto risco": st.column_config.CheckboxColumn(),
+        },
+    )
+
+    linhas_selecionadas = selecao.selection.rows if selecao and selecao.selection else []
+    if not linhas_selecionadas:
+        st.caption("Selecione uma linha para ver a explicação (SHAP) daquela predição.")
+        return
+
+    item = fila[linhas_selecionadas[0]]
+    st.divider()
+    st.write(f"**Por que o paciente `{item.id_paciente_externo}` tem esse risco**")
+    if not item.tem_predicao:
+        st.info(
+            "Este agendamento ainda não foi predito pelo job D-2 (Passo 6) -- "
+            "não há explicação gravada."
+        )
+        return
+
+    st.caption(
+        f"probabilidade {item.probabilidade:.1%} · modelo `{item.model_version}` · "
+        "explicação lida de `predicoes.explicacao_shap`, gravada junto da predição"
+    )
+    _mostrar_contribuicoes(item.explicacao, item.explicacao_texto)
 
 
 def _aba_dev():
@@ -226,15 +320,76 @@ def _visao_funcionario():
 
 def _visao_paciente():
     st.subheader("Cadastro e agendamento")
-    st.info(
-        "Disponível a partir do **Passo 5**: sem banco não há onde persistir o "
-        "cadastro. O formulário abaixo é apenas a casca da tela."
+    st.caption(
+        "Cadastro mínimo por design (LGPD, BRIEFING.md): só o identificador do "
+        "paciente no sistema da clínica + atributos não identificáveis -- "
+        "nunca nome/CPF."
     )
+
+    especialidades = logic.listar_especialidades()
+
     with st.form("form_paciente"):
-        st.text_input("Identificador do paciente na clínica", disabled=True)
-        st.number_input("Idade", min_value=0, max_value=120, value=30, disabled=True)
-        st.selectbox("Sexo", options=["F", "M"], disabled=True)
-        st.form_submit_button("Agendar", disabled=True)
+        id_paciente_externo = st.text_input("Identificador do paciente na clínica")
+        col1, col2 = st.columns(2)
+        idade = col1.number_input("Idade", min_value=0, max_value=120, value=30, step=1)
+        sexo = col2.selectbox("Sexo", options=["F", "M"])
+
+        col3, col4 = st.columns(2)
+        if especialidades:
+            especialidade = col3.selectbox("Especialidade", options=especialidades)
+        else:
+            especialidade = col3.text_input("Especialidade", value="")
+        distancia_km = col4.number_input(
+            "Distância (km)", min_value=0.0, max_value=500.0, value=5.5, step=0.5
+        )
+
+        col5, col6, col7 = st.columns(3)
+        historico_noshow = col5.number_input(
+            "No-shows anteriores", min_value=0, max_value=50, value=0, step=1
+        )
+        # `dias_entre_agendamento_consulta` não é perguntado: o agendamento
+        # está sendo feito agora, então ele é derivado da data escolhida
+        # (logic.dias_ate_consulta). Perguntar permitiria gravar um valor
+        # incoerente com a própria data -- e é feature do modelo.
+        data_consulta = col6.date_input("Data da consulta", value=logic.hoje_na_clinica())
+        hora_consulta = col7.time_input("Hora da consulta", value=time(9, 0))
+        st.caption(
+            f"Antecedência do agendamento: **{logic.dias_ate_consulta(data_consulta)} dia(s)** "
+            "-- calculada a partir da data escolhida, é uma das features do modelo."
+        )
+
+        enviado = st.form_submit_button("Agendar", type="primary")
+
+    if not enviado:
+        return
+
+    if not id_paciente_externo:
+        st.warning("Informe o identificador do paciente.")
+        return
+
+    try:
+        logic.cadastrar_paciente_e_agendamento(
+            id_paciente_externo=id_paciente_externo,
+            idade=idade,
+            sexo=sexo,
+            especialidade=especialidade,
+            distancia_km=distancia_km,
+            historico_noshow=historico_noshow,
+            data_consulta=data_consulta,
+            hora_consulta=hora_consulta,
+        )
+    except logic.ErroPersistencia as exc:
+        st.error(f"Não foi possível cadastrar: {exc}")
+        return
+
+    st.success(
+        f"Agendamento criado para o paciente {id_paciente_externo} em "
+        f"{data_consulta:%d/%m/%Y} às {hora_consulta:%H:%M}."
+    )
+    st.caption(
+        "A predição de no-show deste agendamento será calculada pelo job D-2 "
+        "(Passo 6), dois dias antes da consulta."
+    )
 
 
 def main():
@@ -246,6 +401,14 @@ def main():
         "Quem está usando", options=["Funcionário da clínica", "Paciente"], index=0
     )
     st.sidebar.caption(f"APP_ENV: `{APP_ENV}` · backend: `{logic.backend_ativo()}`")
+
+    banco = _status_banco()
+    if banco["conectado"]:
+        st.sidebar.success(f"Supabase: {banco['detalhe']}", icon="✅")
+    else:
+        # Aviso, não erro: a predição manual e a explicabilidade continuam
+        # funcionando sem banco -- só a fila e o cadastro dependem dele.
+        st.sidebar.warning(f"Supabase: {banco['detalhe']}", icon="⚠️")
 
     if perfil == "Paciente":
         _visao_paciente()

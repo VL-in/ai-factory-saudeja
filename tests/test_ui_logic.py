@@ -200,6 +200,67 @@ def test_backends_produzem_a_mesma_predicao(payload):
     assert via_api.explicacao == em_processo.explicacao
 
 
+# --- fila do dia e cadastro (Passo 5), sem tocar no banco ----------------------
+
+
+def _item(probabilidade=None, classe_prevista=None, explicacao=None, id_externo="EXT-1"):
+    return logic.ItemFila(
+        id_agendamento="a1",
+        id_paciente_externo=id_externo,
+        especialidade="cardiologia",
+        data_hora_agendada=datetime(2026, 9, 19, 10, 0),
+        probabilidade=probabilidade,
+        classe_prevista=classe_prevista,
+        explicacao=explicacao or [],
+    )
+
+
+def test_resumo_da_fila_separa_alto_risco_de_sem_predicao():
+    """"Sem predição" não pode ser contado como baixo risco: são agendamentos
+    que o job D-2 ainda não processou, não pacientes que o modelo liberou."""
+    resumo = logic.resumo_da_fila(
+        [
+            _item(probabilidade=0.9, classe_prevista=1),
+            _item(probabilidade=0.1, classe_prevista=0),
+            _item(),
+        ]
+    )
+
+    assert resumo == {"total": 3, "alto_risco": 1, "sem_predicao": 1}
+
+
+def test_item_sem_predicao_nao_finge_ter_probabilidade():
+    assert _item().tem_predicao is False
+    assert _item(probabilidade=0.4, classe_prevista=0).tem_predicao is True
+
+
+def test_dias_ate_consulta_deriva_da_data_escolhida():
+    assert logic.dias_ate_consulta(date(2026, 9, 30), hoje=date(2026, 9, 19)) == 11
+    assert logic.dias_ate_consulta(date(2026, 9, 19), hoje=date(2026, 9, 19)) == 0
+
+
+def test_dias_ate_consulta_nao_fica_negativo_para_data_passada():
+    """Data no passado é erro de preenchimento, mas o modelo nunca viu
+    antecedência negativa em treino -- 0 é o valor mais próximo do domínio
+    real, e o schema (`>= 0`) rejeitaria o negativo de qualquer forma."""
+    assert logic.dias_ate_consulta(date(2026, 9, 10), hoje=date(2026, 9, 19)) == 0
+
+
+def test_status_banco_sem_configuracao_nao_levanta(monkeypatch):
+    """A sidebar pinta um rótulo -- não pode exigir try/except de quem chama
+    nem derrubar a UI quando o banco não está configurado."""
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
+    import db.client as client_module
+
+    monkeypatch.setattr(client_module, "_cliente", None)
+
+    status = logic.status_banco()
+
+    assert status["conectado"] is False
+    assert "não configurado" in status["detalhe"]
+
+
 # --- seleção de backend --------------------------------------------------------
 
 

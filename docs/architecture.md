@@ -29,8 +29,12 @@ ai-factory-saudeja/
 │   └── deploy/                         # dockerfile + entrypoint.sh combinados Streamlit+FastAPI (Passo 11, antecipado no Passo 4)
 ├── scripts/
 │   └── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
+├── supabase/
+│   ├── config.toml                    # config do Supabase CLI (supabase start, região local)
+│   └── migrations/                    # schema versionado (pacientes/agendamentos/predicoes/mensagens_disparadas, Passo 5)
 ├── src/
 │   ├── config_projeto.py              # REPO_ROOT + carregar_params(): caminhos independentes do CWD
+│   ├── db/                            # client.py (supabase-py) + repositories.py (Passo 5)
 │   ├── preprocess.py                  # feature engineering + split treino/teste (stage 1)
 │   ├── train.py                       # SMOTE-NC + treino LightGBM, loga no MLflow (stage 2)
 │   ├── validate.py                    # métricas no fold de teste isolado (stage 3)
@@ -149,9 +153,9 @@ Name: Supabase (decisão vigente: [ADR-004](adr/adr-004-decisão-técnica.md), v
 
 Type: PostgreSQL gerenciado (SDK oficial, não camada Postgres genérica)
 
-Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda só `id_paciente_externo` (referência ao sistema core da clínica) + atributos demográficos não identificáveis, nunca nome/CPF (ver [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 5, e [ADR-005-c](adr/adr-005-integracoes-implicitas.md) para a checagem de região LGPD).
+Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda só `id_paciente_externo` (referência ao sistema core da clínica) + atributos demográficos não identificáveis, nunca nome/CPF (guarda automatizada em `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`). Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
 
-Key Schemas/Collections: `pacientes`, `agendamentos`, `predicoes` (inclui `explicacao_shap jsonb` e `explicacao_texto` nullable — plug do LLM, Passo 13), `mensagens_disparadas` (auditoria de envio, SLA §6).
+Key Schemas/Collections: `pacientes`, `agendamentos`, `predicoes` (inclui `explicacao_shap jsonb` e `explicacao_texto` nullable — plug do LLM, Passo 13), `mensagens_disparadas` (auditoria de envio, SLA §6). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
 
 ### 4.2. Tracking de experimentos de ML
 
@@ -215,6 +219,8 @@ A interface é testada em duas camadas: `tests/test_ui_logic.py` (lógica pura, 
 
 Code Quality Tools: `ruff`, configurado em [`ruff.toml`](../ruff.toml) (line-length 100, target `py310`, regras `E,W,F,I,UP,B,SIM,C4,RUF`) e pinado em `requirements/dev.txt`. Roda com `ruff check src tests scripts`; o CI (Passo 10) usa o mesmo comando, sem flags extras, para que local e CI não possam divergir.
 
+Nota de convenção — **datas sempre no fuso da clínica**: `config_projeto.fuso_da_clinica()`/`hoje_na_clinica()` (`TIMEZONE_CLINICA`, default `America/Sao_Paulo`) são a fonte única para UI, repositórios e o job D-2. Nem `date.today()` nem UTC servem: o container roda em UTC, então depois das 21h em São Paulo a "fila do dia" e a janela D-2 cairiam no dia civil errado, e horários de `timestamptz` apareceriam 3h deslocados. Gravação leva o fuso explícito; leitura faz `astimezone`.
+
 Nota de convenção: os módulos de `src/` são importados "soltos" (sem prefixo de pacote) — `src/config_projeto.py` centraliza `REPO_ROOT` e `carregar_params()`, de modo que `params.yaml` e os caminhos default de `data/` sejam resolvidos a partir da raiz do repositório e não do CWD do processo. Isso mantém API, scripts e containers funcionando independentemente de onde forem iniciados; variáveis de ambiente (usadas pelo `dvc.yaml` para apontar para dentro do bind mount) continuam tendo precedência.
 
 ## 9. Future Considerations / Roadmap
@@ -231,7 +237,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-19
+Date of Last Update: 2026-09-19 (Passo 5)
 
 ## 11. Glossary / Acronyms
 

@@ -23,6 +23,12 @@ A implementação da interface (Passo 4) expôs uma contradição entre este ADR
 
 O modo REST não é uma segunda arquitetura: é ferramenta de desenvolvimento/diagnóstico, que permite exercitar a API do Passo 3 do formulário até a resposta durante o desenvolvimento, e conferir na UI o mesmo caminho que uma integração externa percorre. Produção (Passo 11) roda em `processo`. O custo dessa flexibilidade é uma função a mais e o risco de os dois caminhos divergirem — travado por `tests/test_ui_logic.py::test_backends_produzem_a_mesma_predicao`, que exige probabilidade, classe, threshold, `model_version` e explicação idênticos nos dois backends para o mesmo payload.
 
+### Emenda (2026-09-19, Passo 5) — confirmação da região do Supabase (item c)
+
+Projeto Supabase criado na região **São Paulo (`sa-east-1`)** — dados de pacientes/agendamentos/predições permanecem no Brasil, sem transferência internacional a justificar. Simplifica a base legal a documentar em `docs/LGPD.md` (Passo 8): não há necessidade de cláusulas de transferência internacional para o núcleo do produto (o LLM opcional, se usar um provedor fora do Brasil, é avaliado separadamente naquele passo).
+
+Migrations em `supabase/migrations/` (convenção do Supabase CLI, aplicada automaticamente por `supabase start`/`supabase db reset`), não em `db/migrations/` como sugeria — ajuste técnico, sem impacto de decisão de produto.
+
 ## Consequências
 Pros:
 - Scheduler externo (GitHub Actions) remove uma dependência de disponibilidade do próprio Space.

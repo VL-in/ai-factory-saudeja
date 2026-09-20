@@ -107,6 +107,13 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 
 **Verificação**: teste rápido em `tests/test_coerencia_repo.py` que faz grep nas migrations SQL e falha se aparecer coluna proibida (`nome`, `cpf`, `email`, `telefone` em texto puro) — guarda LGPD automatizável desde o schema. `tests/test_db.py` marcado `integracao` (convenção já existe em `pytest.ini`): sobe Supabase local, aplica migrations, insere agendamento sintético, roda os repositórios, confere round-trip. Manual: cadastrar um paciente pela UI (Passo 4) e confirmar que aparece no Supabase local. `pytest -m integracao tests/test_db.py -v` verde antes de avançar.
 
+**Ajustes feitos na implementação (2026-09-19, decididos com a autora)**:
+- Migrations em `supabase/migrations/` (convenção do Supabase CLI, aplicada automaticamente por `supabase start`/`supabase db reset`), não em `db/migrations/0001_init.sql` como o texto acima descrevia — `supabase init` já cria essa estrutura.
+- `SUPABASE_KEY` virou `SUPABASE_SECRET_KEY`: o projeto criado usa o formato novo de API key do Supabase (`sb_publishable_...`/`sb_secret_...`), que substitui o par JWT `anon`/`service_role`. O backend usa a secreta, nunca a publishable (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md), que também registra a região do projeto — São Paulo, `sa-east-1`).
+- `src/db/repositories.py` ganhou `inserir_paciente` (upsert por `id_paciente_externo`) além das quatro funções listadas acima — necessária para o formulário de cadastro de paciente persistir de verdade (agendamento sempre depende de um paciente já existir).
+- RLS habilitado em todas as tabelas, sem policies (só a `SUPABASE_SECRET_KEY` do backend acessa) — não estava explícito no plano, decisão tomada durante a migration inicial por ser o default seguro do Supabase.
+- `python-dotenv` (já era dependência de `requirements/base.txt`, mas nunca usado) passou a ser carregado em `src/config_projeto.py` via `load_dotenv()`, para que `SUPABASE_URL`/`SUPABASE_SECRET_KEY` do `.env` cheguem ao processo em execuções locais fora de Docker (`streamlit run`, `pytest`) sem exigir exportar variáveis manualmente. Não sobrescreve variáveis já definidas no ambiente (`env_file` do `docker-compose.yml`, secrets do HF Space).
+
 ---
 
 ## Passo 6 — Job agendado (D-2)

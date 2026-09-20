@@ -16,13 +16,38 @@ tendo precedência -- é assim que o dvc.yaml aponta os caminhos para dentro
 do bind mount do container.
 """
 import os
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml
+from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Carrega .env (se existir) para os.environ -- não sobrescreve variáveis já
+# definidas no ambiente (default do python-dotenv), então docker-compose
+# `environment:`/secrets do HF Space continuam tendo precedência sobre o
+# .env local. Módulos que leem SUPABASE_URL/SUPABASE_SECRET_KEY (src/db/)
+# dependem disso: sem load_dotenv, .env.example documentaria variáveis que
+# nunca chegam ao processo fora de Docker.
+load_dotenv(REPO_ROOT / ".env")
+
 PARAMS_PATH = Path(os.environ.get("PARAMS_PATH") or REPO_ROOT / "params.yaml")
+
+
+def fuso_da_clinica() -> ZoneInfo:
+    """Fuso em que a clínica raciocina sobre datas. Lido a cada chamada (não
+    fixado no import) para os testes conseguirem simular outra região."""
+    return ZoneInfo(os.environ.get("TIMEZONE_CLINICA") or "America/Sao_Paulo")
+
+
+def hoje_na_clinica() -> date:
+    """Data civil de hoje no fuso da clínica -- não `date.today()`, que segue
+    o fuso do processo. O container do HF Space roda em UTC: depois das 21h
+    em São Paulo, `date.today()` lá já é o dia seguinte, e a "fila do dia"
+    do funcionário mostraria o dia errado."""
+    return datetime.now(tz=fuso_da_clinica()).date()
 
 
 def caminho_de_env(variavel: str, default_relativo: str) -> str:

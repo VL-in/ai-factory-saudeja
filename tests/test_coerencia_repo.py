@@ -101,6 +101,26 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
     assert (REPO_ROOT / "dockerfile").exists()
 
 
+def test_migrations_sql_sem_coluna_proibida_de_pii():
+    """Minimização de PII por design (BRIEFING.md, architecture.md §4.1):
+    `pacientes` guarda só id_paciente_externo + demografia não identificável.
+    Guarda automatizável desde o schema, não só por convenção de código."""
+    colunas_proibidas = ("nome", "cpf", "email", "telefone")
+    migrations_dir = REPO_ROOT / "supabase" / "migrations"
+    assert migrations_dir.exists(), "supabase/migrations/ não existe (Passo 5)"
+
+    for migration in migrations_dir.glob("*.sql"):
+        linhas_sem_comentario = (
+            linha.split("--", 1)[0]
+            for linha in migration.read_text(encoding="utf-8").lower().splitlines()
+        )
+        texto = "\n".join(linhas_sem_comentario)
+        encontradas = [c for c in colunas_proibidas if c in texto]
+        assert not encontradas, (
+            f"{migration.name} referencia coluna(s) proibida(s) por LGPD: {encontradas}"
+        )
+
+
 def test_architecture_md_sem_placeholder_generico():
     """docs/architecture.md é um template genérico -- este teste falha se algum
     placeholder tipo '[e.g., ...]' ainda não foi preenchido com conteúdo real

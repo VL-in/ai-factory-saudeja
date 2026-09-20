@@ -1,5 +1,5 @@
 """
-SaúdeJá — lógica da interface Streamlit (Passo 4 do plano de implementação),
+SaúdeJá — lógica da interface Streamlit,
 separada de app.py para ser testável sem o runtime do Streamlit: nada aqui
 importa `streamlit`.
 
@@ -32,8 +32,10 @@ if str(SRC_DIR) not in sys.path:
 
 import httpx  # noqa: E402
 
+import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
-from config_projeto import caminho_de_env  # noqa: E402
+from config_projeto import caminho_de_env, fuso_da_clinica, hoje_na_clinica  # noqa: E402
+from db.client import ConfiguracaoSupabaseAusente  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
 
 BACKEND_PADRAO = "processo"  # ADR-005 (b)
@@ -239,6 +241,148 @@ def _descrever_erro_pydantic(erro: dict) -> str:
 
 def backend_ativo() -> str:
     return (os.environ.get("PREDICT_BACKEND") or BACKEND_PADRAO).strip().lower()
+
+
+class ErroPersistencia(Exception):
+    """Falha ao ler/gravar no Supabase (indisponível, mal configurado ou
+    rejeitou a operação) -- mesma filosofia de ErroPredicao: a UI mostra uma
+    mensagem, não o traceback do cliente HTTP interno do supabase-py."""
+
+
+@dataclass(frozen=True)
+class ItemFila:
+    """Uma linha da aba "Fila do dia" -- achatada a partir do agendamento +
+    paciente + última predição (todos embutidos pela mesma consulta em
+    src/db/repositories.py::buscar_fila_do_dia).
+
+    Carrega a explicação junto da probabilidade de propósito: o SLO §4 exige
+    que 100% das predições tenham explicação, então a fila precisa conseguir
+    mostrar o "porquê" de cada risco sem uma segunda ida ao banco."""
+
+    id_agendamento: str
+    id_paciente_externo: str
+    especialidade: str
+    data_hora_agendada: datetime
+    probabilidade: float | None
+    classe_prevista: int | None
+    explicacao: list = field(default_factory=list)
+    explicacao_texto: str | None = None
+    model_version: str | None = None
+
+    @property
+    def tem_predicao(self) -> bool:
+        return self.probabilidade is not None
+
+
+def _relatar_falha_persistencia(exc: Exception, acao: str):
+    if isinstance(exc, ConfiguracaoSupabaseAusente):
+        raise ErroPersistencia(str(exc)) from exc
+    raise ErroPersistencia(f"{acao}: {exc}") from exc
+
+
+def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
+    """Fila do dia ordenada por risco (probabilidade desc, ver
+    repositories.buscar_fila_do_dia) -- Passo 5, liga a aba antes placeholder
+    de app.py."""
+    try:
+        linhas = repositories.buscar_fila_do_dia(dia or hoje_na_clinica())
+    except Exception as exc:
+        _relatar_falha_persistencia(exc, "Falha ao consultar a fila do dia")
+
+    itens = []
+    for linha in linhas:
+        predicoes = linha.get("predicoes") or []
+        ultima = max(predicoes, key=lambda p: p["criado_em"], default=None)
+        itens.append(
+            ItemFila(
+                id_agendamento=linha["id"],
+                id_paciente_externo=linha["pacientes"]["id_paciente_externo"],
+                especialidade=linha["especialidade"],
+                # O Postgres devolve timestamptz normalizado em UTC; sem o
+                # astimezone, a fila mostraria 11:30 para uma consulta das
+                # 08:30 da clínica.
+                data_hora_agendada=datetime.fromisoformat(
+                    linha["data_hora_agendada"]
+                ).astimezone(fuso_da_clinica()),
+                probabilidade=float(ultima["probabilidade"]) if ultima else None,
+                classe_prevista=ultima["classe_prevista"] if ultima else None,
+                explicacao=(ultima.get("explicacao_shap") or []) if ultima else [],
+                explicacao_texto=ultima.get("explicacao_texto") if ultima else None,
+                model_version=ultima.get("model_version") if ultima else None,
+            )
+        )
+    return itens
+
+
+def resumo_da_fila(itens: list[ItemFila]) -> dict:
+    """Números que o funcionário olha antes da tabela: quantos pacientes,
+    quantos o modelo marcou como alto risco (e portanto receberiam lembrete
+    pago) e quantos ainda estão sem predição -- estes últimos são o sinal de
+    que o job D-2 não rodou para aquela data, e não "risco zero"."""
+    com_predicao = [item for item in itens if item.tem_predicao]
+    return {
+        "total": len(itens),
+        "alto_risco": sum(1 for item in com_predicao if item.classe_prevista),
+        "sem_predicao": len(itens) - len(com_predicao),
+    }
+
+
+def dias_ate_consulta(data_consulta: date, hoje: date | None = None) -> int:
+    """`dias_entre_agendamento_consulta` do ponto de vista do cadastro: o
+    agendamento está sendo feito AGORA, então o valor é derivado da data
+    escolhida em vez de digitado. Pedi-lo ao paciente permitiria gravar um
+    número incoerente com a própria data da consulta -- e é uma das features
+    que mais pesam no modelo (ver checagem de sanidade do SHAP, CHANGELOG
+    v0.15), então incoerência aqui vira predição errada lá."""
+    return max((data_consulta - (hoje or hoje_na_clinica())).days, 0)
+
+
+def status_banco() -> dict:
+    """Indicador para a sidebar. Devolve estrutura em vez de levantar: é
+    diagnóstico exibido de forma passiva, não uma operação que o usuário
+    pediu -- quem chama quer pintar um rótulo, não tratar exceção."""
+    try:
+        repositories.verificar_conexao()
+    except ConfiguracaoSupabaseAusente:
+        return {"conectado": False, "detalhe": "não configurado (ver .env.example)"}
+    except Exception as exc:
+        return {"conectado": False, "detalhe": f"indisponível ({exc.__class__.__name__})"}
+    return {"conectado": True, "detalhe": "conectado"}
+
+
+def cadastrar_paciente_e_agendamento(
+    id_paciente_externo: str,
+    idade: int,
+    sexo: str,
+    especialidade: str,
+    distancia_km: float,
+    historico_noshow: int,
+    data_consulta: date,
+    hora_consulta: time,
+) -> dict:
+    """Cadastro do paciente (visão Paciente, Passo 5) -- upsert do paciente
+    por id_paciente_externo seguido do agendamento.
+
+    `data_hora_agendada` vai com o fuso da clínica explícito: a coluna é
+    `timestamptz`, então gravar um datetime naive deixaria o Postgres
+    interpretá-lo no fuso do servidor (UTC no container) e a consulta
+    apareceria 3h deslocada na fila do dia."""
+    try:
+        paciente = repositories.inserir_paciente(
+            id_paciente_externo=id_paciente_externo, idade=idade, sexo=sexo
+        )
+        return repositories.inserir_agendamento(
+            id_paciente=paciente["id"],
+            especialidade=especialidade,
+            distancia_km=distancia_km,
+            data_hora_agendada=datetime.combine(
+                data_consulta, hora_consulta, tzinfo=fuso_da_clinica()
+            ),
+            dias_entre_agendamento_consulta=dias_ate_consulta(data_consulta),
+            historico_noshow=historico_noshow,
+        )
+    except Exception as exc:
+        _relatar_falha_persistencia(exc, "Falha ao cadastrar paciente/agendamento")
 
 
 def obter_cliente(backend: str | None = None):

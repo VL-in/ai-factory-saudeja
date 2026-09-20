@@ -9,6 +9,13 @@ services:
       context: .
       dockerfile: infra/deploy/dockerfile
     container_name: saudeja-app
+    # SUPABASE_URL/SUPABASE_SECRET_KEY (Passo 5) vêm do .env local -- nunca
+    # hardcoded aqui. Sem .env na raiz, "Fila do dia"/cadastro de paciente
+    # falham com ErroPersistencia (ver src/ui/logic.py), o resto da UI segue
+    # funcionando.
+    env_file:
+      - path: .env
+        required: false
     environment:
       # dev local: mostra a aba "Dev: disparo manual". No Space, APP_ENV=prod.
       APP_ENV: dev

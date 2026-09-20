@@ -16,6 +16,12 @@ TIMEOUT = 60  # primeiro run carrega modelo + TreeExplainer
 def _rodar(monkeypatch, app_env="dev", backend="processo"):
     monkeypatch.setenv("APP_ENV", app_env)
     monkeypatch.setenv("PREDICT_BACKEND", backend)
+    # Determinístico independente do .env do dev: os testes de UI não devem
+    # gravar no Supabase real nem depender de rede -- src/db/ é exercitado de
+    # verdade só em tests/test_db.py (marcado integracao, contra o Supabase
+    # CLI local).
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
     return AppTest.from_file(CAMINHO_APP, default_timeout=TIMEOUT).run()
 
 
@@ -45,22 +51,41 @@ def test_aba_de_dev_some_fora_do_ambiente_de_dev(monkeypatch):
     assert len(rotulos) == 3
 
 
-def test_visao_paciente_carrega_como_placeholder(monkeypatch):
+def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
+    """Passo 5 liga a persistência de verdade -- sem SUPABASE_URL/
+    SUPABASE_SECRET_KEY no ambiente de teste, submeter falha com uma
+    mensagem amigável (ErroPersistencia), não com traceback."""
     at = _rodar(monkeypatch)
     at.sidebar.radio[0].set_value("Paciente").run()
 
     assert not at.exception
-    assert any("Passo 5" in info.value for info in at.info)
+    assert at.text_input  # campo de id_paciente_externo, não mais placeholder
+
+    at.text_input[0].set_value("EXT-TESTE").run()
+    at.button[0].click().run()  # 'Agendar'
+
+    assert not at.exception
+    assert any("cadastrar" in erro.value.lower() for erro in at.error)
 
 
-def test_abas_ainda_nao_ligadas_nomeiam_o_passo_que_as_liga(monkeypatch):
-    """Placeholder que só diz "em breve" não ajuda ninguém a saber o que falta;
-    a casca do Passo 4 promete apontar o passo do plano."""
+def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypatch):
+    """`st.tabs` renderiza o conteúdo de todas as abas no mesmo script run
+    (a troca de aba no navegador é só CSS) -- a aba "Fila do dia" já roda em
+    _rodar(). Sem SUPABASE_URL/SUPABASE_SECRET_KEY (ambiente de teste da UI,
+    ver tests/test_db.py para os testes de integração de verdade), ela não
+    derruba a tela -- mostra ErroPersistencia traduzido."""
+    at = _rodar(monkeypatch)
+
+    assert not at.exception
+    assert any("fila" in erro.value.lower() for erro in at.error)
+
+
+def test_aba_dev_ainda_nomeia_o_passo_que_a_liga(monkeypatch):
+    """"Dev: disparo manual" continua placeholder até o job D-2 (Passo 6)."""
     at = _rodar(monkeypatch)
     avisos = " ".join(info.value for info in at.info)
 
-    assert "Passo 5" in avisos  # fila do dia -> banco
-    assert "Passo 6" in avisos  # disparo manual -> job D-2
+    assert "Passo 6" in avisos
 
 
 def test_formulario_produz_predicao_e_explicacao(monkeypatch):
