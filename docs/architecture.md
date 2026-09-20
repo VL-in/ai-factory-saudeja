@@ -31,7 +31,7 @@ ai-factory-saudeja/
 │   └── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 ├── supabase/
 │   ├── config.toml                    # config do Supabase CLI (supabase start, região local)
-│   └── migrations/                    # schema versionado (pacientes/agendamentos/predicoes/mensagens_disparadas, Passo 5)
+│   └── migrations/                    # schema versionado (pacientes/agendamentos/predicoes/mensagens_disparadas, Passo 5; índice de agendamentos.id_paciente, Passo 6)
 ├── src/
 │   ├── config_projeto.py              # REPO_ROOT + carregar_params(): caminhos independentes do CWD
 │   ├── db/                            # client.py (supabase-py) + repositories.py (Passo 5)
@@ -43,7 +43,9 @@ ai-factory-saudeja/
 │   ├── inference.py                   # payload -> features -> predição, reusado por API/job (Passo 1)
 │   ├── explain.py                     # explicabilidade SHAP + plug LLM inativo (Passo 2)
 │   ├── api/                           # API FastAPI: schemas.py + main.py (Passo 3)
-│   └── ui/                            # interface Streamlit: app.py (telas) + logic.py (lógica testável) (Passo 4)
+│   ├── ui/                            # interface Streamlit: app.py (telas) + logic.py (lógica testável) (Passo 4)
+│   ├── jobs/                          # inferencia_diaria.py: job D-2 (Passo 6)
+│   └── messaging/                     # client.py: interface + stub de lembrete (antecipado do Passo 7)
 ├── tests/                             # testes unitários e de integração do pipeline
 ├── .dvc/                              # configuração e cache do DVC
 ├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
@@ -237,7 +239,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-19 (Passo 5)
+Date of Last Update: 2026-09-20 (Passo 6)
 
 ## 11. Glossary / Acronyms
 

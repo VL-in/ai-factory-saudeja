@@ -80,16 +80,31 @@ def inserir_agendamento(
     return resposta.data[0]
 
 
+_COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
+    "id, especialidade, distancia_km, data_hora_agendada, "
+    "dias_entre_agendamento_consulta, historico_noshow, "
+    "pacientes(idade, sexo, id_paciente_externo)"
+)
+
+
 def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
     """Agendamentos de `data_referencia + 2 dias` (D-2, ver
     architecture.md/glossário) ainda sem predição gravada -- o job (Passo 6)
-    roda uma vez ao dia e não deve reprocessar quem já tem `predicoes`."""
+    roda uma vez ao dia e não deve reprocessar quem já tem `predicoes`.
+
+    Seleciona só as colunas que o job de inferência (`construir_features`)
+    de fato consome -- de `agendamentos` e do `pacientes` embutido (idade,
+    sexo) -- em vez de `select("*, pacientes(*)")`: evita trafegar/desserializar
+    colunas sem uso (ex. `criado_em`, `status`) numa consulta que roda sobre a
+    fila inteira do dia. O embed depende do índice em `agendamentos.id_paciente`
+    (ver migration `20260920000000_idx_agendamentos_id_paciente.sql`) para o
+    join não fazer full scan de `pacientes`."""
     client = obter_client()
     inicio, fim = _intervalo_do_dia(data_referencia + timedelta(days=2))
 
     agendamentos = (
         client.table("agendamentos")
-        .select("*")
+        .select(_COLUNAS_AGENDAMENTO_PARA_INFERENCIA)
         .gte("data_hora_agendada", inicio)
         .lt("data_hora_agendada", fim)
         .eq("status", "agendado")
@@ -130,6 +145,21 @@ def gravar_predicao(
                 "model_version": model_version,
             }
         )
+        .execute()
+    )
+    return resposta.data[0]
+
+
+def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> dict:
+    """Auditoria de disparo (SLA §6) -- uma linha por agendamento processado
+    pelo job D-2 (Passo 6), enviado ou não: `status_envio` distingue
+    'enviado' (probabilidade acima do threshold, lembrete pago disparado) de
+    'nao_enviado' (abaixo do threshold, nenhum custo de mensageria), então a
+    tabela sempre reflete a decisão tomada, não só os envios reais."""
+    client = obter_client()
+    resposta = (
+        client.table("mensagens_disparadas")
+        .insert({"id_agendamento": id_agendamento, "canal": canal, "status_envio": status_envio})
         .execute()
     )
     return resposta.data[0]

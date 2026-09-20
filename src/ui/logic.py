@@ -34,6 +34,7 @@ import httpx  # noqa: E402
 
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
+import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
 from config_projeto import caminho_de_env, fuso_da_clinica, hoje_na_clinica  # noqa: E402
 from db.client import ConfiguracaoSupabaseAusente  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
@@ -383,6 +384,17 @@ def cadastrar_paciente_e_agendamento(
         )
     except Exception as exc:
         _relatar_falha_persistencia(exc, "Falha ao cadastrar paciente/agendamento")
+
+
+def disparar_job_diario(dia: date | None = None) -> dict:
+    """Aciona o job D-2 (`src/jobs/inferencia_diaria.py`, Passo 6) a partir da
+    aba "Dev: disparo manual" -- a mesma função que o cron real chamaria,
+    disparada manualmente para acompanhar agendamentos encontrados/predições
+    gravadas/mensagens disparadas sem precisar de CLI/cron separados."""
+    try:
+        return job_inferencia_diaria.processar_dia(dia)
+    except Exception as exc:
+        _relatar_falha_persistencia(exc, "Falha ao rodar o job de inferência diária")
 
 
 def obter_cliente(backend: str | None = None):

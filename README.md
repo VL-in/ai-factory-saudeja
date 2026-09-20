@@ -154,7 +154,7 @@ docker run --rm -p 8000:8000 -v "%cd%/data:/app/data" saudeja-api
 
 ## Interface (Streamlit)
 
-`src/ui/app.py` é a interface da clínica: visão **Funcionário** em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (Passo 5: agendamentos do dia ordenados por risco, com resumo de quantos são alto risco/sem predição e a explicação SHAP gravada de cada paciente ao selecionar a linha) e "Dev: disparo manual" (placeholder até o job D-2, Passo 6, visível só com `APP_ENV=dev`) — e visão **Paciente** (Passo 5: cadastro + agendamento persistidos no Supabase). A sidebar mostra o estado da conexão com o Supabase ao lado do backend de predição. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
+`src/ui/app.py` é a interface da clínica: visão **Funcionário** em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (Passo 5: agendamentos do dia ordenados por risco, com resumo de quantos são alto risco/sem predição e a explicação SHAP gravada de cada paciente ao selecionar a linha) e "Dev: disparo manual" (Passo 6: dispara `src/jobs/inferencia_diaria.py::processar_dia()` e mostra agendamentos/predições/mensagens, visível só com `APP_ENV=dev`) — e visão **Paciente** (Passo 5: cadastro + agendamento persistidos no Supabase). A sidebar mostra o estado da conexão com o Supabase ao lado do backend de predição. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
 
 **Datas sempre no fuso da clínica** (`TIMEZONE_CLINICA`, default `America/Sao_Paulo`): "fila do dia 19/09" são as consultas de 19/09 em São Paulo, e o cadastro grava `data_hora_agendada` com o fuso explícito. O container roda em UTC — sem isso, depois das 21h a fila do dia e o job D-2 trabalhariam com a data errada, e os horários apareceriam 3h deslocados. `dias_entre_agendamento_consulta` não é perguntado no cadastro: é derivado da data escolhida (`logic.dias_ate_consulta`), porque é feature do modelo e um valor digitado poderia contradizer a própria data da consulta.
 
@@ -186,7 +186,7 @@ Para rodar interface e API juntas em container, do jeito que vão para produçã
 
 ## Banco de dados (Supabase)
 
-`src/db/client.py` (client único, `supabase-py`) e `src/db/repositories.py` (`inserir_paciente`, `inserir_agendamento`, `buscar_agendamentos_d2_pendentes`, `gravar_predicao`, `buscar_fila_do_dia`) sobre o schema de `supabase/migrations/`. Minimização de PII por design: `pacientes` guarda só `id_paciente_externo` + atributos demográficos não identificáveis, nunca nome/CPF/email/telefone — guardado automaticamente por `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`. RLS habilitado em todas as tabelas, sem policies (só a chave secreta do backend acessa, ver `.env.example`).
+`src/db/client.py` (client único, `supabase-py`) e `src/db/repositories.py` (`inserir_paciente`, `inserir_agendamento`, `buscar_agendamentos_d2_pendentes`, `gravar_predicao`, `registrar_mensagem`, `buscar_fila_do_dia`) sobre o schema de `supabase/migrations/`. Minimização de PII por design: `pacientes` guarda só `id_paciente_externo` + atributos demográficos não identificáveis, nunca nome/CPF/email/telefone — guardado automaticamente por `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`. RLS habilitado em todas as tabelas, sem policies (só a chave secreta do backend acessa, ver `.env.example`).
 
 ### Ambiente local (Supabase CLI)
 
@@ -208,6 +208,25 @@ pytest -m integracao tests/test_db.py -v
 
 Para aplicar as migrations num projeto remoto (fora do fluxo local acima): `supabase link --project-ref <ref>` seguido de `supabase db push`.
 
+## Job de inferência diária (D-2)
+
+`src/jobs/inferencia_diaria.py` (`processar_dia()`/`main()`) fecha o loop do produto: busca no Supabase os agendamentos marcados para dois dias à frente (`buscar_agendamentos_d2_pendentes`), roda predição+explicação reaproveitando `src/inference.py`/`src/explain.py` (Passos 1/2 — mesmos módulos que a API usa, sem lógica duplicada), grava em `predicoes` e decide o disparo de lembrete pago conforme `decision.threshold` (`params.yaml`), sempre registrando a decisão (`enviado`/`nao_enviado`) em `mensagens_disparadas` para auditoria (SLA §6). Modelo carregado em processo, não via HTTP à API (ADR-005 b) — o job roda dentro da mesma imagem do HF Space (Passo 11).
+
+Mensageria: `src/messaging/client.py` (antecipado do Passo 7) define a interface `enviar_lembrete(id_paciente_externo, mensagem)`; `StubMessagingClient` (default, nunca faz rede) é o único provedor até o Passo 7 ligar o Infobip real via `MESSAGING_PROVIDER`. Sem telefone gravado no banco (minimização de PII, §4.1) — o contato real fica para a integração do Passo 7 resolver a partir do `id_paciente_externo`.
+
+Rodar manualmente (a partir da raiz do repositório, com o Supabase e o modelo disponíveis):
+
+```powershell
+python src/jobs/inferencia_diaria.py
+```
+
+A aba **"Dev: disparo manual"** do Streamlit (`APP_ENV=dev`) chama `processar_dia()` pelo mesmo caminho e mostra agendamentos encontrados, predições gravadas e mensagens disparadas na tela, sem exigir CLI/cron separados enquanto o agendamento real (GitHub Actions cron, ADR-005 a) não entra no Passo 11.
+
+`tests/test_job_inferencia.py` (marcado `integracao`, mesma convenção do Supabase local do `test_db.py`) semeia agendamentos D+2 sintéticos, roda o job com um cliente de mensageria "espião" e confere que `predicoes`/`mensagens_disparadas` batem com o threshold e que o disparo só acontece para quem cruzou o threshold:
+
+```powershell
+pytest -m integracao tests/test_job_inferencia.py -v
+```
 
 ## Aplicação completa em container (API + Streamlit)
 

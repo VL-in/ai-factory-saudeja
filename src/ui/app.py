@@ -1,11 +1,10 @@
 """
 SaúdeJá — interface Streamlit.
 Casca inicial, desenhada para CRESCER sem trocar de estrutura: as abas do
-funcionário já existem todas, as que dependem de capacidades ainda não
-construídas mostram um placeholder nomeando o passo que as liga ("Fila do
-dia" -> Passo 5/banco; "Dev: disparo manual" -> Passo 6/job). Assim cada
-capacidade nova é plugada numa aba já testada visualmente, em vez de só ser
-validada por pytest/curl até o fim do plano.
+funcionário já existem todas, plugadas conforme cada capacidade fica pronta
+("Fila do dia" -> Passo 5/banco; "Dev: disparo manual" -> Passo 6/job). Assim
+cada capacidade nova é plugada numa aba já testada visualmente, em vez de só
+ser validada por pytest/curl até o fim do plano.
 
 Toda a lógica (backends de predição, montagem de payload, tradução de erro)
 vive em src/ui/logic.py, que não importa streamlit e é testado sem o runtime
@@ -282,13 +281,27 @@ def _aba_fila_do_dia():
 
 def _aba_dev():
     st.subheader("Dev: disparo manual do job de inferência")
-    st.info(
-        "Disponível a partir do **Passo 6**: este botão chamará "
-        "`src/jobs/inferencia_diaria.py::main()` e mostrará quantos "
-        "agendamentos foram encontrados, predições gravadas e mensagens "
-        "disparadas."
+    st.caption(
+        "Roda `src/jobs/inferencia_diaria.py` (Passo 6) para a data de hoje na "
+        "clínica: busca a fila D-2, prediz, grava em `predicoes` e decide o "
+        "disparo de lembrete (stub até o Passo 7) por agendamento."
     )
-    st.button("Disparar job D-2 agora", disabled=True)
+    if st.button("Disparar job D-2 agora", type="primary"):
+        try:
+            resultado = logic.disparar_job_diario()
+        except logic.ErroPersistencia as exc:
+            st.error(f"Falha ao rodar o job: {exc}")
+        else:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Agendamentos encontrados", resultado["agendamentos_encontrados"])
+            col2.metric("Predições gravadas", resultado["predicoes_gravadas"])
+            col3.metric("Mensagens disparadas", resultado["mensagens_disparadas"])
+            if resultado["erros"]:
+                st.warning(f"{len(resultado['erros'])} agendamento(s) com erro:")
+                st.json(resultado["erros"])
+            else:
+                st.success("Job concluído sem erros.")
+            st.caption("Veja o resultado na aba **Fila do dia** (recarrega a cada seleção).")
 
     st.divider()
     st.write("**Diagnóstico do backend de predição**")

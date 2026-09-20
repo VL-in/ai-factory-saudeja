@@ -80,12 +80,18 @@ def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypat
     assert any("fila" in erro.value.lower() for erro in at.error)
 
 
-def test_aba_dev_ainda_nomeia_o_passo_que_a_liga(monkeypatch):
-    """"Dev: disparo manual" continua placeholder até o job D-2 (Passo 6)."""
+def test_aba_dev_dispara_job_e_mostra_erro_amigavel_sem_supabase(monkeypatch):
+    """Passo 6 liga o botão ao job de verdade (`disparar_job_diario`). Sem
+    SUPABASE_URL/SUPABASE_SECRET_KEY no ambiente de teste da UI (mesma
+    convenção das demais abas), clicar não derruba a tela -- mostra
+    ErroPersistencia traduzido, não um traceback."""
     at = _rodar(monkeypatch)
-    avisos = " ".join(info.value for info in at.info)
 
-    assert "Passo 6" in avisos
+    botao = next(b for b in at.button if b.label == "Disparar job D-2 agora")
+    botao.click().run()
+
+    assert not at.exception
+    assert any("job" in erro.value.lower() for erro in at.error)
 
 
 def test_formulario_produz_predicao_e_explicacao(monkeypatch):
