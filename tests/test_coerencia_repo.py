@@ -104,8 +104,14 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
 def test_migrations_sql_sem_coluna_proibida_de_pii():
     """Minimização de PII por design (BRIEFING.md, architecture.md §4.1):
     `pacientes` guarda só id_paciente_externo + demografia não identificável.
-    Guarda automatizável desde o schema, não só por convenção de código."""
-    colunas_proibidas = ("nome", "cpf", "email", "telefone")
+    Guarda automatizável desde o schema, não só por convenção de código.
+
+    `telefone` não está mais na lista (Passo 7): é a exceção deliberada --
+    sem contato de envio o disparo de lembrete real (Infobip) não existe --
+    documentada na migration `20260920020000_telefone_paciente.sql`. Segue
+    proibido gravar nome/CPF/email, que servem só para identificar/exibir,
+    não para o produto funcionar."""
+    colunas_proibidas = ("nome", "cpf", "email")
     migrations_dir = REPO_ROOT / "supabase" / "migrations"
     assert migrations_dir.exists(), "supabase/migrations/ não existe (Passo 5)"
 

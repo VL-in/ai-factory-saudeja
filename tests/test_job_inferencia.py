@@ -62,9 +62,11 @@ class _ClienteMensageriaEspiao:
     def __init__(self):
         self.chamadas = []
 
-    def enviar_lembrete(self, id_paciente_externo: str, mensagem: str) -> dict:
-        self.chamadas.append(id_paciente_externo)
-        return {"status": "simulado", "id_paciente_externo": id_paciente_externo}
+    canal = "espiao"
+
+    def enviar_lembrete(self, telefone: str, mensagem: str) -> dict:
+        self.chamadas.append(telefone)
+        return {"status": "simulado", "telefone": telefone}
 
 
 def _payload(idade, sexo, especialidade, distancia_km, dias, historico_noshow, data_hora):
@@ -93,10 +95,20 @@ def _probabilidade_real(payload: dict) -> float:
     return float(inference.predizer(model, X)[0])
 
 
+def _telefone_de_teste(id_externo: str) -> str:
+    """Telefone sintético determinístico (Passo 7) -- só precisa satisfazer
+    o formato que `InfobipClient`/o schema esperam, não corresponder a um
+    número real."""
+    return "5511" + str(abs(hash(id_externo)) % 10**9).zfill(9)
+
+
 def _criar_agendamento_d2(repositories, id_externo: str, payload: dict):
     data_nascimento = _data_nascimento_para_idade(payload["idade"], payload["data_hora_agendada"])
     paciente = repositories.inserir_paciente(
-        id_paciente_externo=id_externo, data_nascimento=data_nascimento, sexo=payload["sexo"]
+        id_paciente_externo=id_externo,
+        data_nascimento=data_nascimento,
+        sexo=payload["sexo"],
+        telefone=_telefone_de_teste(id_externo),
     )
     agendamento = repositories.inserir_agendamento(
         id_paciente=paciente["id"],
@@ -143,7 +155,7 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
     assert resultado["predicoes_gravadas"] == 2
     assert resultado["mensagens_disparadas"] == 1
     assert resultado["erros"] == []
-    assert espiao.chamadas == ["EXT-JOB-ALTO"]
+    assert espiao.chamadas == [_telefone_de_teste("EXT-JOB-ALTO")]
 
     predicoes = db.table("predicoes").select("*").execute().data
     por_agendamento = {p["id_agendamento"]: p for p in predicoes}

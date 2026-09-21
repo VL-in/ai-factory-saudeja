@@ -103,9 +103,15 @@ def db(monkeypatch):
 DATA_NASCIMENTO_PADRAO = date(1985, 6, 15)
 
 
+TELEFONE_PADRAO = "5511987654321"
+
+
 def _criar_paciente_e_agendamento(repositories, dias: int, id_externo: str):
     paciente = repositories.inserir_paciente(
-        id_paciente_externo=id_externo, data_nascimento=DATA_NASCIMENTO_PADRAO, sexo="F"
+        id_paciente_externo=id_externo,
+        data_nascimento=DATA_NASCIMENTO_PADRAO,
+        sexo="F",
+        telefone=TELEFONE_PADRAO,
     )
     data_hora = datetime.combine(
         hoje_na_clinica() + timedelta(days=dias), HORA_DA_CONSULTA, tzinfo=fuso_da_clinica()
@@ -126,10 +132,16 @@ def test_inserir_paciente_e_upsert_por_id_externo(db):
     import db.repositories as repositories
 
     p1 = repositories.inserir_paciente(
-        id_paciente_externo="EXT-1", data_nascimento=date(1990, 3, 1), sexo="F"
+        id_paciente_externo="EXT-1",
+        data_nascimento=date(1990, 3, 1),
+        sexo="F",
+        telefone=TELEFONE_PADRAO,
     )
     p2 = repositories.inserir_paciente(
-        id_paciente_externo="EXT-1", data_nascimento=date(1991, 3, 1), sexo="F"
+        id_paciente_externo="EXT-1",
+        data_nascimento=date(1991, 3, 1),
+        sexo="F",
+        telefone=TELEFONE_PADRAO,
     )
 
     assert p1["id"] == p2["id"]
@@ -273,6 +285,7 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
 
     logic.cadastrar_paciente_e_agendamento(
         cpf=cpf_teste,
+        telefone=TELEFONE_PADRAO,
         data_nascimento=date(1998, 4, 20),
         sexo="F",
         especialidade="cardiologia",

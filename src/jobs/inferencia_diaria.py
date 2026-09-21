@@ -31,24 +31,26 @@ import inference  # noqa: E402
 from config_projeto import caminho_de_env, hoje_na_clinica  # noqa: E402
 from explain import construir_explicador, explicar  # noqa: E402
 from features import calcular_idade  # noqa: E402
-from messaging.client import StubMessagingClient  # noqa: E402
+from messaging.client import ErroEnvioInfobip, InfobipClient, StubMessagingClient  # noqa: E402
 
 
 class ProvedorMensageriaDesconhecido(Exception):
-    """MESSAGING_PROVIDER aponta para um provedor sem implementação real
-    ainda (Infobip é o Passo 7) -- erro explícito em vez de cair no stub
-    silenciosamente, para não mascarar uma configuração de produção errada."""
+    """MESSAGING_PROVIDER aponta para um provedor sem implementação -- erro
+    explícito em vez de cair no stub silenciosamente, para não mascarar uma
+    configuração de produção errada."""
 
 
 def obter_cliente_mensageria():
-    """`StubMessagingClient` é o único provedor até o Passo 7 (Infobip). O
-    nome da env var já é `MESSAGING_PROVIDER` (mesma que o Passo 7 vai usar)
-    para o job não precisar mudar quando o provedor real for ligado."""
+    """`stub` (default) nunca faz rede; `infobip` (Passo 7) envia SMS de
+    verdade via `InfobipClient`, lendo `INFOBIP_BASE_URL`/`INFOBIP_CHAVE_API`
+    do ambiente."""
     provedor = (os.environ.get("MESSAGING_PROVIDER") or "stub").strip().lower()
     if provedor == "stub":
         return StubMessagingClient()
+    if provedor == "infobip":
+        return InfobipClient()
     raise ProvedorMensageriaDesconhecido(
-        f"MESSAGING_PROVIDER={provedor!r} sem implementação ainda (Passo 7) -- use 'stub'"
+        f"MESSAGING_PROVIDER={provedor!r} sem implementação -- use 'stub' ou 'infobip'"
     )
 
 
@@ -120,22 +122,34 @@ def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) 
         )
         resultado["predicoes_gravadas"] += 1
 
-        id_paciente_externo = agendamento["pacientes"]["id_paciente_externo"]
+        canal = cliente_mensageria.canal
         if classe_prevista:
-            cliente_mensageria.enviar_lembrete(
-                id_paciente_externo=id_paciente_externo,
-                mensagem=(
-                    f"Olá! Confirmamos sua consulta de {agendamento['especialidade']} em "
-                    f"{payload['data_hora_agendada']:%d/%m/%Y às %H:%M}. Poderá comparecer?"
-                ),
-            )
+            telefone = agendamento["pacientes"]["telefone"]
+            try:
+                cliente_mensageria.enviar_lembrete(
+                    telefone=telefone,
+                    mensagem=(
+                        f"Olá! Confirmamos sua consulta de {agendamento['especialidade']} em "
+                        f"{payload['data_hora_agendada']:%d/%m/%Y às %H:%M}. Poderá comparecer?"
+                    ),
+                )
+            except ErroEnvioInfobip as exc:
+                # Falha de envio de UM paciente (número inválido, sandbox
+                # recusou, Infobip fora do ar) não pode travar a fila do dia
+                # inteira -- registra e segue, mesma filosofia do agendamento
+                # malformado acima.
+                resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
+                repositories.registrar_mensagem(
+                    id_agendamento=agendamento["id"], canal=canal, status_envio="falha_envio"
+                )
+                continue
             repositories.registrar_mensagem(
-                id_agendamento=agendamento["id"], canal="whatsapp", status_envio="enviado"
+                id_agendamento=agendamento["id"], canal=canal, status_envio="enviado"
             )
             resultado["mensagens_disparadas"] += 1
         else:
             repositories.registrar_mensagem(
-                id_agendamento=agendamento["id"], canal="whatsapp", status_envio="nao_enviado"
+                id_agendamento=agendamento["id"], canal=canal, status_envio="nao_enviado"
             )
 
     return resultado

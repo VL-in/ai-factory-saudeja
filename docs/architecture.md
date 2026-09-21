@@ -46,7 +46,7 @@ ai-factory-saudeja/
 │   ├── api/                           # API FastAPI: schemas.py + main.py (Passo 3)
 │   ├── ui/                            # interface Streamlit: app.py (telas) + logic.py (lógica testável) (Passo 4)
 │   ├── jobs/                          # inferencia_diaria.py: job D-2 (Passo 6)
-│   └── messaging/                     # client.py: interface + stub de lembrete (antecipado do Passo 7)
+│   └── messaging/                     # client.py: interface + stub + InfobipClient (SMS real, Passo 7)
 ├── tests/                             # testes unitários e de integração do pipeline
 ├── .dvc/                              # configuração e cache do DVC
 ├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
@@ -156,7 +156,7 @@ Name: Supabase (decisão vigente: [ADR-004](adr/adr-004-decisão-técnica.md), v
 
 Type: PostgreSQL gerenciado (SDK oficial, não camada Postgres genérica)
 
-Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda só `id_paciente_externo` + atributos demográficos não identificáveis (`data_nascimento`, `sexo`), nunca nome/CPF (guarda automatizada em `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`). Desde o ajuste de cadastro de 2026-09-20, `id_paciente_externo` deixou de ser um texto livre digitado pelo paciente na UI: é o hash sha256 do CPF, calculado em `src/ui/logic.py::_id_paciente_externo_de_cpf` — o CPF (e o nome completo, também coletado na tela para a mensagem de confirmação) nunca chegam a este banco. `idade` também não é mais coluna: guarda-se `data_nascimento`, e a idade usada como feature de inferência é sempre calculada sob demanda (`src/features.py::calcular_idade`), nunca persistida. Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
+Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda só `id_paciente_externo` + atributos demográficos não identificáveis (`data_nascimento`, `sexo`) + `telefone` (guarda automatizada em `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`, que segue proibindo nome/CPF/email). `telefone` (migration `20260920020000_telefone_paciente.sql`, Passo 7) é a exceção deliberada a essa minimização — sem um contato de envio, o disparo de lembrete real via Infobip não tem para onde mandar mensagem; nome/CPF continuam nunca persistidos, por servirem só para identificar/exibir, não para o produto funcionar. Desde o ajuste de cadastro de 2026-09-20, `id_paciente_externo` deixou de ser um texto livre digitado pelo paciente na UI: é o hash sha256 do CPF, calculado em `src/ui/logic.py::_id_paciente_externo_de_cpf` — o CPF (e o nome completo, também coletado na tela para a mensagem de confirmação) nunca chegam a este banco. `idade` também não é mais coluna: guarda-se `data_nascimento`, e a idade usada como feature de inferência é sempre calculada sob demanda (`src/features.py::calcular_idade`), nunca persistida. Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
 
 Key Schemas/Collections: `pacientes`, `agendamentos` (status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb` e `explicacao_texto` nullable — plug do LLM, Passo 13), `mensagens_disparadas` (auditoria de envio, SLA §6). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
 
@@ -172,9 +172,9 @@ Purpose: rastreabilidade de hiperparâmetros/métricas/modelo de cada run de tre
 
 Service Name: Infobip
 
-Purpose: disparo de lembrete/confirmação via WhatsApp/SMS para pacientes classificados com alta probabilidade de no-show pelo job diário (D-2).
+Purpose: disparo de lembrete/confirmação via SMS para pacientes classificados com alta probabilidade de no-show pelo job diário (D-2).
 
-Integration Method: REST API, atrás de uma interface própria (`src/messaging/client.py`) com stub sem custo para dev/test e implementação real ativada por variável de ambiente (Passo 7).
+Integration Method: REST API, atrás de uma interface própria (`src/messaging/client.py`) com `StubMessagingClient` (default, sem custo/rede, dev/test) e `InfobipClient` (real, `MESSAGING_PROVIDER=infobip`). Canal SMS (`POST /sms/2/text/advanced`), não WhatsApp Business — WhatsApp exige sender/template pré-aprovados pela Meta, inviável de configurar no sandbox/prazo da disciplina (confirmado na prática: `GET /whatsapp/1/senders` da conta trial não tem nenhum sender provisionado). Autenticação por API Key própria da Infobip (`Authorization: App <chave>`, não Bearer/OAuth). Validado ponta a ponta contra a conta trial real (Passo 7): primeira tentativa rejeitada por `EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL` (canal SMS não provisionado na conta, não bug de formatação), reenviada após provisionamento manual no painel do Infobip e confirmada como `DELIVERED_TO_HANDSET`.
 
 Service Name: TrueFoundry (LLM gateway)
 
@@ -240,7 +240,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-20 (Passo 6)
+Date of Last Update: 2026-09-20 (Passo 7)
 
 ## 11. Glossary / Acronyms
 

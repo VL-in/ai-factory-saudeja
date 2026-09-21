@@ -372,6 +372,27 @@ def _id_paciente_externo_de_cpf(cpf: str) -> str:
     return hashlib.sha256(normalizar_cpf(cpf).encode()).hexdigest()
 
 
+def normalizar_telefone(telefone: str) -> str:
+    """Mantém só os dígitos e garante o código do país (Passo 7): a Infobip
+    espera o telefone em formato internacional sem "+" (ex. "5511987654321").
+    O formulário só atende clínicas brasileiras, então um número com DDD
+    (10-11 dígitos) sem "55" na frente recebe o prefixo automaticamente --
+    mesma tolerância de digitação que `normalizar_cpf` já dá para o CPF."""
+    digitos = re.sub(r"\D", "", telefone or "")
+    if len(digitos) in (10, 11):
+        digitos = "55" + digitos
+    return digitos
+
+
+def telefone_valido(telefone: str) -> bool:
+    """Confere só a forma (código do país + DDD + número, 12-13 dígitos) --
+    mesmo escopo de `cpf_valido`, sem consultar operadora/Infobip. Barra
+    digitação claramente errada antes de o número virar contato de envio
+    persistido no banco."""
+    digitos = normalizar_telefone(telefone)
+    return len(digitos) in (12, 13) and digitos.startswith("55")
+
+
 def horarios_disponiveis(dia: date) -> list[time]:
     """Slots que a clínica atende em `dia` -- vazio aos domingos. O cadastro
     usa isto para não deixar escolher um horário que o dataset de treino
@@ -410,6 +431,7 @@ def status_banco() -> dict:
 
 def cadastrar_paciente_e_agendamento(
     cpf: str,
+    telefone: str,
     data_nascimento: date,
     sexo: str,
     especialidade: str,
@@ -425,7 +447,9 @@ def cadastrar_paciente_e_agendamento(
     nem tocar o banco -- nome nunca é persistido (LGPD, architecture.md
     §4.1). CPF também não é gravado: vira só o hash que identifica o
     paciente (`_id_paciente_externo_de_cpf`), substituindo o antigo campo de
-    identificador livre digitado na tela.
+    identificador livre digitado na tela. `telefone` (Passo 7) é a exceção
+    deliberada à minimização de PII -- é gravado (normalizado), porque sem
+    contato o job D-2 não tem para onde mandar o lembrete real via Infobip.
 
     `historico_noshow` deixou de ser parâmetro também -- não é algo que o
     paciente tem como (ou deveria) autodeclarar; é contado a partir do
@@ -438,6 +462,10 @@ def cadastrar_paciente_e_agendamento(
     apareceria 3h deslocada na fila do dia."""
     if not cpf_valido(cpf):
         raise ErroValidacaoCadastro("CPF inválido -- confira os números digitados.")
+    if not telefone_valido(telefone):
+        raise ErroValidacaoCadastro(
+            "Telefone inválido -- informe DDD + número (ex. (11) 98765-4321)."
+        )
     if not agenda_clinica.horario_valido(data_consulta, hora_consulta):
         raise ErroValidacaoCadastro(
             "Horário fora do funcionamento da clínica para esta data (seg-sex "
@@ -449,6 +477,7 @@ def cadastrar_paciente_e_agendamento(
             id_paciente_externo=_id_paciente_externo_de_cpf(cpf),
             data_nascimento=data_nascimento,
             sexo=sexo,
+            telefone=normalizar_telefone(telefone),
         )
         historico_noshow = repositories.contar_no_shows_anteriores(paciente["id"])
         return repositories.inserir_agendamento(

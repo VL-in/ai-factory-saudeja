@@ -338,7 +338,9 @@ def _visao_paciente():
         "nenhum dos dois (LGPD, minimização de PII por design, "
         "docs/architecture.md §4.1). O identificador do paciente no banco é "
         "gerado automaticamente a partir do CPF, e o histórico de no-show é "
-        "calculado pela clínica, não autodeclarado."
+        "calculado pela clínica, não autodeclarado. O telefone é a exceção: "
+        "fica gravado (normalizado), pois é para onde o lembrete real é "
+        "enviado (Infobip, Passo 7)."
     )
 
     especialidades = logic.listar_especialidades()
@@ -354,7 +356,11 @@ def _visao_paciente():
 
     with st.form("form_paciente"):
         nome_completo = st.text_input("Nome completo")
-        cpf = st.text_input("CPF", placeholder="000.000.000-00")
+        col_cpf, col_telefone = st.columns(2)
+        cpf = col_cpf.text_input("CPF", placeholder="000.000.000-00")
+        telefone = col_telefone.text_input(
+            "Telefone (WhatsApp/SMS)", placeholder="(11) 98765-4321"
+        )
 
         col1, col2 = st.columns(2)
         data_nascimento = col1.date_input(
@@ -404,6 +410,7 @@ def _visao_paciente():
     try:
         logic.cadastrar_paciente_e_agendamento(
             cpf=cpf,
+            telefone=telefone,
             data_nascimento=data_nascimento,
             sexo=sexo,
             especialidade=especialidade,

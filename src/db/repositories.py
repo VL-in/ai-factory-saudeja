@@ -39,7 +39,9 @@ def verificar_conexao() -> None:
     obter_client().table("pacientes").select("id").limit(1).execute()
 
 
-def inserir_paciente(id_paciente_externo: str, data_nascimento: date, sexo: str) -> dict:
+def inserir_paciente(
+    id_paciente_externo: str, data_nascimento: date, sexo: str, telefone: str
+) -> dict:
     """Upsert por `id_paciente_externo` (unique -- ver migration): recadastrar
     o mesmo paciente atualiza os dados em vez de duplicar a linha.
 
@@ -47,7 +49,11 @@ def inserir_paciente(id_paciente_externo: str, data_nascimento: date, sexo: str)
     `ui/logic.py::_id_paciente_externo_de_cpf`), nunca o CPF em si -- esta
     função só persiste o que recebe. `data_nascimento` substitui `idade`
     (Sec4.1/cadastro realista): a idade em si é calculada sob demanda por
-    `features.calcular_idade`, nunca gravada."""
+    `features.calcular_idade`, nunca gravada. `telefone` (Passo 7, migration
+    `20260920020000_telefone_paciente.sql`) já chega normalizado
+    (`ui/logic.py::normalizar_telefone`) -- é a exceção deliberada à
+    minimização de PII: sem contato, o job D-2 não tem para onde mandar o
+    lembrete real via Infobip."""
     client = obter_client()
     resposta = (
         client.table("pacientes")
@@ -56,6 +62,7 @@ def inserir_paciente(id_paciente_externo: str, data_nascimento: date, sexo: str)
                 "id_paciente_externo": id_paciente_externo,
                 "data_nascimento": data_nascimento.isoformat(),
                 "sexo": sexo,
+                "telefone": telefone,
             },
             on_conflict="id_paciente_externo",
         )
@@ -110,7 +117,7 @@ def inserir_agendamento(
 _COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
     "id, especialidade, distancia_km, data_hora_agendada, "
     "dias_entre_agendamento_consulta, historico_noshow, "
-    "pacientes(data_nascimento, sexo, id_paciente_externo)"
+    "pacientes(data_nascimento, sexo, id_paciente_externo, telefone)"
 )
 
 

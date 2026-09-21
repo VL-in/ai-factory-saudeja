@@ -64,6 +64,7 @@ def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
 
     at.text_input[0].set_value("Paciente de Teste").run()  # nome completo
     at.text_input[1].set_value("111.444.777-35").run()  # CPF válido
+    at.text_input[2].set_value("(11) 98765-4321").run()  # telefone válido
     at.button[0].click().run()  # 'Agendar'
 
     assert not at.exception

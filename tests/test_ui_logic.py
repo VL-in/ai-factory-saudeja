@@ -326,6 +326,32 @@ def test_id_paciente_externo_de_cpf_e_deterministico_e_nao_e_o_cpf_em_si():
     assert len(hash1) == 64  # sha256 em hexadecimal
 
 
+# --- telefone: contato de envio real do lembrete (Passo 7) -------------------
+
+
+@pytest.mark.parametrize(
+    "telefone,esperado",
+    [
+        ("(11) 98765-4321", "5511987654321"),
+        ("11987654321", "5511987654321"),  # sem código do país -- assume Brasil
+        ("+55 11 98765-4321", "5511987654321"),  # já com código do país
+        ("5511987654321", "5511987654321"),
+    ],
+)
+def test_normalizar_telefone_garante_codigo_do_pais(telefone, esperado):
+    assert logic.normalizar_telefone(telefone) == esperado
+
+
+@pytest.mark.parametrize("telefone", ["(11) 98765-4321", "11987654321", "5511987654321"])
+def test_telefone_valido_aceita_numero_brasileiro_com_ddd(telefone):
+    assert logic.telefone_valido(telefone) is True
+
+
+@pytest.mark.parametrize("telefone", ["123", "", "11-abc", "1"])
+def test_telefone_valido_rejeita_numero_incoerente(telefone):
+    assert logic.telefone_valido(telefone) is False
+
+
 # --- horários do cadastro respeitam a grade da clínica (agenda_clinica) -------
 
 
