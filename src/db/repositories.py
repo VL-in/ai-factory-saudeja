@@ -224,3 +224,115 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
         return max(p["probabilidade"] for p in predicoes)
 
     return sorted(agendamentos, key=_probabilidade, reverse=True)
+
+
+# --- observabilidade de aplicação (Passo 8.5, ADR-006) -------------------------
+
+
+def inserir_evento_app(
+    tipo: str,
+    status: str,
+    origem: str,
+    duracao_ms: int | None = None,
+    model_version: str | None = None,
+    detalhe: dict | None = None,
+) -> dict:
+    """Grava uma linha em `eventos_app` (migration
+    `20260921000000_eventos_app.sql`). Chamada **só** pelo worker de
+    `src/observabilidade.py`, nunca direto do caminho de uma predição: é lá que
+    mora a garantia de que o registro não bloqueia nem levanta.
+
+    Não sanitiza `detalhe` aqui -- isso já aconteceu em
+    `observabilidade.sanitizar_detalhe`, antes de o evento entrar na fila, para
+    o dado proibido nunca chegar a existir num objeto a caminho do banco."""
+    client = obter_client()
+    resposta = (
+        client.table("eventos_app")
+        .insert(
+            {
+                "tipo": tipo,
+                "status": status,
+                "origem": origem,
+                "duracao_ms": duracao_ms,
+                "model_version": model_version,
+                "detalhe": detalhe or {},
+            }
+        )
+        .execute()
+    )
+    return resposta.data[0]
+
+
+def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[dict]:
+    """Eventos a partir de `desde`, mais recentes primeiro.
+
+    `limite` é explícito porque a agregação (p95) é feita em Python sobre estas
+    linhas -- o PostgREST não expõe `percentile_cont`. Quem chama compara
+    `len(...)` com o limite para saber se a janela foi truncada: um p95
+    calculado sobre uma fatia silenciosamente cortada mentiria, e é justamente
+    um número que vai para o pitch (SLO §2)."""
+    client = obter_client()
+    return (
+        client.table("eventos_app")
+        .select("criado_em, tipo, origem, duracao_ms, status, model_version, detalhe")
+        .gte("criado_em", desde.isoformat())
+        .order("criado_em", desc=True)
+        .limit(limite)
+        .execute()
+        .data
+    )
+
+
+def ultimo_evento_app(tipo: str, status: str | None = None) -> dict | None:
+    """Evento mais recente de um tipo -- usado para "última execução
+    bem-sucedida do job D-2" na aba de observabilidade (SLO §5). O
+    dead-man's-switch externo (Healthchecks.io) cobre o caso em que o job nem
+    chega a rodar; este aqui é a visão de dentro, para o funcionário."""
+    client = obter_client()
+    consulta = client.table("eventos_app").select("*").eq("tipo", tipo)
+    if status:
+        consulta = consulta.eq("status", status)
+    linhas = consulta.order("criado_em", desc=True).limit(1).execute().data
+    return linhas[0] if linhas else None
+
+
+def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
+    """(predições gravadas, predições com `explicacao_shap`) desde `desde` --
+    numerador e denominador do SLO §4 (100% das predições com explicação),
+    contados no banco (`count='exact'`) em vez de trazer as linhas: a coluna é
+    um jsonb que pode ser grande, e aqui só interessa quantas existem."""
+    client = obter_client()
+    total = (
+        client.table("predicoes")
+        .select("id", count="exact")
+        .gte("criado_em", desde.isoformat())
+        .execute()
+        .count
+        or 0
+    )
+    com_explicacao = (
+        client.table("predicoes")
+        .select("id", count="exact")
+        .gte("criado_em", desde.isoformat())
+        .not_.is_("explicacao_shap", "null")
+        .execute()
+        .count
+        or 0
+    )
+    return total, com_explicacao
+
+
+def purgar_eventos_app(anteriores_a: datetime) -> int:
+    """Política de retenção do ADR-006 (a tabela divide o teto do free tier do
+    Supabase com os dados do produto). Executada pelo job diário, não por
+    pg_cron: o job já roda uma vez por dia e um agendador novo seria mais uma
+    peça de infra a manter. Devolve quantas linhas saíram."""
+    client = obter_client()
+    removidas = (
+        client.table("eventos_app")
+        .delete()
+        .lt("criado_em", anteriores_a.isoformat())
+        .execute()
+        .data
+    )
+    return len(removidas or [])

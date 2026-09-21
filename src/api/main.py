@@ -13,6 +13,7 @@ de como for iniciado (uvicorn a partir da raiz do repo, TestClient nos
 testes, ou o CMD do container em infra/api/dockerfile).
 """
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,15 +21,24 @@ SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request  # noqa: E402
 
 import inference  # noqa: E402
+import observabilidade  # noqa: E402
 from config_projeto import caminho_de_env  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
 
 from .schemas import PacienteConsultaIn, PredictOut  # noqa: E402
 
 MODEL_PATH = caminho_de_env("MODEL_PATH", "data/model.pkl")
+
+# Só as rotas cujo tempo de resposta o SLO §2 compromete. `/health` fica de
+# fora de propósito: a sonda externa do ADR-006 bate nela de minutos em minutos
+# para medir uptime, e registrar cada batida encheria `eventos_app` com milhares
+# de linhas por mês que não dizem nada sobre a latência de uma predição -- ruído
+# ocupando o teto do free tier. O uptime é medido por quem sonda, de fora, que é
+# o princípio do ADR-006 ("o coletor não pode morar dentro daquilo que mede").
+ROTAS_OBSERVADAS = frozenset({"/predict"})
 
 explicador_llm = ExplicadorLLMDesativado()
 
@@ -48,6 +58,53 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SaudeJá — API de predição de no-show", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def registrar_latencia(request: Request, call_next):
+    """Instrumentação do SLO §2 (Passo 8.5, ADR-006): mede o tempo de resposta
+    de `/predict` e registra em `eventos_app`.
+
+    Mede aqui, no middleware, e não dentro da rota, porque o p95 que o SLA
+    promete é o da resposta inteira (validação do Pydantic e serialização
+    incluídas), não só o do trecho que faz a predição. O registro sai por
+    `observabilidade.registrar_evento`, que só enfileira -- a gravação acontece
+    fora da requisição, para não entrar na latência que ela existe para medir.
+
+    Um 4xx (payload recusado, ex. especialidade fora do mapa) conta como `erro`
+    de requisição mas **não** como indisponibilidade: o SLO §1 fala de 5xx, e a
+    coluna `status_http` do detalhe preserva a distinção para quem consultar.
+    """
+    if request.url.path not in ROTAS_OBSERVADAS:
+        return await call_next(request)
+
+    inicio = time.perf_counter()
+    try:
+        resposta = await call_next(request)
+    except Exception as exc:
+        observabilidade.registrar_evento(
+            tipo=observabilidade.TIPO_PREDICAO,
+            status=observabilidade.STATUS_ERRO,
+            origem=observabilidade.ORIGEM_API,
+            duracao_ms=round((time.perf_counter() - inicio) * 1000),
+            model_version=getattr(app.state, "model_version", None),
+            detalhe={"rota": request.url.path, "excecao": exc.__class__.__name__},
+        )
+        raise
+
+    observabilidade.registrar_evento(
+        tipo=observabilidade.TIPO_PREDICAO,
+        status=(
+            observabilidade.STATUS_OK
+            if resposta.status_code < 400
+            else observabilidade.STATUS_ERRO
+        ),
+        origem=observabilidade.ORIGEM_API,
+        duracao_ms=round((time.perf_counter() - inicio) * 1000),
+        model_version=getattr(app.state, "model_version", None),
+        detalhe={"rota": request.url.path, "status_http": resposta.status_code},
+    )
+    return resposta
 
 
 @app.get("/health")

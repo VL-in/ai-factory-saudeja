@@ -64,6 +64,20 @@ Cons:
 
 O que esta decisão **impede**: tracing distribuído e correlação automática entre serviços. É um custo aceito conscientemente porque hoje não há "entre serviços" — a aplicação é um container único, com a UI chamando o modelo em processo ([ADR-005](adr-005-integracoes-implicitas.md) b).
 
+## Emenda (2026-09-21) — o que a implementação do Passo 8.5 mudou na decisão
+
+A decisão acima foi mantida; três pontos dela não sobreviveram ao contato com o código e ficam corrigidos aqui.
+
+**1. A tabela sozinha não garante ausência de PII.** O texto dizia que a guarda existente (`tests/test_coerencia_repo.py`, grep por coluna proibida nas migrations) já cobria `eventos_app` e não precisaria ser estendida. Não cobre: aquela guarda lê *nome de coluna*, e `detalhe` é `jsonb` — qualquer chave cabe lá dentro sem que nenhum grep de schema perceba. O caso concreto que fecharia o buraco tarde demais é o `str(exc)` de uma falha da Infobip, que ecoa o payload enviado com o telefone do paciente. A garantia passou a ser uma **allowlist fechada** em `src/observabilidade.py` (contadores, rota, status HTTP e *nome de classe* de exceção; nunca mensagem de erro), aplicada antes de o evento entrar na fila, com teste de runtime e checagem estática sobre os call sites de `src/`.
+
+**2. Medir só o middleware da API mediria o caminho errado.** O SLO §2 fala de latência de predição, mas o [ADR-005](adr-005-integracoes-implicitas.md) (b) já decidiu que UI e job chamam o modelo **em processo** — no Space, `/predict` pode ficar com tráfego perto de zero, e ainda está em aberto (Passo 11) se ela terá endereço público. Um p95 calculado sobre essa rota seria um número honesto sobre algo que ninguém usa. A instrumentação cobre os três caminhos (`api`, `processo`, `job`), separados pela coluna `origem`.
+
+**3. `/health` não é instrumentada.** A sonda externa bate nela de minutos em minutos por desenho; registrar cada batida encheria a tabela de linhas que nada dizem sobre latência e consumiria o free tier que este ADR se comprometeu a não gastar. Disponibilidade continua sendo medida de fora, que é o princípio do documento.
+
+Decisões menores tomadas junto, todas alinhadas ao critério de "nenhuma peça de infraestrutura nova": a **retenção** (risco listado nos Cons) roda como purga dentro do job diário, não em `pg_cron`; o **p95** é calculado em Python sobre a janela lida, porque o PostgREST não expõe `percentile_cont`, e a aba avisa quando a janela foi truncada em vez de publicar um percentil de um pedaço; o módulo importa `supabase-py` **tardiamente**, porque `requirements/api.txt` não o instala (ele mora em `ui.txt`, para não pesar no cold start) e um import no topo quebraria o boot da imagem enxuta da API — que agora simplesmente roda sem registrar eventos.
+
+Fica também registrado o que **não** foi implementado aqui, por depender de URL pública: as duas camadas externas (UptimeRobot e Healthchecks.io) e o alerta por `src/messaging`. A camada interna, que é a que guarda estado, está completa.
+
 ## Alternativas consideradas
 
 - **Langfuse** (proposto pelo ADR-001 como observabilidade geral): descartado para o núcleo. Seu modelo de dados é trace → span → **generation**, construído em torno de prompt, completion, tokens e custo por chamada de LLM. O núcleo do SaúdeJá é um LightGBM tabular: não há prompt nem token, e a instrumentação produziria spans vazios. Soma-se a isso que o Langfuse Cloud fica em EU/US (transferência internacional de dado de saúde) e que o self-host exige Postgres + ClickHouse + worker, fora do orçamento e do que cabe num Space. **Permanece reservado para futuro implementação de LLM**, onde é a ferramenta certa para o problema certo — conforme o ADR-004 já previa.

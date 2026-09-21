@@ -20,8 +20,15 @@ def _rodar(monkeypatch, app_env="dev", backend="processo"):
     # gravar no Supabase real nem depender de rede -- src/db/ é exercitado de
     # verdade só em tests/test_db.py (marcado integracao, contra o Supabase
     # CLI local).
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
+    #
+    # Vazio, não `delenv`: `config_projeto` chama `load_dotenv()` no import, e
+    # uma variável APAGADA é justamente o caso em que o dotenv a define de
+    # novo -- a suíte acabava falando com o projeto Supabase real de quem tem
+    # `.env` local. Definida como string vazia, a chave existe (o dotenv não
+    # sobrescreve) e é falsy, que é o que `db/client.py` trata como
+    # ConfiguracaoSupabaseAusente.
+    monkeypatch.setenv("SUPABASE_URL", "")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "")
     return AppTest.from_file(CAMINHO_APP, default_timeout=TIMEOUT).run()
 
 
@@ -31,7 +38,7 @@ def test_app_carrega_sem_excecao(monkeypatch):
     assert not at.exception
 
 
-def test_quatro_abas_do_funcionario_existem_em_dev(monkeypatch):
+def test_abas_do_funcionario_existem_em_dev(monkeypatch):
     at = _rodar(monkeypatch, app_env="dev")
 
     rotulos = [aba.label for aba in at.tabs]
@@ -39,6 +46,7 @@ def test_quatro_abas_do_funcionario_existem_em_dev(monkeypatch):
         "Testar predição",
         "Explicabilidade",
         "Fila do dia",
+        "Observabilidade",
         "Dev: disparo manual",
     ]
 
@@ -48,7 +56,7 @@ def test_aba_de_dev_some_fora_do_ambiente_de_dev(monkeypatch):
 
     rotulos = [aba.label for aba in at.tabs]
     assert "Dev: disparo manual" not in rotulos
-    assert len(rotulos) == 3
+    assert len(rotulos) == 4
 
 
 def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
@@ -81,6 +89,16 @@ def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypat
 
     assert not at.exception
     assert any("fila" in erro.value.lower() for erro in at.error)
+
+
+def test_aba_observabilidade_sem_supabase_avisa_sem_derrubar_a_tela(monkeypatch):
+    """Passo 8.5: o painel é diagnóstico passivo (mesma escolha do status do
+    banco na sidebar), então sem Supabase ele avisa -- não derruba a tela nem
+    impede a predição manual, que não depende de banco nenhum."""
+    at = _rodar(monkeypatch)
+
+    assert not at.exception
+    assert any("observabilidade" in aviso.value.lower() for aviso in at.warning)
 
 
 def test_aba_dev_dispara_job_e_mostra_erro_amigavel_sem_supabase(monkeypatch):

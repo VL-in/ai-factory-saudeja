@@ -19,6 +19,7 @@ Rodar como script (`python src/jobs/inferencia_diaria.py`) ou via
 """
 import os
 import sys
+import time
 from datetime import date, datetime
 from pathlib import Path
 
@@ -28,6 +29,7 @@ if str(SRC_DIR) not in sys.path:
 
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
+import observabilidade  # noqa: E402
 from config_projeto import caminho_de_env, hoje_na_clinica  # noqa: E402
 from explain import construir_explicador, explicar  # noqa: E402
 from features import calcular_idade  # noqa: E402
@@ -79,6 +81,20 @@ def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) 
     -- um payload ruim não pode travar a fila inteira do dia) para a aba de
     dev/logs mostrarem o que aconteceu."""
     data_referencia = data_referencia or hoje_na_clinica()
+    with observabilidade.medir(
+        observabilidade.TIPO_JOB_D2, origem=observabilidade.ORIGEM_JOB
+    ) as observado:
+        resultado = _processar_fila(data_referencia, cliente_mensageria, observado)
+    return resultado
+
+
+def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) -> dict:
+    """Corpo do job, separado de `processar_dia` só para a instrumentação do
+    Passo 8.5 (ADR-006) envolver a execução inteira -- inclusive a busca no
+    banco e uma falha antes do primeiro agendamento -- sem indentar a lógica
+    de negócio dentro de um `with`. `observado` é o dicionário cedido por
+    `observabilidade.medir`: o que for escrito em `observado["detalhe"]` vira
+    o `detalhe` do evento `job_d2` gravado ao final."""
     pendentes = repositories.buscar_agendamentos_d2_pendentes(data_referencia)
 
     resultado = {
@@ -87,6 +103,7 @@ def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) 
         "mensagens_disparadas": 0,
         "erros": [],
     }
+    observado["detalhe"]["agendamentos_encontrados"] = len(pendentes)
     if not pendentes:
         return resultado
 
@@ -94,10 +111,12 @@ def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) 
     model, mapa_especialidade = inference.carregar_modelo(model_path)
     explainer = construir_explicador(model)
     model_version = inference.calcular_model_version(model_path)
+    observado["model_version"] = model_version
     threshold = float(inference.PARAMS["decision"]["threshold"])
     cliente_mensageria = cliente_mensageria or obter_cliente_mensageria()
 
     for agendamento in pendentes:
+        inicio = time.perf_counter()
         try:
             payload = _payload_de_agendamento(agendamento)
             X = inference.construir_features(payload, mapa_especialidade)
@@ -106,11 +125,31 @@ def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) 
             # sem data_nascimento/sexo): registra e segue para o próximo --
             # não é motivo para deixar a fila inteira sem predição.
             resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
+            # Só a CLASSE da exceção vai para `eventos_app`: `str(exc)` traz o
+            # dado do agendamento junto, e a tabela de observabilidade não
+            # guarda dado de paciente (ADR-006).
+            observabilidade.registrar_evento(
+                tipo=observabilidade.TIPO_ERRO,
+                status=observabilidade.STATUS_ERRO,
+                origem=observabilidade.ORIGEM_JOB,
+                model_version=model_version,
+                detalhe={"excecao": exc.__class__.__name__},
+            )
             continue
 
         probabilidade = float(inference.predizer(model, X)[0])
         classe_prevista = int(probabilidade >= threshold)
         contribuicoes = explicar(explainer, X)
+        # Mede só o trecho de modelo (features + predição + SHAP), o mesmo que
+        # a rota /predict executa, para o p95 do SLO §2 comparar caminhos
+        # equivalentes -- a gravação no banco e o envio de SMS que vêm a seguir
+        # são custo do job, não da predição.
+        observabilidade.registrar_evento(
+            tipo=observabilidade.TIPO_PREDICAO,
+            origem=observabilidade.ORIGEM_JOB,
+            duracao_ms=round((time.perf_counter() - inicio) * 1000),
+            model_version=model_version,
+        )
 
         repositories.gravar_predicao(
             id_agendamento=agendamento["id"],
@@ -152,16 +191,44 @@ def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) 
                 id_agendamento=agendamento["id"], canal=canal, status_envio="nao_enviado"
             )
 
+    observado["detalhe"].update(
+        {
+            "predicoes_gravadas": resultado["predicoes_gravadas"],
+            "mensagens_disparadas": resultado["mensagens_disparadas"],
+            "erros": len(resultado["erros"]),
+        }
+    )
     return resultado
+
+
+def purgar_eventos_antigos() -> int:
+    """Política de retenção de `eventos_app` (ADR-006): a tabela cresce a cada
+    predição e divide o teto do free tier do Supabase com os dados do produto.
+
+    Roda aqui, pendurada no job que já é diário, em vez de num agendador novo
+    (pg_cron/workflow próprio) -- observabilidade não deve adicionar peça de
+    infra a manter, que é o mesmo critério que descartou Grafana/OTel no ADR.
+    Falha de purga não derruba o job: perder a limpeza de um dia é irrelevante
+    perto de perder a fila de lembretes."""
+    try:
+        limite = observabilidade.inicio_da_janela(horas=24 * observabilidade.retencao_dias())
+        return repositories.purgar_eventos_app(limite)
+    except Exception:
+        return 0
 
 
 def main() -> dict:
     resultado = processar_dia()
+    purgados = purgar_eventos_antigos()
+    # Processo curto: sem o flush, os eventos enfileirados morreriam junto com
+    # o processo antes de o worker daemon gravá-los (ver observabilidade.flush).
+    observabilidade.flush()
     print(
         f"job D-2: {resultado['agendamentos_encontrados']} agendamento(s) encontrado(s), "
         f"{resultado['predicoes_gravadas']} predição(ões) gravada(s), "
         f"{resultado['mensagens_disparadas']} mensagem(ns) disparada(s), "
-        f"{len(resultado['erros'])} erro(s)"
+        f"{len(resultado['erros'])} erro(s), "
+        f"{purgados} evento(s) de observabilidade purgado(s)"
     )
     return resultado
 

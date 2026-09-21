@@ -154,7 +154,7 @@ docker run --rm -p 8000:8000 -v "%cd%/data:/app/data" saudeja-api
 
 ## Interface (Streamlit)
 
-`src/ui/app.py` é a interface da clínica: visão **Funcionário** em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (Passo 5: agendamentos do dia ordenados por risco, com resumo de quantos são alto risco/sem predição e a explicação SHAP gravada de cada paciente ao selecionar a linha) e "Dev: disparo manual" (Passo 6: dispara `src/jobs/inferencia_diaria.py::processar_dia()` e mostra agendamentos/predições/mensagens, visível só com `APP_ENV=dev`) — e visão **Paciente** (Passo 5: cadastro + agendamento persistidos no Supabase). A sidebar mostra o estado da conexão com o Supabase ao lado do backend de predição. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
+`src/ui/app.py` é a interface da clínica: visão **Funcionário** em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (Passo 5: agendamentos do dia ordenados por risco, com resumo de quantos são alto risco/sem predição e a explicação SHAP gravada de cada paciente ao selecionar a linha), "Observabilidade" (Passo 8.5: p95 de latência, erros, cobertura de explicação e última execução do job, lidos de `eventos_app`) e "Dev: disparo manual" (Passo 6: dispara `src/jobs/inferencia_diaria.py::processar_dia()` e mostra agendamentos/predições/mensagens, visível só com `APP_ENV=dev`) — e visão **Paciente** (Passo 5: cadastro + agendamento persistidos no Supabase). A sidebar mostra o estado da conexão com o Supabase ao lado do backend de predição. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
 
 **Datas sempre no fuso da clínica** (`TIMEZONE_CLINICA`, default `America/Sao_Paulo`): "fila do dia 19/09" são as consultas de 19/09 em São Paulo, e o cadastro grava `data_hora_agendada` com o fuso explícito. O container roda em UTC — sem isso, depois das 21h a fila do dia e o job D-2 trabalhariam com a data errada, e os horários apareceriam 3h deslocados. `dias_entre_agendamento_consulta` não é perguntado no cadastro: é derivado da data escolhida (`logic.dias_ate_consulta`), porque é feature do modelo e um valor digitado poderia contradizer a própria data da consulta.
 
@@ -228,6 +228,30 @@ A aba **"Dev: disparo manual"** do Streamlit (`APP_ENV=dev`) chama `processar_di
 
 ```powershell
 pytest -m integracao tests/test_job_inferencia.py -v
+```
+
+## Observabilidade de aplicação (Passo 8.5)
+
+`src/observabilidade.py` registra em `eventos_app` (Supabase, migration `20260921000000_eventos_app.sql`) uma linha por predição servida e por execução do job — é de onde saem os números **medidos** do SLO §2 (latência) e §4 (cobertura de explicação), em vez de estimados na véspera do pitch. A decisão completa, com o que foi descartado e por quê, está no [ADR-006](docs/adr/adr-006-observabilidade.md).
+
+O princípio que organiza o desenho: **o coletor não pode morar dentro daquilo que ele mede**. Métrica coletada dentro do HF Space some junto com o Space quando ele hiberna — inclusive a evidência de que caiu. Daí a divisão entre a camada interna (esta tabela, fonte de verdade) e as sondas externas (uptime em `/health` e dead-man's-switch dos jobs, ligadas nos Passos 10/11, quando houver URL pública).
+
+| Propriedade | Como é garantida |
+|---|---|
+| Não entra no caminho crítico | `registrar_evento` só enfileira (`put_nowait`); um worker daemon grava fora da requisição. Fila cheia **descarta** — perder métrica é aceitável, atrasar a predição do funcionário não |
+| Falha não derruba nada | Nenhuma exceção de gravação escapa do módulo (mesma filosofia do `ErroEnvioInfobip`). Destino fora do ar pausa as tentativas por 60s em vez de pagar timeout por evento |
+| Nunca carrega PII | `detalhe` (jsonb) só aceita chaves de uma allowlist fechada: contadores, rota, status HTTP e *nome de classe* de exceção — nunca a mensagem, que no caso da Infobip ecoa o telefone do paciente |
+| Mede o caminho que importa | Os três caminhos de predição são instrumentados (`origem` = `api`/`processo`/`job`). Medir só `/predict` daria o p95 de uma rota que, por decisão do [ADR-005](docs/adr/adr-005-integracoes-implicitas.md) (b), quase não recebe tráfego |
+
+`/health` fica **fora** da instrumentação de propósito: a sonda externa bate nela de minutos em minutos, e registrar cada batida encheria a tabela de ruído. Retenção (`OBSERVABILIDADE_RETENCAO_DIAS`, default 90 dias) é aplicada por uma purga que roda junto do job diário, sem agendador novo. `OBSERVABILIDADE_ATIVA=false` desliga o registro por completo.
+
+> **Medição achada na verificação**: a primeira predição de um processo custa ~1,4s (montagem do `TreeExplainer` do SHAP) e as seguintes ~10ms. Dentro do SLO §2 (<2s), mas apertado — e num Space que hiberna, **toda** predição depois de acordar paga esse custo. É exatamente o tipo de número que o Passo 12 precisa ter medido, não estimado.
+
+Rodar os testes (os de round-trip exigem `supabase start`, mesma convenção de `test_db.py`):
+
+```powershell
+pytest tests/test_observabilidade.py -v
+pytest -m integracao tests/test_observabilidade.py -v
 ```
 
 ## Aplicação completa em container (API + Streamlit)

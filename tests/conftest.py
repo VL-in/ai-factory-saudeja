@@ -8,6 +8,30 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+import observabilidade
+
+
+def _descartar_evento(**evento):
+    """Destino nulo de `eventos_app` durante os testes."""
+
+
+@pytest.fixture(autouse=True)
+def observabilidade_sem_destino_real():
+    """Nenhum teste grava em `eventos_app` de verdade (Passo 8.5).
+
+    Sem isto, qualquer teste que faça uma predição enfileira um evento e o
+    worker de `src/observabilidade.py` cai no destino default -- que resolve
+    `SUPABASE_URL`/`SUPABASE_SECRET_KEY`, e o `.env` local de quem desenvolve
+    aponta para o projeto REAL: a suíte rápida sujaria a tabela de produção e
+    ainda deixaria um client conectado em cache para os testes seguintes.
+    Quem precisa observar o que foi registrado troca o destino por um espião
+    próprio (tests/test_observabilidade.py); o teardown aqui devolve o nulo.
+    """
+    observabilidade.definir_escritor(_descartar_evento)
+    yield
+    observabilidade.flush(timeout=2)
+    observabilidade.definir_escritor(_descartar_evento)
+
 
 @pytest.fixture
 def df_consultas():

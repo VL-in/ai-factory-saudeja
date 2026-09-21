@@ -38,6 +38,7 @@ import agenda_clinica  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
 import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
+import observabilidade  # noqa: E402
 from config_projeto import caminho_de_env, fuso_da_clinica, hoje_na_clinica  # noqa: E402
 from db.client import ConfiguracaoSupabaseAusente  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
@@ -156,23 +157,35 @@ class ClientePredicaoEmProcesso:
 
     def predizer(self, payload: dict) -> ResultadoPredicao:
         self._carregar()
-        try:
-            X = inference.construir_features(payload, self._mapa_especialidade)
-        except inference.EspecialidadeDesconhecidaError as exc:
-            raise ErroValidacao(str(exc)) from exc
-
-        probabilidade = float(inference.predizer(self._model, X)[0])
-        threshold = float(inference.PARAMS["decision"]["threshold"])
-        contribuicoes = explicar(self._explainer, X)
-
-        return ResultadoPredicao(
-            probabilidade=probabilidade,
-            classe_prevista=int(probabilidade >= threshold),
-            threshold_usado=threshold,
+        # Instrumentado (Passo 8.5) tanto quanto a rota /predict da API: o
+        # ADR-005 (b) faz deste o caminho DEFAULT de produção -- medir só o
+        # middleware do FastAPI calcularia o p95 do SLO §2 sobre uma rota que,
+        # no Space, quase não recebe tráfego, enquanto a predição que o
+        # funcionário de fato espera acontece aqui.
+        with observabilidade.medir(
+            observabilidade.TIPO_PREDICAO,
+            origem=observabilidade.ORIGEM_PROCESSO,
             model_version=self._model_version,
-            explicacao=contribuicoes,
-            explicacao_texto=self._explicador_llm.explicar_em_texto(contribuicoes, contexto={}),
-        )
+        ):
+            try:
+                X = inference.construir_features(payload, self._mapa_especialidade)
+            except inference.EspecialidadeDesconhecidaError as exc:
+                raise ErroValidacao(str(exc)) from exc
+
+            probabilidade = float(inference.predizer(self._model, X)[0])
+            threshold = float(inference.PARAMS["decision"]["threshold"])
+            contribuicoes = explicar(self._explainer, X)
+
+            return ResultadoPredicao(
+                probabilidade=probabilidade,
+                classe_prevista=int(probabilidade >= threshold),
+                threshold_usado=threshold,
+                model_version=self._model_version,
+                explicacao=contribuicoes,
+                explicacao_texto=self._explicador_llm.explicar_em_texto(
+                    contribuicoes, contexto={}
+                ),
+            )
 
 
 class ClientePredicaoAPI:
@@ -517,3 +530,56 @@ def obter_cliente(backend: str | None = None):
     raise ValueError(
         f"PREDICT_BACKEND inválido: {backend!r} -- use 'processo' (default, ADR-005) ou 'api'"
     )
+
+
+LIMITE_EVENTOS_OBSERVABILIDADE = 5000
+
+
+def resumo_observabilidade(janela_horas: int = 24) -> dict:
+    """Números do SLO §2/§4/§5 lidos de `eventos_app`/`predicoes` (Passo 8.5,
+    ADR-006) -- é daqui que sai a aba "Observabilidade" e, no Passo 12, os
+    valores da coluna "medido" do SLA/SLO.
+
+    `truncado` não é detalhe de implementação: o p95 é calculado em Python
+    sobre as linhas lidas (o PostgREST não expõe `percentile_cont`), então uma
+    janela que bateu no limite produziria um p95 do pedaço mais recente
+    apresentado como se fosse o da janela inteira. Melhor dizer na tela que a
+    janela foi cortada do que publicar um número errado no pitch."""
+    desde = observabilidade.inicio_da_janela(janela_horas)
+    try:
+        eventos = repositories.buscar_eventos_app(desde, limite=LIMITE_EVENTOS_OBSERVABILIDADE)
+        total_predicoes, com_explicacao = repositories.contar_predicoes_e_explicacoes(desde)
+        ultimo_job = repositories.ultimo_evento_app(
+            observabilidade.TIPO_JOB_D2, status=observabilidade.STATUS_OK
+        )
+    except Exception as exc:
+        _relatar_falha_persistencia(exc, "Falha ao consultar a observabilidade")
+
+    predicoes = [e for e in eventos if e["tipo"] == observabilidade.TIPO_PREDICAO]
+    latencias = [e["duracao_ms"] for e in predicoes if e["duracao_ms"] is not None]
+
+    return {
+        "janela_horas": janela_horas,
+        "predicoes": len(predicoes),
+        "p50_ms": observabilidade.percentil(latencias, 50),
+        "p95_ms": observabilidade.percentil(latencias, 95),
+        "erros": sum(1 for e in eventos if e["status"] == observabilidade.STATUS_ERRO),
+        "por_origem": {
+            origem: sum(1 for e in predicoes if e["origem"] == origem)
+            for origem in sorted({e["origem"] for e in predicoes})
+        },
+        "cobertura_explicacao": {
+            "predicoes": total_predicoes,
+            "com_explicacao": com_explicacao,
+            # None, não 0%, quando não houve predição na janela: "nenhuma
+            # predição" e "nenhuma predição explicada" são coisas diferentes, e
+            # o SLO §4 só é violado no segundo caso.
+            "percentual": (com_explicacao / total_predicoes) if total_predicoes else None,
+        },
+        "ultimo_job_d2": (
+            datetime.fromisoformat(ultimo_job["criado_em"]).astimezone(fuso_da_clinica())
+            if ultimo_job
+            else None
+        ),
+        "truncado": len(eventos) >= LIMITE_EVENTOS_OBSERVABILIDADE,
+    }

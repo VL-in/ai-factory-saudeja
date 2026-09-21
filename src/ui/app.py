@@ -34,7 +34,7 @@ from ui import logic  # noqa: E402
 # a aba de acompanhamento do job.
 APP_ENV = os.environ.get("APP_ENV", "dev")
 
-ABAS_FUNCIONARIO = ["Testar predição", "Explicabilidade", "Fila do dia"]
+ABAS_FUNCIONARIO = ["Testar predição", "Explicabilidade", "Fila do dia", "Observabilidade"]
 ABA_DEV = "Dev: disparo manual"
 
 CHAVE_RESULTADO = "ultimo_resultado"
@@ -279,6 +279,94 @@ def _aba_fila_do_dia():
     _mostrar_contribuicoes(item.explicacao, item.explicacao_texto)
 
 
+JANELAS_OBSERVABILIDADE = {"Últimas 24h": 24, "Últimos 7 dias": 24 * 7, "Últimos 30 dias": 24 * 30}
+SLO_P95_MS = 2000  # SLO §2: p95 de uma predição já aquecida < 2s
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _resumo_observabilidade(janela_horas: int):
+    """Mesmo TTL curto da sidebar: sem cache, cada widget mexido dispararia
+    três consultas de agregação; com TTL longo, o painel mentiria por minutos
+    depois de o job rodar."""
+    return logic.resumo_observabilidade(janela_horas)
+
+
+def _aba_observabilidade():
+    st.subheader("Observabilidade")
+    st.caption(
+        "Números do SLO medidos em produção, lidos da tabela `eventos_app` "
+        "(Passo 8.5, ADR-006). Uptime (§1) e execução dos jobs agendados (§5) "
+        "são medidos **de fora** — por sonda externa e dead-man's-switch —, "
+        "porque um coletor que mora dentro do Space some junto com ele quando "
+        "hiberna, inclusive a evidência de que caiu."
+    )
+
+    rotulo = st.selectbox("Janela", options=list(JANELAS_OBSERVABILIDADE))
+    try:
+        resumo = _resumo_observabilidade(JANELAS_OBSERVABILIDADE[rotulo])
+    except logic.ErroPersistencia as exc:
+        # Aviso, não erro: é painel de diagnóstico exibido passivamente (mesma
+        # escolha do status do banco na sidebar) -- sem ele, predição, fila e
+        # cadastro seguem funcionando normalmente.
+        st.warning(f"Observabilidade indisponível: {exc}")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric(
+        "p95 de latência",
+        f"{resumo['p95_ms']:.0f} ms" if resumo["p95_ms"] is not None else "—",
+        help=f"SLO §2: < {SLO_P95_MS} ms numa predição já aquecida.",
+    )
+    col2.metric("Predições servidas", resumo["predicoes"])
+    col3.metric(
+        "Eventos com erro",
+        resumo["erros"],
+        help="Predição que falhou ou agendamento malformado no job D-2.",
+    )
+
+    if resumo["p95_ms"] is not None and resumo["p95_ms"] > SLO_P95_MS:
+        st.error(f"p95 acima do alvo do SLO §2 ({SLO_P95_MS} ms).")
+
+    cobertura = resumo["cobertura_explicacao"]
+    col4, col5 = st.columns(2)
+    col4.metric(
+        "Cobertura de explicação (SLO §4)",
+        f"{cobertura['percentual']:.0%}" if cobertura["percentual"] is not None else "—",
+        help=(
+            f"{cobertura['com_explicacao']} de {cobertura['predicoes']} predições gravadas "
+            "com `explicacao_shap`. O alvo é 100%: a diretora médica não aceita caixa preta."
+        ),
+    )
+    col5.metric(
+        "Última execução do job D-2",
+        resumo["ultimo_job_d2"].strftime("%d/%m %H:%M") if resumo["ultimo_job_d2"] else "—",
+        help=(
+            "Visão de dentro. A prova de que o job agendado NÃO deixou de rodar "
+            "vem do dead-man's-switch externo (SLO §5), que alerta pelo silêncio."
+        ),
+    )
+
+    if cobertura["percentual"] is not None and cobertura["percentual"] < 1:
+        st.error(
+            "Há predição gravada sem explicação SHAP -- violação do SLO §4, "
+            "não só um gráfico faltando."
+        )
+
+    if resumo["por_origem"]:
+        st.caption(
+            "Predições por origem: "
+            + " · ".join(f"`{origem}` {n}" for origem, n in resumo["por_origem"].items())
+            + " — `processo` é a UI chamando o modelo direto (ADR-005 b), "
+            "`api` é a rota `/predict`, `job` é o D-2."
+        )
+
+    if resumo["truncado"]:
+        st.warning(
+            "Janela truncada no limite de eventos lidos -- o p95 acima cobre só "
+            "a parte mais recente do período, não ele inteiro."
+        )
+
+
 def _aba_dev():
     st.subheader("Dev: disparo manual do job de inferência")
     st.caption(
@@ -326,8 +414,10 @@ def _visao_funcionario():
         _aba_explicabilidade()
     with abas[2]:
         _aba_fila_do_dia()
+    with abas[3]:
+        _aba_observabilidade()
     if APP_ENV == "dev":
-        with abas[3]:
+        with abas[4]:
             _aba_dev()
 
 

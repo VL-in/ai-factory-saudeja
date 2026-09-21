@@ -169,6 +169,21 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 
 **Política de retenção**: definir no momento da migration (ex. descartar eventos com mais de N meses) — a tabela cresce a cada request e divide o teto do free tier com os dados do produto. Registrado como risco no ADR-006.
 
+### Estado: implementado em 2026-09-21 — o que mudou em relação ao texto acima
+
+Seis ajustes decididos ao implementar, todos registrados como emendas ao [ADR-006](adr/adr-006-observabilidade.md):
+
+1. **Não depende do Passo 8.** O texto acima posicionava o 8.5 depois do Passo 8 "porque reaproveita o logging estruturado criado lá" — mas o Passo 8 ainda não foi executado (`src/logging_config.py` não existe). A instrumentação foi escrita sem nenhuma dependência dele: a fonte de verdade é a tabela, não o log. Isso na verdade *reforça* a decisão do ADR-006 de que o log do Space é efêmero demais para servir de evidência — e, de quebra, não emite nenhuma linha nova de log, então não abre superfície de PII antes de o Passo 8 existir.
+2. **O caminho em processo também é instrumentado**, não só o middleware da API. Medir apenas `/predict` calcularia o p95 do SLO §2 sobre a rota que, por decisão do [ADR-005](adr/adr-005-integracoes-implicitas.md) (b), quase não recebe tráfego — a predição que o funcionário espera acontece em processo (`ui/logic.py::ClientePredicaoEmProcesso`) e no job. A coluna `origem` (`api`/`processo`/`job`) mantém os caminhos separáveis em vez de somados num número só.
+3. **`/health` fica fora da instrumentação.** A sonda externa bate nela de minutos em minutos; registrar cada batida somaria milhares de linhas por mês que não dizem nada sobre latência de predição, ocupando o free tier. Uptime é medido por quem sonda, de fora — que é o próprio princípio do ADR.
+4. **A guarda de PII precisou ser estendida, ao contrário do que o texto acima previa.** `tests/test_coerencia_repo.py` faz grep por *nome de coluna* nas migrations; `detalhe jsonb` aceita qualquer chave e passaria batido. A proteção passou a ser uma allowlist fechada em `src/observabilidade.py` (contadores, rota, status HTTP e *nome de classe* de exceção — nunca mensagem de erro, que no caso da Infobip ecoa o telefone do paciente), com teste de runtime e checagem estática sobre os call sites de `src/`.
+5. **Retenção roda no job diário** (`purgar_eventos_antigos`, `OBSERVABILIDADE_RETENCAO_DIAS`, default 90), não em `pg_cron`: o job já é diário, e adicionar agendador é adicionar infra a manter — o mesmo critério que descartou Grafana/OTel no ADR.
+6. **Sondas externas e alerta continuam pendentes**, como o próprio plano previa: UptimeRobot e Healthchecks.io dependem de URL pública (Passo 11) e os workflows que pingam são do Passo 10. O que o 8.5 entrega é a camada interna inteira, de ponta a ponta.
+
+**Verificado**: `pytest` rápido verde (**150 testes**, 17 novos em `test_observabilidade.py`), `ruff` limpo, round-trip e purga contra o Supabase local (`-m integracao`), e a aba "Observabilidade" renderizando com e sem banco disponível.
+
+**Achado colateral (corrigido junto)**: `tests/test_ui_smoke.py` apagava `SUPABASE_URL`/`SUPABASE_SECRET_KEY` com `monkeypatch.delenv` para isolar a UI do banco — mas `config_projeto` chama `load_dotenv()` no import, e variável *apagada* é exatamente o caso em que o dotenv a redefine. Quem tivesse `.env` local rodava a suíte de UI contra o projeto Supabase **real**. Trocado por string vazia (a chave existe, o dotenv não sobrescreve, `db/client.py` trata como ausente). `tests/conftest.py` ganhou uma fixture autouse que aponta o destino de `eventos_app` para um escritor nulo durante toda a suíte, pelo mesmo motivo.
+
 ---
 
 ## Passo 9 — Re-treino mensal automatizado + gate de rollback + deploy automático do modelo promovido
