@@ -30,6 +30,7 @@ import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
 from config_projeto import caminho_de_env, hoje_na_clinica  # noqa: E402
 from explain import construir_explicador, explicar  # noqa: E402
+from features import calcular_idade  # noqa: E402
 from messaging.client import StubMessagingClient  # noqa: E402
 
 
@@ -52,15 +53,21 @@ def obter_cliente_mensageria():
 
 
 def _payload_de_agendamento(agendamento: dict) -> dict:
+    """`pacientes.data_nascimento` (não `idade` -- ver migration
+    20260920010000_cadastro_pacientes.sql) precisa virar idade aqui, na hora
+    da predição, calculada em relação à data da própria consulta -- mesmo
+    conceito que `idade` já representa no dataset histórico de treino."""
     paciente = agendamento["pacientes"]
+    data_hora_agendada = datetime.fromisoformat(agendamento["data_hora_agendada"])
+    data_nascimento = date.fromisoformat(paciente["data_nascimento"])
     return {
-        "idade": paciente["idade"],
+        "idade": calcular_idade(data_nascimento, data_hora_agendada.date()),
         "sexo": paciente["sexo"],
         "especialidade": agendamento["especialidade"],
         "distancia_km": float(agendamento["distancia_km"]),
         "dias_entre_agendamento_consulta": agendamento["dias_entre_agendamento_consulta"],
         "historico_noshow": agendamento["historico_noshow"],
-        "data_hora_agendada": datetime.fromisoformat(agendamento["data_hora_agendada"]),
+        "data_hora_agendada": data_hora_agendada,
     }
 
 
@@ -94,8 +101,8 @@ def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) 
             X = inference.construir_features(payload, mapa_especialidade)
         except (KeyError, inference.EspecialidadeDesconhecidaError) as exc:
             # Agendamento malformado (especialidade fora do mapa, paciente
-            # sem idade/sexo): registra e segue para o próximo -- não é
-            # motivo para deixar a fila inteira sem predição.
+            # sem data_nascimento/sexo): registra e segue para o próximo --
+            # não é motivo para deixar a fila inteira sem predição.
             resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
             continue
 

@@ -39,19 +39,46 @@ def verificar_conexao() -> None:
     obter_client().table("pacientes").select("id").limit(1).execute()
 
 
-def inserir_paciente(id_paciente_externo: str, idade: int, sexo: str) -> dict:
+def inserir_paciente(id_paciente_externo: str, data_nascimento: date, sexo: str) -> dict:
     """Upsert por `id_paciente_externo` (unique -- ver migration): recadastrar
-    o mesmo paciente atualiza os dados em vez de duplicar a linha."""
+    o mesmo paciente atualiza os dados em vez de duplicar a linha.
+
+    `id_paciente_externo` já chega como o hash do CPF (gerado em
+    `ui/logic.py::_id_paciente_externo_de_cpf`), nunca o CPF em si -- esta
+    função só persiste o que recebe. `data_nascimento` substitui `idade`
+    (Sec4.1/cadastro realista): a idade em si é calculada sob demanda por
+    `features.calcular_idade`, nunca gravada."""
     client = obter_client()
     resposta = (
         client.table("pacientes")
         .upsert(
-            {"id_paciente_externo": id_paciente_externo, "idade": idade, "sexo": sexo},
+            {
+                "id_paciente_externo": id_paciente_externo,
+                "data_nascimento": data_nascimento.isoformat(),
+                "sexo": sexo,
+            },
             on_conflict="id_paciente_externo",
         )
         .execute()
     )
     return resposta.data[0]
+
+
+def contar_no_shows_anteriores(id_paciente: str) -> int:
+    """Historico_noshow deixou de ser digitado no cadastro (o paciente não
+    tem como, nem deveria, autodeclarar isso): é contado a partir dos
+    agendamentos passados deste paciente marcados como `status='no_show'`
+    nesta clínica. Paciente novo (ou sem nenhum 'no_show' registrado ainda)
+    começa em 0 -- zero é o valor correto, não um placeholder."""
+    client = obter_client()
+    resposta = (
+        client.table("agendamentos")
+        .select("id", count="exact")
+        .eq("id_paciente", id_paciente)
+        .eq("status", "no_show")
+        .execute()
+    )
+    return resposta.count or 0
 
 
 def inserir_agendamento(
@@ -83,7 +110,7 @@ def inserir_agendamento(
 _COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
     "id, especialidade, distancia_km, data_hora_agendada, "
     "dias_entre_agendamento_consulta, historico_noshow, "
-    "pacientes(idade, sexo, id_paciente_externo)"
+    "pacientes(data_nascimento, sexo, id_paciente_externo)"
 )
 
 
@@ -93,8 +120,8 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
     roda uma vez ao dia e não deve reprocessar quem já tem `predicoes`.
 
     Seleciona só as colunas que o job de inferência (`construir_features`)
-    de fato consome -- de `agendamentos` e do `pacientes` embutido (idade,
-    sexo) -- em vez de `select("*, pacientes(*)")`: evita trafegar/desserializar
+    de fato consome -- de `agendamentos` e do `pacientes` embutido
+    (data_nascimento, sexo) -- em vez de `select("*, pacientes(*)")`: evita trafegar/desserializar
     colunas sem uso (ex. `criado_em`, `status`) numa consulta que roda sobre a
     fila inteira do dia. O embed depende do índice em `agendamentos.id_paciente`
     (ver migration `20260920000000_idx_agendamentos_id_paciente.sql`) para o

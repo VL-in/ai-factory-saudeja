@@ -334,17 +334,35 @@ def _visao_funcionario():
 def _visao_paciente():
     st.subheader("Cadastro e agendamento")
     st.caption(
-        "Cadastro mínimo por design (LGPD, BRIEFING.md): só o identificador do "
-        "paciente no sistema da clínica + atributos não identificáveis -- "
-        "nunca nome/CPF."
+        "Nome completo e CPF ficam só nesta tela -- o banco nunca grava "
+        "nenhum dos dois (LGPD, minimização de PII por design, "
+        "docs/architecture.md §4.1). O identificador do paciente no banco é "
+        "gerado automaticamente a partir do CPF, e o histórico de no-show é "
+        "calculado pela clínica, não autodeclarado."
     )
 
     especialidades = logic.listar_especialidades()
 
+    # Fora do st.form: precisa reagir de imediato à data escolhida para
+    # oferecer só os horários que a clínica atende naquele dia (seg-sex,
+    # sábado de manhã, nunca domingo) -- dentro de um form isso só
+    # atualizaria no submit, um passo tarde demais.
+    data_consulta = st.date_input("Data da consulta", value=logic.proxima_data_disponivel())
+    horarios = logic.horarios_disponiveis(data_consulta)
+    if not horarios:
+        st.warning("A clínica não atende aos domingos -- escolha outra data.")
+
     with st.form("form_paciente"):
-        id_paciente_externo = st.text_input("Identificador do paciente na clínica")
+        nome_completo = st.text_input("Nome completo")
+        cpf = st.text_input("CPF", placeholder="000.000.000-00")
+
         col1, col2 = st.columns(2)
-        idade = col1.number_input("Idade", min_value=0, max_value=120, value=30, step=1)
+        data_nascimento = col1.date_input(
+            "Data de nascimento",
+            value=date(1990, 1, 1),
+            min_value=date(1900, 1, 1),
+            max_value=logic.hoje_na_clinica(),
+        )
         sexo = col2.selectbox("Sexo", options=["F", "M"])
 
         col3, col4 = st.columns(2)
@@ -356,16 +374,16 @@ def _visao_paciente():
             "Distância (km)", min_value=0.0, max_value=500.0, value=5.5, step=0.5
         )
 
-        col5, col6, col7 = st.columns(3)
-        historico_noshow = col5.number_input(
-            "No-shows anteriores", min_value=0, max_value=50, value=0, step=1
-        )
         # `dias_entre_agendamento_consulta` não é perguntado: o agendamento
         # está sendo feito agora, então ele é derivado da data escolhida
         # (logic.dias_ate_consulta). Perguntar permitiria gravar um valor
         # incoerente com a própria data -- e é feature do modelo.
-        data_consulta = col6.date_input("Data da consulta", value=logic.hoje_na_clinica())
-        hora_consulta = col7.time_input("Hora da consulta", value=time(9, 0))
+        if horarios:
+            hora_consulta = st.selectbox(
+                "Horário da consulta", options=horarios, format_func=lambda h: h.strftime("%H:%M")
+            )
+        else:
+            hora_consulta = None
         st.caption(
             f"Antecedência do agendamento: **{logic.dias_ate_consulta(data_consulta)} dia(s)** "
             "-- calculada a partir da data escolhida, é uma das features do modelo."
@@ -376,28 +394,33 @@ def _visao_paciente():
     if not enviado:
         return
 
-    if not id_paciente_externo:
-        st.warning("Informe o identificador do paciente.")
+    if not nome_completo:
+        st.warning("Informe o nome completo do paciente.")
+        return
+    if hora_consulta is None:
+        st.warning("Escolha uma data em que a clínica atenda.")
         return
 
     try:
         logic.cadastrar_paciente_e_agendamento(
-            id_paciente_externo=id_paciente_externo,
-            idade=idade,
+            cpf=cpf,
+            data_nascimento=data_nascimento,
             sexo=sexo,
             especialidade=especialidade,
             distancia_km=distancia_km,
-            historico_noshow=historico_noshow,
             data_consulta=data_consulta,
             hora_consulta=hora_consulta,
         )
+    except logic.ErroValidacaoCadastro as exc:
+        st.warning(str(exc))
+        return
     except logic.ErroPersistencia as exc:
         st.error(f"Não foi possível cadastrar: {exc}")
         return
 
     st.success(
-        f"Agendamento criado para o paciente {id_paciente_externo} em "
-        f"{data_consulta:%d/%m/%Y} às {hora_consulta:%H:%M}."
+        f"Agendamento criado para {nome_completo} em "
+        f"{data_consulta:%d/%m/%Y} às {hora_consulta.strftime('%H:%M')}."
     )
     st.caption(
         "A predição de no-show deste agendamento será calculada pelo job D-2 "

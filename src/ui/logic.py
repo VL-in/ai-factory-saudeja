@@ -20,7 +20,9 @@ então não há lógica de predição duplicada -- só a forma de invocá-la. O 
 de paridade em tests/test_ui_logic.py trava isso: mesmo payload, mesma
 probabilidade nos dois backends.
 """
+import hashlib
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
@@ -32,6 +34,7 @@ if str(SRC_DIR) not in sys.path:
 
 import httpx  # noqa: E402
 
+import agenda_clinica  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
 import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
@@ -56,6 +59,13 @@ class ErroValidacao(ErroPredicao):
 class ErroIndisponivel(ErroPredicao):
     """Backend de predição fora do ar / inesperado (API não responde, modelo
     ausente). Culpa do sistema, não do dado."""
+
+
+class ErroValidacaoCadastro(Exception):
+    """Dado do formulário de cadastro (Passo 5) recusado antes de chegar ao
+    banco -- CPF com dígito verificador inválido, horário fora da grade de
+    funcionamento da clínica (agenda_clinica). Mesma filosofia de
+    ErroValidacao para a predição: culpa do preenchimento, não do sistema."""
 
 
 @dataclass(frozen=True)
@@ -328,6 +338,53 @@ def resumo_da_fila(itens: list[ItemFila]) -> dict:
     }
 
 
+def normalizar_cpf(cpf: str) -> str:
+    """Mantém só os dígitos -- o formulário aceita '123.456.789-00' ou só os
+    números, mesma tolerância que um sistema de cadastro real teria."""
+    return re.sub(r"\D", "", cpf or "")
+
+
+def cpf_valido(cpf: str) -> bool:
+    """Validação do dígito verificador do CPF -- barra digitação errada antes
+    de o número virar identificador do paciente. Não consulta a Receita
+    Federal, só confere a coerência aritmética do número em si."""
+    digitos = normalizar_cpf(cpf)
+    if len(digitos) != 11 or digitos == digitos[0] * 11:
+        return False
+
+    def _digito_verificador(base: str) -> str:
+        pesos = range(len(base) + 1, 1, -1)
+        soma = sum(int(d) * peso for d, peso in zip(base, pesos, strict=True))
+        resto = (soma * 10) % 11
+        return "0" if resto == 10 else str(resto)
+
+    return digitos[9] == _digito_verificador(digitos[:9]) and digitos[10] == _digito_verificador(
+        digitos[:10]
+    )
+
+
+def _id_paciente_externo_de_cpf(cpf: str) -> str:
+    """O CPF nunca é persistido (minimização de PII por design,
+    architecture.md §4.1) -- o identificador que o banco guarda é o hash dele,
+    gerado automaticamente, não mais um texto livre digitado pelo paciente.
+    sha256 em vez de md5, mesmo motivo de inference.calcular_model_version
+    (md5 levanta ValueError em host com OpenSSL em modo FIPS)."""
+    return hashlib.sha256(normalizar_cpf(cpf).encode()).hexdigest()
+
+
+def horarios_disponiveis(dia: date) -> list[time]:
+    """Slots que a clínica atende em `dia` -- vazio aos domingos. O cadastro
+    usa isto para não deixar escolher um horário que o dataset de treino
+    nunca viu (scripts/gerar_timestamp_sintetico.py)."""
+    return agenda_clinica.horarios_do_dia(dia)
+
+
+def proxima_data_disponivel(a_partir_de: date | None = None) -> date:
+    """Data default do formulário de cadastro -- nunca um domingo sem
+    nenhum horário para oferecer."""
+    return agenda_clinica.proximo_dia_valido(a_partir_de or hoje_na_clinica())
+
+
 def dias_ate_consulta(data_consulta: date, hoje: date | None = None) -> int:
     """`dias_entre_agendamento_consulta` do ponto de vista do cadastro: o
     agendamento está sendo feito AGORA, então o valor é derivado da data
@@ -352,26 +409,48 @@ def status_banco() -> dict:
 
 
 def cadastrar_paciente_e_agendamento(
-    id_paciente_externo: str,
-    idade: int,
+    cpf: str,
+    data_nascimento: date,
     sexo: str,
     especialidade: str,
     distancia_km: float,
-    historico_noshow: int,
     data_consulta: date,
     hora_consulta: time,
 ) -> dict:
-    """Cadastro do paciente (visão Paciente, Passo 5) -- upsert do paciente
-    por id_paciente_externo seguido do agendamento.
+    """Cadastro do paciente (visão Paciente, Passo 5 + ajuste de realismo) --
+    upsert do paciente seguido do agendamento.
+
+    Nome completo não é parâmetro aqui de propósito: a tela usa o valor
+    digitado só para a mensagem de confirmação, sem passar por esta função
+    nem tocar o banco -- nome nunca é persistido (LGPD, architecture.md
+    §4.1). CPF também não é gravado: vira só o hash que identifica o
+    paciente (`_id_paciente_externo_de_cpf`), substituindo o antigo campo de
+    identificador livre digitado na tela.
+
+    `historico_noshow` deixou de ser parâmetro também -- não é algo que o
+    paciente tem como (ou deveria) autodeclarar; é contado a partir do
+    histórico real de agendamentos dele nesta clínica
+    (`repositories.contar_no_shows_anteriores`).
 
     `data_hora_agendada` vai com o fuso da clínica explícito: a coluna é
     `timestamptz`, então gravar um datetime naive deixaria o Postgres
     interpretá-lo no fuso do servidor (UTC no container) e a consulta
     apareceria 3h deslocada na fila do dia."""
+    if not cpf_valido(cpf):
+        raise ErroValidacaoCadastro("CPF inválido -- confira os números digitados.")
+    if not agenda_clinica.horario_valido(data_consulta, hora_consulta):
+        raise ErroValidacaoCadastro(
+            "Horário fora do funcionamento da clínica para esta data (seg-sex "
+            "08h-11h30/13h-18h, sáb 08h-11h30, fechado aos domingos)."
+        )
+
     try:
         paciente = repositories.inserir_paciente(
-            id_paciente_externo=id_paciente_externo, idade=idade, sexo=sexo
+            id_paciente_externo=_id_paciente_externo_de_cpf(cpf),
+            data_nascimento=data_nascimento,
+            sexo=sexo,
         )
+        historico_noshow = repositories.contar_no_shows_anteriores(paciente["id"])
         return repositories.inserir_agendamento(
             id_paciente=paciente["id"],
             especialidade=especialidade,

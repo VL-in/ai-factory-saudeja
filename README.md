@@ -158,6 +158,8 @@ docker run --rm -p 8000:8000 -v "%cd%/data:/app/data" saudeja-api
 
 **Datas sempre no fuso da clínica** (`TIMEZONE_CLINICA`, default `America/Sao_Paulo`): "fila do dia 19/09" são as consultas de 19/09 em São Paulo, e o cadastro grava `data_hora_agendada` com o fuso explícito. O container roda em UTC — sem isso, depois das 21h a fila do dia e o job D-2 trabalhariam com a data errada, e os horários apareceriam 3h deslocados. `dias_entre_agendamento_consulta` não é perguntado no cadastro: é derivado da data escolhida (`logic.dias_ate_consulta`), porque é feature do modelo e um valor digitado poderia contradizer a própria data da consulta.
 
+**Cadastro do paciente fiel à realidade de uma clínica** (2026-09-20): a tela pede nome completo, CPF e data de nascimento — não mais um "identificador" digitado livremente, nem idade, nem histórico de no-show autodeclarado. Nenhum dos três primeiros é persistido em texto puro: `id_paciente_externo` passa a ser o hash sha256 do CPF (`logic._id_paciente_externo_de_cpf`), gerado automaticamente; nome completo só aparece na mensagem de confirmação em tela; e a idade usada como feature é sempre calculada a partir da data de nascimento (`features.calcular_idade`), nunca gravada. `historico_noshow` deixou de ser campo do formulário: é contado a partir dos agendamentos passados do próprio paciente com `status='no_show'` (`repositories.contar_no_shows_anteriores`). Data e horário da consulta só oferecem os slots que a clínica de fato atende (`src/agenda_clinica.py`, mesma grade usada para gerar `data_hora_agendada` no dataset histórico — seg-sex 08h-11h30/13h-18h, sáb 08h-11h30, fechado aos domingos), para o cadastro nunca produzir um agendamento fora do domínio que o modelo aprendeu.
+
 ```powershell
 streamlit run src/ui/app.py
 ```
@@ -186,7 +188,7 @@ Para rodar interface e API juntas em container, do jeito que vão para produçã
 
 ## Banco de dados (Supabase)
 
-`src/db/client.py` (client único, `supabase-py`) e `src/db/repositories.py` (`inserir_paciente`, `inserir_agendamento`, `buscar_agendamentos_d2_pendentes`, `gravar_predicao`, `registrar_mensagem`, `buscar_fila_do_dia`) sobre o schema de `supabase/migrations/`. Minimização de PII por design: `pacientes` guarda só `id_paciente_externo` + atributos demográficos não identificáveis, nunca nome/CPF/email/telefone — guardado automaticamente por `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`. RLS habilitado em todas as tabelas, sem policies (só a chave secreta do backend acessa, ver `.env.example`).
+`src/db/client.py` (client único, `supabase-py`) e `src/db/repositories.py` (`inserir_paciente`, `contar_no_shows_anteriores`, `inserir_agendamento`, `buscar_agendamentos_d2_pendentes`, `gravar_predicao`, `registrar_mensagem`, `buscar_fila_do_dia`) sobre o schema de `supabase/migrations/`. Minimização de PII por design: `pacientes` guarda só `id_paciente_externo` (hash sha256 do CPF, gerado em `ui/logic.py`) + atributos demográficos não identificáveis (`data_nascimento`, `sexo`), nunca nome/CPF/email/telefone — guardado automaticamente por `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`. RLS habilitado em todas as tabelas, sem policies (só a chave secreta do backend acessa, ver `.env.example`).
 
 ### Ambiente local (Supabase CLI)
 

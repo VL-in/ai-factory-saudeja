@@ -1,6 +1,8 @@
+from datetime import date
+
 import pandas as pd
 
-from features import extrair_features_temporais
+from features import calcular_idade, extrair_features_temporais
 
 
 def test_extrai_dia_de_semana_e_horario_do_timestamp(df_consultas):
@@ -36,6 +38,16 @@ def test_dia_de_semana_e_horario_respeitam_grade_de_negocio_no_dataset_real():
     assert df.loc[sabado, "horario"].between(8, 11).all(), (
         "sabado so funciona ate 11:30 -- nao deveria haver horario >= 12"
     )
+
+
+def test_calcular_idade_antes_do_aniversario_no_ano_da_referencia():
+    # Nasceu em 20/04; em 19/04 do ano de referência ainda não fez aniversário.
+    assert calcular_idade(date(1998, 4, 20), date(2026, 4, 19)) == 27
+
+
+def test_calcular_idade_no_dia_ou_apos_o_aniversario():
+    assert calcular_idade(date(1998, 4, 20), date(2026, 4, 20)) == 28
+    assert calcular_idade(date(1998, 4, 20), date(2026, 12, 31)) == 28
 
 
 def test_extrair_features_temporais_nao_muta_o_df_recebido(df_consultas):

@@ -288,3 +288,52 @@ def test_backend_desconhecido_falha_alto_em_vez_de_cair_num_default(monkeypatch)
 
     with pytest.raises(ValueError, match="PREDICT_BACKEND inválido"):
         logic.obter_cliente()
+
+
+# --- CPF: identificador automático do cadastro (Passo 5, ajuste de realismo) ---
+
+
+@pytest.mark.parametrize(
+    "cpf",
+    ["111.444.777-35", "11144477735", "  111.444.777-35  "],
+)
+def test_cpf_valido_aceita_numero_com_digito_verificador_correto(cpf):
+    assert logic.cpf_valido(cpf) is True
+
+
+@pytest.mark.parametrize(
+    "cpf",
+    [
+        "111.444.777-36",  # dígito verificador errado
+        "111.111.111-11",  # todos os dígitos iguais (formalmente "válido", mas descartado)
+        "123.456.789-00",
+        "123",
+        "",
+    ],
+)
+def test_cpf_valido_rejeita_numero_incoerente(cpf):
+    assert logic.cpf_valido(cpf) is False
+
+
+def test_id_paciente_externo_de_cpf_e_deterministico_e_nao_e_o_cpf_em_si():
+    cpf = "111.444.777-35"
+
+    hash1 = logic._id_paciente_externo_de_cpf(cpf)
+    hash2 = logic._id_paciente_externo_de_cpf("11144477735")  # mesma pessoa, formatação diferente
+
+    assert hash1 == hash2
+    assert hash1 not in (cpf, "11144477735")  # nunca o CPF cru, formatado ou não
+    assert len(hash1) == 64  # sha256 em hexadecimal
+
+
+# --- horários do cadastro respeitam a grade da clínica (agenda_clinica) -------
+
+
+def test_horarios_disponiveis_delega_para_agenda_clinica():
+    domingo = date(2026, 1, 11)  # ver ANCORA em scripts/gerar_timestamp_sintetico.py
+    assert logic.horarios_disponiveis(domingo) == []
+
+
+def test_proxima_data_disponivel_nunca_cai_num_domingo():
+    domingo = date(2026, 1, 11)
+    assert logic.proxima_data_disponivel(domingo).weekday() != 6

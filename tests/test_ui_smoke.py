@@ -53,15 +53,17 @@ def test_aba_de_dev_some_fora_do_ambiente_de_dev(monkeypatch):
 
 def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
     """Passo 5 liga a persistência de verdade -- sem SUPABASE_URL/
-    SUPABASE_SECRET_KEY no ambiente de teste, submeter falha com uma
-    mensagem amigável (ErroPersistencia), não com traceback."""
+    SUPABASE_SECRET_KEY no ambiente de teste, submeter com um CPF válido e um
+    horário dentro da grade da clínica falha com uma mensagem amigável
+    (ErroPersistencia), não com traceback."""
     at = _rodar(monkeypatch)
     at.sidebar.radio[0].set_value("Paciente").run()
 
     assert not at.exception
-    assert at.text_input  # campo de id_paciente_externo, não mais placeholder
+    assert at.text_input  # campos de nome completo/CPF, não mais placeholder
 
-    at.text_input[0].set_value("EXT-TESTE").run()
+    at.text_input[0].set_value("Paciente de Teste").run()  # nome completo
+    at.text_input[1].set_value("111.444.777-35").run()  # CPF válido
     at.button[0].click().run()  # 'Agendar'
 
     assert not at.exception

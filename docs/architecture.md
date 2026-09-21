@@ -34,6 +34,7 @@ ai-factory-saudeja/
 │   └── migrations/                    # schema versionado (pacientes/agendamentos/predicoes/mensagens_disparadas, Passo 5; índice de agendamentos.id_paciente, Passo 6)
 ├── src/
 │   ├── config_projeto.py              # REPO_ROOT + carregar_params(): caminhos independentes do CWD
+│   ├── agenda_clinica.py              # grade de horários da clínica (cadastro do paciente, Passo 5)
 │   ├── db/                            # client.py (supabase-py) + repositories.py (Passo 5)
 │   ├── preprocess.py                  # feature engineering + split treino/teste (stage 1)
 │   ├── train.py                       # SMOTE-NC + treino LightGBM, loga no MLflow (stage 2)
@@ -155,9 +156,9 @@ Name: Supabase (decisão vigente: [ADR-004](adr/adr-004-decisão-técnica.md), v
 
 Type: PostgreSQL gerenciado (SDK oficial, não camada Postgres genérica)
 
-Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda só `id_paciente_externo` (referência ao sistema core da clínica) + atributos demográficos não identificáveis, nunca nome/CPF (guarda automatizada em `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`). Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
+Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda só `id_paciente_externo` + atributos demográficos não identificáveis (`data_nascimento`, `sexo`), nunca nome/CPF (guarda automatizada em `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`). Desde o ajuste de cadastro de 2026-09-20, `id_paciente_externo` deixou de ser um texto livre digitado pelo paciente na UI: é o hash sha256 do CPF, calculado em `src/ui/logic.py::_id_paciente_externo_de_cpf` — o CPF (e o nome completo, também coletado na tela para a mensagem de confirmação) nunca chegam a este banco. `idade` também não é mais coluna: guarda-se `data_nascimento`, e a idade usada como feature de inferência é sempre calculada sob demanda (`src/features.py::calcular_idade`), nunca persistida. Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
 
-Key Schemas/Collections: `pacientes`, `agendamentos`, `predicoes` (inclui `explicacao_shap jsonb` e `explicacao_texto` nullable — plug do LLM, Passo 13), `mensagens_disparadas` (auditoria de envio, SLA §6). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
+Key Schemas/Collections: `pacientes`, `agendamentos` (status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb` e `explicacao_texto` nullable — plug do LLM, Passo 13), `mensagens_disparadas` (auditoria de envio, SLA §6). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
 
 ### 4.2. Tracking de experimentos de ML
 

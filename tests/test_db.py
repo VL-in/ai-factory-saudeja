@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import agenda_clinica
 from config_projeto import fuso_da_clinica, hoje_na_clinica
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -99,8 +100,13 @@ def db(monkeypatch):
     client_module._cliente = None
 
 
+DATA_NASCIMENTO_PADRAO = date(1985, 6, 15)
+
+
 def _criar_paciente_e_agendamento(repositories, dias: int, id_externo: str):
-    paciente = repositories.inserir_paciente(id_paciente_externo=id_externo, idade=40, sexo="F")
+    paciente = repositories.inserir_paciente(
+        id_paciente_externo=id_externo, data_nascimento=DATA_NASCIMENTO_PADRAO, sexo="F"
+    )
     data_hora = datetime.combine(
         hoje_na_clinica() + timedelta(days=dias), HORA_DA_CONSULTA, tzinfo=fuso_da_clinica()
     )
@@ -119,11 +125,15 @@ def _criar_paciente_e_agendamento(repositories, dias: int, id_externo: str):
 def test_inserir_paciente_e_upsert_por_id_externo(db):
     import db.repositories as repositories
 
-    p1 = repositories.inserir_paciente(id_paciente_externo="EXT-1", idade=30, sexo="F")
-    p2 = repositories.inserir_paciente(id_paciente_externo="EXT-1", idade=31, sexo="F")
+    p1 = repositories.inserir_paciente(
+        id_paciente_externo="EXT-1", data_nascimento=date(1990, 3, 1), sexo="F"
+    )
+    p2 = repositories.inserir_paciente(
+        id_paciente_externo="EXT-1", data_nascimento=date(1991, 3, 1), sexo="F"
+    )
 
     assert p1["id"] == p2["id"]
-    assert p2["idade"] == 31
+    assert p2["data_nascimento"] == "1991-03-01"
 
 
 @pytest.mark.integracao
@@ -257,25 +267,30 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
     interpretar o horário no fuso do servidor (UTC no container)."""
     from ui import logic
 
+    cpf_teste = "111.444.777-35"  # CPF com dígito verificador válido
+    id_externo_esperado = logic._id_paciente_externo_de_cpf(cpf_teste)
+    data_consulta = agenda_clinica.proximo_dia_valido(hoje_na_clinica() + timedelta(days=30))
+
     logic.cadastrar_paciente_e_agendamento(
-        id_paciente_externo="EXT-UI-3",
-        idade=22,
+        cpf=cpf_teste,
+        data_nascimento=date(1998, 4, 20),
         sexo="F",
         especialidade="cardiologia",
         distancia_km=18.0,
-        historico_noshow=3,
-        data_consulta=hoje_na_clinica() + timedelta(days=30),
+        data_consulta=data_consulta,
         hora_consulta=HORA_DA_CONSULTA,
     )
 
     item = next(
         i
-        for i in logic.buscar_fila_do_dia(hoje_na_clinica() + timedelta(days=30))
-        if i.id_paciente_externo == "EXT-UI-3"
+        for i in logic.buscar_fila_do_dia(data_consulta)
+        if i.id_paciente_externo == id_externo_esperado
     )
 
     assert item.data_hora_agendada.timetz().replace(tzinfo=None) == HORA_DA_CONSULTA
     agendamento = (
         db.table("agendamentos").select("dias_entre_agendamento_consulta").execute().data[0]
     )
-    assert agendamento["dias_entre_agendamento_consulta"] == 30
+    assert agendamento["dias_entre_agendamento_consulta"] == (
+        data_consulta - hoje_na_clinica()
+    ).days

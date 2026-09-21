@@ -11,7 +11,7 @@ depender de mock de rede.
 """
 import json
 import subprocess
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -79,6 +79,14 @@ def _payload(idade, sexo, especialidade, distancia_km, dias, historico_noshow, d
     }
 
 
+def _data_nascimento_para_idade(idade: int, referencia: datetime) -> date:
+    """Mesmo mês/dia da consulta, `idade` anos antes -- calcular_idade()
+    devolve exatamente `idade` de volta (ver src/features.py), então o job
+    (que deriva idade a partir de data_nascimento) reproduz o payload
+    original sintético linha por linha."""
+    return date(referencia.year - idade, referencia.month, referencia.day)
+
+
 def _probabilidade_real(payload: dict) -> float:
     model, mapa_esp = inference.carregar_modelo(MODEL_PATH)
     X = inference.construir_features(payload, mapa_esp)
@@ -86,8 +94,9 @@ def _probabilidade_real(payload: dict) -> float:
 
 
 def _criar_agendamento_d2(repositories, id_externo: str, payload: dict):
+    data_nascimento = _data_nascimento_para_idade(payload["idade"], payload["data_hora_agendada"])
     paciente = repositories.inserir_paciente(
-        id_paciente_externo=id_externo, idade=payload["idade"], sexo=payload["sexo"]
+        id_paciente_externo=id_externo, data_nascimento=data_nascimento, sexo=payload["sexo"]
     )
     agendamento = repositories.inserir_agendamento(
         id_paciente=paciente["id"],
