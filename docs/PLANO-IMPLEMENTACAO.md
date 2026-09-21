@@ -1,12 +1,12 @@
 # Plano de Implementação — SaudeJá: do pipeline de treino ao produto deployável
 
-> **Status:** em execução. Última geração: 2026-09-18. Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
+> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
 
 ## Contexto
 
 O repositório tem hoje um pipeline de ML maduro (DVC + MLflow + LightGBM + SMOTE-NC, 3 stages testados) mas **nenhuma camada de aplicação**: sem API, sem banco, sem interface, sem mensageria, sem explicabilidade, sem automação de re-treino. [`architecture.md`](architecture.md) e os [ADRs](adr/) já desenham a arquitetura-alvo (diagramas C4 nível 1/2), e [`BRIEFING.md`](BRIEFING.md)/[`SLA.md`](SLA.md)/[`SLO.md`](SLO.md) definem requisitos de negócio concretos (API + interface + threshold calibrado + explicabilidade obrigatória + LGPD + re-treino mensal automatizado com gate de rollback), com pitch para o Conselho de Investidores na Semana 16.
 
-Este plano constrói essa camada em **fatias verticais testáveis**: cada passo entrega uma parte funcional da arquitetura com um critério de verificação explícito antes de avançar para o próximo — nunca "big bang". A ordem prioriza o núcleo que tem SLA (predição → explicação → API → **interface Streamlit já como casca cedo, para servir de harness de teste visual** → banco → job → mensageria → LGPD → re-treino → CI/CD → deploy → validação final) e deixa a integração de LLM (TrueFoundry) como etapa opcional ao final, por não ser exigida pelo SLA/SLO. A interface entra logo depois da API (Passo 4) propositalmente: assim, cada capacidade nova (banco, job, mensageria) é plugada numa aba já existente e testada visualmente assim que fica pronta, em vez de só ser validada por `pytest`/`curl` até o fim do plano.
+Este plano constrói essa camada em **fatias verticais testáveis**: cada passo entrega uma parte funcional da arquitetura com um critério de verificação explícito antes de avançar para o próximo — nunca "big bang". A ordem prioriza o núcleo que tem SLA (predição → explicação → API → **interface Streamlit já como casca cedo, para servir de harness de teste visual** → banco → job → mensageria → LGPD → observabilidade → re-treino → CI/CD → deploy → validação final) e deixa a integração de LLM (TrueFoundry) como etapa opcional ao final, por não ser exigida pelo SLA/SLO. A interface entra logo depois da API (Passo 4) propositalmente: assim, cada capacidade nova (banco, job, mensageria) é plugada numa aba já existente e testada visualmente assim que fica pronta, em vez de só ser validada por `pytest`/`curl` até o fim do plano.
 
 **Decisões já validadas com a autora do projeto:**
 - Banco de dados: **SDK oficial `supabase-py`** (alinhado ao ADR-004), não camada Postgres genérica.
@@ -15,6 +15,7 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 - SHAP (Passo 2) já nasce com um **plug inativo** para um dia ser traduzido em texto por LLM (ativado no Passo 13).
 - A interface Streamlit (Passo 4) inclui uma aba de desenvolvedor para **disparar o pipeline de inferência manualmente** e acompanhar o pipeline sem depender de CLI/cron separados.
 - CI/CD usa a GitHub Action oficial **`huggingface/huggingface-sync-action`** para sincronizar `main` → Hugging Face Space (Passo 10/11), não um script de sync caseiro.
+- Observabilidade de **aplicação** (distinta da observabilidade de **ML**, que é o MLflow do ADR-004): três camadas gratuitas — Supabase como fonte de verdade, sonda externa de uptime e dead-man's-switch para os jobs agendados. Langfuse fica fora do núcleo, reservado ao Passo 13; OpenTelemetry e Grafana Cloud descartados. Ver [ADR-006](adr/adr-006-observabilidade.md) e o Passo 8.5.
 
 **Risco a não decidir agora, só monitorar**: recall atual da classe positiva é 0.522 (ADR-003), abaixo do alvo do SLO (≥0.75). Não é bug — é limite do dataset sintético pequeno (380 linhas). O plano cria os checkpoints certos para revisitar isso (Passo 6, com dados fluindo pelo job, e Passo 12, fechamento para o pitch) em vez de decidir threshold às cegas agora.
 
@@ -28,6 +29,7 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 
 - `docs/adr/adr-001-stack.md`: `Status` → `Superseded por ADR-004` nos pontos que ele resolve (banco, mensageria, LLM gateway, deploy); mantém válida a parte não contestada (Streamlit + FastAPI + DVC/MLflow).
 - `docs/adr/adr-004-decisão-técnica.md`: `Status` → `Aceito`; preencher a seção "Para deploy, foram considerados: -" (hoje vazia); registrar decisão de observabilidade: MLflow (já existe) cobre o pipeline de ML; Langfuse fica reservado só para tracing do LLM (Passo 13, opcional), não bloqueante; n8n descartado em favor do job agendado (Passo 6) + Infobip direto.
+  - **Emenda (2026-09-21)**: este item cobriu a observabilidade **de ML**. A observabilidade **de aplicação em produção** (uptime, latência, execução dos jobs, auditoria de PII) ficou em aberto e agora tem ADR próprio — [ADR-006](adr/adr-006-observabilidade.md), implementado no Passo 8.5. O ADR-001 fica superseded também no ponto "Langfuse para observabilidade", que ele tratava como ferramenta geral do produto.
 - Nova seção/ADR-005 curto registrando decisões de integração implícitas: (a) Scheduler D-2 via **GitHub Actions cron**, não processo interno — HF Spaces free pode dormir; (b) Streamlit e o job chamam o modelo **em processo** (import direto de `src/inference.py`), a API FastAPI fica exposta via REST para integrações externas, conforme diagrama C2 já desenhado; (c) confirmar região do Supabase compatível com LGPD antes do Passo 5.
 - `docs/architecture.md`: preencher §3 (Frontend=Streamlit, Backend=FastAPI+Job+Gate de re-treino), §4 (Data Stores=Supabase, tabelas do Passo 5), §5 (Infobip, TrueFoundry opcional, MLflow), §6 (HF Spaces, GitHub Actions), §7 (LGPD → remete a `docs/LGPD.md` do Passo 8), §9 (registrar o gap de recall como debt conhecido), §10/§11.
 - Remover ou corrigir `infra/ML/dockerfile` (quebrado: `FROM python:3.9-slim` com `COPY` auto-referencial, não referenciado por `dvc.yaml`/`docker-compose.yml` — resíduo do protótipo herdado).
@@ -144,6 +146,29 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 
 **Verificação**: `tests/test_logging_lgpd.py` — logar payload com `nome`/`cpf` e confirmar redação (via `caplog`); extensão de `test_coerencia_repo.py` com grep estático em `src/` por f-strings de log referenciando campos proibidos. Rodar `scripts/auditoria_lgpd.py` contra logs de uma execução completa de smoke test (Passo 11) antes do pitch.
 
+**Ajuste vindo do [ADR-006](adr/adr-006-observabilidade.md) (2026-09-21)**: o log de runtime do HF Space é **efêmero** (restart ou rebuild apaga, sem busca e sem retenção), então a auditoria a posteriori prevista no SLO §6 não é executável em produção. A garantia de zero-PII passa a ser **preventiva**: o teste estático sobre `src/` descrito acima é a evidência principal, e `scripts/auditoria_lgpd.py` vira ferramenta de verificação local, não a prova apresentada no pitch.
+
+---
+
+## Passo 8.5 — Observabilidade de aplicação
+
+> Numerado como 8.5 de propósito: renumerar os Passos 9-13 quebraria dezenas de referências cruzadas neste plano, no README e nos ADRs, sem ganho algum.
+
+**Objetivo**: tornar os números do SLO coletáveis em produção, em vez de estimados na véspera do pitch. Vem depois do Passo 8 porque reaproveita o logging estruturado criado lá, e antes do Passo 9 porque o gate de re-treino já precisa de um canal de alerta e de prova de execução. A decisão completa, com alternativas descartadas, está no [ADR-006](adr/adr-006-observabilidade.md).
+
+**Princípio que organiza o desenho**: o coletor não pode morar dentro daquilo que ele mede. Métrica coletada dentro do Space some junto com o Space quando ele hiberna ou cai — inclusive a evidência de que caiu. Daí a separação entre camada interna (Supabase, fonte de verdade) e camadas externas (sondas).
+
+- Nova migration `supabase/migrations/*_eventos_app.sql`: tabela `eventos_app` (id, `criado_em`, `tipo` — ex. `predicao`/`job_d2`/`erro`, `duracao_ms`, `status`, `model_version`, `detalhe jsonb`). **Sem nenhuma coluna de PII** — a guarda de `tests/test_coerencia_repo.py` já cobre isso automaticamente e não precisa ser estendida.
+- `src/db/repositories.py`: `registrar_evento(...)` e as leituras agregadas que a aba consome (p95 de `duracao_ms` por período, contagem de erros, cobertura de SHAP).
+- Middleware do FastAPI em `src/api/main.py` e instrumentação equivalente em `src/jobs/inferencia_diaria.py`, gravando um evento por predição/execução. **Escrita não bloqueante** — o registro não pode entrar no caminho crítico da latência que ele existe para medir (SLO §2).
+- Nova aba **"Observabilidade"** em `src/ui/app.py`: p95 de latência, contagem de erros, cobertura de explicação (`predicoes.explicacao_shap IS NOT NULL`), última execução bem-sucedida do job D-2. É daqui que saem os números do Passo 12.
+- Contas gratuitas nos dois serviços externos, ambos recebendo apenas sinal binário (nenhum dado de paciente): **UptimeRobot** (ou Better Stack) batendo em `/health` do Space, e **Healthchecks.io** como dead-man's-switch dos jobs agendados. A configuração efetiva depende da URL pública e acontece no Passo 11; os workflows que pingam são criados no Passo 10.
+- Alerta reusa `src/messaging` (Passo 7) — nenhum canal novo.
+
+**Verificação**: `tests/test_observabilidade.py` — `registrar_evento` faz round-trip no Supabase local (marcado `integracao`, mesma convenção de `test_db.py`); teste confirmando que falha ao gravar evento **não derruba** a predição nem o job (observabilidade quebrada degrada, não interrompe — mesma filosofia do `ErroEnvioInfobip` do Passo 7); teste de que o p95 calculado bate com um conjunto sintético de eventos de latência conhecida. Manual: abrir a aba "Observabilidade" depois de rodar o disparo manual do Passo 6 e conferir que os eventos aparecem.
+
+**Política de retenção**: definir no momento da migration (ex. descartar eventos com mais de N meses) — a tabela cresce a cada request e divide o teto do free tier com os dados do produto. Registrado como risco no ADR-006.
+
 ---
 
 ## Passo 9 — Re-treino mensal automatizado + gate de rollback + deploy automático do modelo promovido
@@ -155,7 +180,7 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
   - **Se passar**: sobrescreve `data/champion_metrics.json`, `data/model.pkl` (via `dvc repro`/`dvc add`) e `dvc.lock` já ficam atualizados; o workflow faz `git commit` + `git push` desses artefatos versionados diretamente no repositório (branch dedicada + PR automático, para manter revisão humana leve sem travar a automação — SLO §5 exige "100% dos meses, automatizada", não "sem rastro").
   - **Se bloquear**: `data/champion_metrics.json`/`model.pkl` **não mudam** (modelo anterior continua em produção por construção, não por convenção), a run fica tagueada como rejeitada no MLflow efêmero (log/auditoria do workflow run), e um alerta é disparado via `src/messaging` (Passo 7) para revisão humana.
   - Caso "bootstrap" (primeiro ciclo, `champion_metrics.json` ainda não existe): promove direto, sem comparação, e cria o arquivo.
-- `.github/workflows/retrain.yml` (cron mensal + `workflow_dispatch` manual para teste).
+- `.github/workflows/retrain.yml` (cron mensal + `workflow_dispatch` manual para teste). **Pinga o Healthchecks.io ao concluir com sucesso** (Passo 8.5): workflow agendado do GitHub é desativado automaticamente após inatividade prolongada do repositório, e sem o dead-man's-switch o re-treino mensal pode parar de rodar em silêncio — violando o SLA §5 sem que ninguém perceba (ver [ADR-006](adr/adr-006-observabilidade.md)).
 - **Fecha o loop até produção**: como o Passo 11 empacota `data/model.pkl` (committed/DVC-tracked) direto na imagem do HF Space, o merge do PR de promoção em `main` já dispara o `deploy.yml` do Passo 10 (`huggingface/huggingface-sync-action`), que sincroniza e faz o Space rebuildar com o `model.pkl` novo — não é preciso a API em produção falar com um MLflow ao vivo em nenhum momento, nem existe um segundo mecanismo de deploy além do já usado para código.
 
 **Verificação**: `tests/test_retrain_gate.py` — duas runs MLflow fake (`sqlite:///{tmp_path}`, mesmo padrão de `test_train.py`) comparadas contra um `champion_metrics.json` de fixture, uma pior confirma bloqueio (arquivo/`model.pkl` inalterados), uma melhor confirma promoção (arquivo atualizado); caso bootstrap (sem `champion_metrics.json`) promove sem travar o primeiro ciclo. Teste de integração (`integracao`): rodar `retrain.yml` via `workflow_dispatch` numa branch de teste, confirmar que o PR automático é aberto com `data/model.pkl`/`champion_metrics.json`/`dvc.lock` atualizados, mergear, confirmar que o HF Space (Passo 11) rebuilda e `/health` reporta a nova `model_version`.
@@ -170,6 +195,7 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 
 - `.github/workflows/ci.yml`: lint (formalizar `ruff` em `requirements.txt`/config, já há `.ruff_cache/` local), `pytest` (respeita `pytest.ini`, só testes rápidos por padrão), job opcional com serviço Postgres/Supabase local do GitHub Actions para os testes `integracao`. Dispara em PR (não faz deploy).
 - `.github/workflows/deploy.yml`: usa `huggingface/huggingface-sync-action` para sincronizar `main` → o repo do HF Space sempre que houver push em `main` (token do Space como secret do GitHub, `HF_TOKEN`). Só roda **depois** do `ci.yml` passar (via `workflow_run` ou job dependente), para nunca sincronizar um estado quebrado.
+- `.github/workflows/job_d2.yml` (scheduler diário do Passo 6, ADR-005 a): além de disparar o job, **pinga o Healthchecks.io ao concluir** — mesma proteção descrita no Passo 9. O GitHub Actions serve aqui melhor como *sonda* de observabilidade do que como fonte dela: o histórico de runs é a prova auditável do SLO §5, mas não diz nada sobre a aplicação em si (Passo 8.5).
 
 **Verificação**: abrir PR de teste, confirmar que `ci.yml` dispara e passa; quebrar um teste de propósito, confirmar que o CI falha e `deploy.yml` não roda; mergear um PR válido em `main` e confirmar que `deploy.yml` sincroniza e o HF Space rebuilda automaticamente (sem passo manual).
 
@@ -182,6 +208,7 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 - ~~`infra/deploy/dockerfile` (API+UI combinados, `requirements/api.txt`+`ui.txt`, sem `requirements/train.txt`), carregando `data/model.pkl` empacotado na imagem (não de um MLflow ao vivo — decisão do Passo 9)~~ — **feito no Passo 4** (antecipado), junto com `infra/deploy/entrypoint.sh`, o serviço `app` do `docker-compose.yml`, `.dockerignore` e `.gitattributes`. Verificado localmente: `/health` 200 com a `model_version` esperada, UI em 7860, mesma probabilidade dentro e fora do container, container morre inteiro se um dos processos cair e para em <1s no SIGTERM.
 - Resta aqui: front-matter YAML do HF Space, `APP_ENV=prod`, segredos configurados na UI do Space (não versionados), e a checagem de usuário não-root/permissões de escrita que o Space exige.
 - **Porta única do Space**: o HF Space (SDK Docker) publica só uma porta (`app_port`, default 7860). Hoje a imagem expõe UI em 7860 e API em 8000 — em produção só a primeira ficaria acessível. A UI não sofre (chama o modelo em processo, ADR-005 b); quem fica sem endereço público é a API como porta de entrada para integrações externas (diagrama C2). Decidir entre: (a) expor só a UI e adiar a API pública para quando houver um consumidor externo real, (b) proxy reverso na frente dos dois na porta publicada, (c) publicar a API e servir a UI por outro caminho. Registrar a escolha como emenda ao ADR-005 ou ADR novo, conforme o peso.
+- **Ligar as sondas externas do Passo 8.5**, que só agora têm URL pública para apontar: monitor do UptimeRobot em `/health` do Space e checks do Healthchecks.io para o job D-2 e o re-treino. Vale anotar que o Space free **hiberna por inatividade** — o monitor batendo de minutos em minutos mantém o container acordado como efeito colateral, o que melhora o cold start percebido (SLO §2) mas mascara o comportamento real de hibernação. Decidir conscientemente se isso é desejável antes de medir o cold start para o pitch.
 - Deploy inicial: criar o HF Space e rodar manualmente o `deploy.yml` do Passo 10 (`workflow_dispatch`) para o primeiro sync via `huggingface/huggingface-sync-action`. Dali em diante, todo push em `main` (deploy manual de código ou promoção automática do Passo 9) usa o mesmo workflow — não há um segundo mecanismo de deploy a manter.
 
 **Verificação**: Space público respondendo `/health` 200 com a `model_version` esperada; smoke test manual fim a fim (criar agendamento → job via `workflow_dispatch` → predição+explicação visível na fila do Streamlit → log de decisão de mensageria); medição manual do cold start vs. SLO <10s; smoke test do loop de deploy automático (merge de um PR de promoção do Passo 9 → confirmar que o Space rebuilda sozinho, sem passo manual).
@@ -191,6 +218,7 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 ## Passo 12 — Validação final para o pitch (Semana 16)
 
 - `scripts/medir_latencia.py` (mede p95 de `/predict` contra o deploy real); atualizar `docs/SLA.md`/`docs/SLO.md` com coluna "medido" ao lado de "alvo"; `docs/LGPD.md` (Passo 8) como anexo de riscos.
+- **De onde vem cada número** (Passo 8.5, [ADR-006](adr/adr-006-observabilidade.md)): §1 uptime e 5xx → relatório do UptimeRobot; §2 p95 → `eventos_app` acumulada em produção, com `medir_latencia.py` servindo de contraprova pontual; §3 → MLflow; §4 → query em `predicoes`; §5 → histórico de runs do GitHub Actions + Healthchecks.io; §6 → teste estático preventivo (não auditoria de log, que é inexecutável no Space — ver Passo 8). Números medidos ao longo da operação, não coletados na véspera.
 
 **Verificação**: todos os números do SLA/SLO coletados e documentados (uptime, p95, recall/f1/roc-auc do MLflow, 100% cobertura SHAP via `predicoes.explicacao_shap IS NOT NULL`, 0 PII em log); **decisão final sobre o gap de recall registrada explicitamente** (threshold recalibrado ou gap aceito e documentado) antes da apresentação.
 
@@ -203,6 +231,7 @@ Só depois do Passo 12 (núcleo funcional, testado e deployado). Consulta de pac
 - `src/llm/client.py`: mesmo padrão interface+stub do Passo 7 (`StubLLMClient` para dev/test, `TrueFoundryClient` real atrás de env flag). Prompt montado só com dados já pseudonimizados do banco (Passo 5), nunca PII.
 - **Ativação do plug do Passo 2**: trocar `ExplicadorLLMDesativado` por `ExplicadorLLMTrueFoundry` em `src/explain.py`, implementando `explicar_em_texto()` — recebe as contribuições SHAP já calculadas (Passo 2) + contexto pseudonimizado e devolve uma frase em português para a clínica (ex. "risco alto principalmente por 3 faltas anteriores e distância de 18km"). Passa a preencher `explicacao_texto` em `predicoes` (antes sempre `NULL`).
 - Nova aba/caixa "Consulta ao LLM" em `src/ui/app.py` (Passo 4), onde o funcionário pergunta livremente sobre um paciente específico da fila.
+- **É aqui — e só aqui — que o Langfuse volta à mesa** (ADR-004, [ADR-006](adr/adr-006-observabilidade.md)): tracing de prompt/completion, tokens e custo por chamada é exatamente o que ele foi feito para fazer, e passa a existir um LLM para observar. Avaliar self-host vs. cloud considerando que o prompt trafega dados já pseudonimizados (nunca PII) mas ainda assim sairia do Brasil — decisão a registrar quando o passo for executado.
 
 **Verificação**: `tests/test_llm.py` com o stub, garantindo que o contexto montado nunca contém campos proibidos (reusa helper do Passo 8); teste de contrato stub/real. Teste específico de `explicar_em_texto()`: dado um conjunto fixo de contribuições SHAP sintéticas, o texto gerado (via stub determinístico, não chamando o TrueFoundry real em CI) menciona a feature de maior `abs(contribuicao)` — prova que a explicação em texto é fiel ao SHAP, não uma alucinação desconectada dos números.
 
@@ -217,7 +246,8 @@ Só depois do Passo 12 (núcleo funcional, testado e deployado). Consulta de pac
 - `tests/conftest.py` — fixtures e padrão de teste (sem mocks pesados) a seguir em todos os passos novos
 - `docs/architecture.md`, `docs/adr/adr-004-decisão-técnica.md` — alvo do Passo 0
 - `pytest.ini` — já define marcador `integracao`, usar nos testes de DB/job/deploy
-- `src/ui/app.py`/`src/ui/logic.py` (criados no Passo 4) — casca de abas reaproveitada e preenchida de verdade nos Passos 5-7 e 13
+- `src/ui/app.py`/`src/ui/logic.py` (criados no Passo 4) — casca de abas reaproveitada e preenchida de verdade nos Passos 5-7, 8.5 e 13
+- `docs/adr/adr-006-observabilidade.md` — decisão de observabilidade de aplicação (Passo 8.5), com o levantamento de cobertura nativa do GitHub Actions/HF Space e as alternativas descartadas (Langfuse, OpenTelemetry, Grafana Cloud)
 
 ## Como validar o plano ponta a ponta
 
