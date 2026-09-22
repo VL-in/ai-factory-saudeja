@@ -1,0 +1,5 @@
+outs:
+- md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
+  size: 22841
+  hash: md5
+  path: consultas-treino.csv

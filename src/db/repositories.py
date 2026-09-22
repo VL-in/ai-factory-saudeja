@@ -199,6 +199,57 @@ def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> di
     return resposta.data[0]
 
 
+STATUSES_DESFECHO = ("concluido", "no_show", "cancelado")
+
+
+def atualizar_status_agendamento(id_agendamento: str, status: str) -> dict:
+    """Registra o desfecho real de um agendamento (Passo 9.0), acionado pela
+    aba "Fila do dia". Sem isto, `agendamentos.status` nunca sai de
+    'agendado': a coluna aceita 'no_show' desde a migration
+    `20260920010000_cadastro_pacientes.sql` e `contar_no_shows_anteriores` já
+    lê dela, mas nada no produto jamais escreveu esse valor -- o
+    `historico_noshow` automático do cadastro só passa a funcionar de
+    verdade a partir daqui. Também é a fonte, via `export_treino.py`, do
+    dataset real que alimenta o gate de re-treino mensal (Passo 9.1): sem
+    desfecho registrado, o re-treino reproduziria sempre a mesma métrica.
+
+    Não revalida `status` contra `STATUSES_DESFECHO` aqui -- o check
+    constraint do Postgres já rejeita valor fora do domínio (mesmo critério
+    já usado para `sexo`/`historico_noshow` no schema)."""
+    client = obter_client()
+    resposta = (
+        client.table("agendamentos")
+        .update({"status": status})
+        .eq("id", id_agendamento)
+        .execute()
+    )
+    return resposta.data[0]
+
+
+_COLUNAS_AGENDAMENTO_PARA_EXPORT = (
+    "id, especialidade, distancia_km, data_hora_agendada, "
+    "dias_entre_agendamento_consulta, status, "
+    "pacientes(id_paciente_externo, data_nascimento, sexo)"
+)
+
+
+def buscar_agendamentos_com_desfecho() -> list[dict]:
+    """Agendamentos com desfecho real conhecido (`concluido` ou `no_show`,
+    Passo 9.0) -- fonte de dado real de `src/export_treino.py`. Sem
+    `telefone` no select, mesma minimização de PII de
+    `buscar_agendamentos_d2_pendentes`: o export nunca deve ter como emitir
+    essa coluna, mesmo por acidente."""
+    client = obter_client()
+    return (
+        client.table("agendamentos")
+        .select(_COLUNAS_AGENDAMENTO_PARA_EXPORT)
+        .in_("status", ["concluido", "no_show"])
+        .order("data_hora_agendada")
+        .execute()
+        .data
+    )
+
+
 def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
     """Agendamentos do dia (default hoje) com paciente e última predição
     embutidos, ordenados por probabilidade desc -- quem ainda não tem

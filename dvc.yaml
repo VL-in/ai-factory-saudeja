@@ -2,7 +2,7 @@ stages:
   preprocess:
     cmd: >-
       docker compose run --rm --build -T
-      -e DATA_PATH=/app/data/consultas-historicas.csv
+      -e DATA_PATH=/app/data/consultas-treino.csv
       -e TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl
       -e TEST_PATH=/app/data/interim/test.pkl
       -e MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json
@@ -16,7 +16,7 @@ stages:
       - src/preprocess.py
       - src/features.py
       - src/config_projeto.py
-      - data/consultas-historicas.csv
+      - data/consultas-treino.csv
     params:
       - features.temporais
     outs:

@@ -292,6 +292,7 @@ class ItemFila:
     explicacao: list = field(default_factory=list)
     explicacao_texto: str | None = None
     model_version: str | None = None
+    status: str = "agendado"
 
     @property
     def tem_predicao(self) -> bool:
@@ -333,9 +334,28 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
                 explicacao=(ultima.get("explicacao_shap") or []) if ultima else [],
                 explicacao_texto=ultima.get("explicacao_texto") if ultima else None,
                 model_version=ultima.get("model_version") if ultima else None,
+                status=linha["status"],
             )
         )
     return itens
+
+
+# Espelham db.repositories.STATUSES_DESFECHO -- rótulos que a aba "Fila do
+# dia" oferece para a clínica registrar o desfecho real de um agendamento
+# (Passo 9.0). Sem isto o re-treino mensal (Passo 9.1) nunca teria dado real
+# para aprender: agendamentos.status nunca sairia de 'agendado'.
+STATUS_CONCLUIDO = "concluido"
+STATUS_NO_SHOW = "no_show"
+STATUS_CANCELADO = "cancelado"
+
+
+def atualizar_status_agendamento(id_agendamento: str, status: str) -> None:
+    """Registra o desfecho real de um agendamento, acionado pela aba "Fila
+    do dia" (Passo 9.0)."""
+    try:
+        repositories.atualizar_status_agendamento(id_agendamento, status)
+    except Exception as exc:
+        _relatar_falha_persistencia(exc, "Falha ao registrar desfecho do agendamento")
 
 
 def resumo_da_fila(itens: list[ItemFila]) -> dict:

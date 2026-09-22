@@ -196,6 +196,37 @@ def _mostrar_contribuicoes(explicacao, explicacao_texto=None):
         )
 
 
+def _registrar_desfecho(item):
+    """Ação da clínica registrar o que de fato aconteceu com o agendamento
+    (Passo 9.0) -- sem isto, `agendamentos.status` nunca sai de 'agendado' e
+    o re-treino mensal (Passo 9.1) nunca tem dado real para aprender, além do
+    `historico_noshow` automático do cadastro nunca contar nada de verdade."""
+    st.write(f"**Registrar desfecho de `{item.id_paciente_externo}`**")
+    st.caption(f"Status atual: `{item.status}`")
+
+    col1, col2, col3 = st.columns(3)
+    acoes = (
+        (col1, "Consulta realizada", logic.STATUS_CONCLUIDO),
+        (col2, "Paciente faltou (no-show)", logic.STATUS_NO_SHOW),
+        (col3, "Cancelado", logic.STATUS_CANCELADO),
+    )
+    for coluna, rotulo, status in acoes:
+        # disabled em vez de esconder o botão: mostra que a ação já foi
+        # tomada em vez de o botão simplesmente sumir da tela.
+        if coluna.button(
+            rotulo,
+            key=f"desfecho_{status}_{item.id_agendamento}",
+            disabled=item.status == status,
+        ):
+            try:
+                logic.atualizar_status_agendamento(item.id_agendamento, status)
+            except logic.ErroPersistencia as exc:
+                st.error(f"Não foi possível registrar o desfecho: {exc}")
+            else:
+                st.success(f"Desfecho registrado: {rotulo.lower()}.")
+                st.rerun()
+
+
 def _aba_fila_do_dia():
     st.subheader("Fila do dia")
     st.caption(
@@ -234,6 +265,7 @@ def _aba_fila_do_dia():
                 "Horário": item.data_hora_agendada,
                 "Probabilidade": item.probabilidade,
                 "Alto risco": bool(item.classe_prevista) if item.tem_predicao else None,
+                "Status": item.status,
             }
             for item in fila
         ]
@@ -263,6 +295,8 @@ def _aba_fila_do_dia():
         return
 
     item = fila[linhas_selecionadas[0]]
+    st.divider()
+    _registrar_desfecho(item)
     st.divider()
     st.write(f"**Por que o paciente `{item.id_paciente_externo}` tem esse risco**")
     if not item.tem_predicao:

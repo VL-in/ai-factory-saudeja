@@ -239,6 +239,32 @@ def test_dias_ate_consulta_deriva_da_data_escolhida():
     assert logic.dias_ate_consulta(date(2026, 9, 19), hoje=date(2026, 9, 19)) == 0
 
 
+# --- registro de desfecho (Passo 9.0), sem tocar no banco -----------------------
+
+
+def test_atualizar_status_agendamento_delega_ao_repositorio(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(
+        logic.repositories,
+        "atualizar_status_agendamento",
+        lambda id_agendamento, status: chamadas.append((id_agendamento, status)),
+    )
+
+    logic.atualizar_status_agendamento("a1", logic.STATUS_NO_SHOW)
+
+    assert chamadas == [("a1", "no_show")]
+
+
+def test_atualizar_status_agendamento_traduz_falha_em_erro_persistencia(monkeypatch):
+    def _levanta(id_agendamento, status):
+        raise RuntimeError("conexão recusada")
+
+    monkeypatch.setattr(logic.repositories, "atualizar_status_agendamento", _levanta)
+
+    with pytest.raises(logic.ErroPersistencia):
+        logic.atualizar_status_agendamento("a1", logic.STATUS_CONCLUIDO)
+
+
 def test_dias_ate_consulta_nao_fica_negativo_para_data_passada():
     """Data no passado é erro de preenchimento, mas o modelo nunca viu
     antecedência negativa em treino -- 0 é o valor mais próximo do domínio

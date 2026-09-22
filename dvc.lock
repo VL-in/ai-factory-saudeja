@@ -1,13 +1,12 @@
 schema: '2.0'
 stages:
   train:
-    cmd: docker build -t saudeja-train -f dockerfile . && docker compose up -d 
-      --wait mlflow-server && docker run --rm --network saudeja-net -v 
-      "%cd%/data:/app/data" -e TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl -e
+    cmd: docker compose up -d --wait mlflow-server && docker compose run --rm 
+      --build -T -e TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl -e 
       MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json -e 
       MODEL_PATH=/app/data/model.pkl -e 
       RUN_ID_PATH=/app/data/interim/mlflow_run_id.txt -e 
-      MLFLOW_TRACKING_URI=http://mlflow-server:5000 saudeja-train src/train.py
+      MLFLOW_TRACKING_URI=http://mlflow-server:5000 train src/train.py
     deps:
     - path: data/interim/mapa_especialidade.json
       hash: md5
@@ -17,22 +16,26 @@ stages:
       hash: md5
       md5: b790d4fbbc4e3c0b58dc99ab8a2e6fcb
       size: 31132
+    - path: docker-compose.yml
+      hash: md5
+      md5: 507deb633df1312ddc163b5a0f5bcdbb
+      size: 3763
     - path: dockerfile
       hash: md5
-      md5: cb09473e637096045fcc78fea529be08
-      size: 561
+      md5: 3fca62550e0100f9260cdac378b1229e
+      size: 580
     - path: requirements/base.txt
       hash: md5
-      md5: e62d28872b975b5b11ff377374713718
-      size: 367
+      md5: 089b285d924c1665c225d2e7659bdbaa
+      size: 630
     - path: requirements/train.txt
       hash: md5
-      md5: 4b62798e08ad85a30e4561ad36a001b7
-      size: 229
+      md5: 0b15c51731ec5c80e8f62393ba58ba20
+      size: 236
     - path: src/config_projeto.py
       hash: md5
-      md5: e5fd691a895955dce24fb5b6154d1c4e
-      size: 1660
+      md5: 7ea1d495f0e3d32694af476372ec01f9
+      size: 2913
     - path: src/preprocess.py
       hash: md5
       md5: 707efc2644c66857f83109d1549dcede
@@ -51,44 +54,48 @@ stages:
     outs:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 51f2127a6384584e120aea1897d05fb7
+      md5: 4c74901b185be57e23544d832d6f98b6
       size: 32
     - path: data/model.pkl
       hash: md5
       md5: e0ae48310683b6791fcf5790b8fcb16a
       size: 225550
   preprocess:
-    cmd: docker build -t saudeja-train -f dockerfile . && docker run --rm -v 
-      "%cd%/data:/app/data" -e DATA_PATH=/app/data/consultas-historicas.csv -e 
+    cmd: docker compose run --rm --build -T -e 
+      DATA_PATH=/app/data/consultas-treino.csv -e 
       TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl -e 
       TEST_PATH=/app/data/interim/test.pkl -e 
-      MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json 
-      saudeja-train src/preprocess.py
+      MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json train 
+      src/preprocess.py
     deps:
-    - path: data/consultas-historicas.csv
+    - path: data/consultas-treino.csv
       hash: md5
       md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
       size: 22841
+    - path: docker-compose.yml
+      hash: md5
+      md5: 507deb633df1312ddc163b5a0f5bcdbb
+      size: 3763
     - path: dockerfile
       hash: md5
-      md5: cb09473e637096045fcc78fea529be08
-      size: 561
+      md5: 3fca62550e0100f9260cdac378b1229e
+      size: 580
     - path: requirements/base.txt
       hash: md5
-      md5: e62d28872b975b5b11ff377374713718
-      size: 367
+      md5: 089b285d924c1665c225d2e7659bdbaa
+      size: 630
     - path: requirements/train.txt
       hash: md5
-      md5: 4b62798e08ad85a30e4561ad36a001b7
-      size: 229
+      md5: 0b15c51731ec5c80e8f62393ba58ba20
+      size: 236
     - path: src/config_projeto.py
       hash: md5
-      md5: e5fd691a895955dce24fb5b6154d1c4e
-      size: 1660
+      md5: 7ea1d495f0e3d32694af476372ec01f9
+      size: 2913
     - path: src/features.py
       hash: md5
-      md5: 8c807feea37c449cf261557fa5a3f3b5
-      size: 797
+      md5: c031a16c040eabb8357daa7045d8262f
+      size: 1592
     - path: src/preprocess.py
       hash: md5
       md5: 707efc2644c66857f83109d1549dcede
@@ -110,17 +117,15 @@ stages:
       md5: b790d4fbbc4e3c0b58dc99ab8a2e6fcb
       size: 31132
   validate:
-    cmd: docker build -t saudeja-train -f dockerfile . && docker compose up -d 
-      --wait mlflow-server && docker run --rm --network saudeja-net -v 
-      "%cd%/data:/app/data" -e TEST_PATH=/app/data/interim/test.pkl -e 
+    cmd: docker compose up -d --wait mlflow-server && docker compose run --rm 
+      --build -T -e TEST_PATH=/app/data/interim/test.pkl -e 
       MODEL_PATH=/app/data/model.pkl -e 
       RUN_ID_PATH=/app/data/interim/mlflow_run_id.txt -e 
-      MLFLOW_TRACKING_URI=http://mlflow-server:5000 saudeja-train 
-      src/validate.py
+      MLFLOW_TRACKING_URI=http://mlflow-server:5000 train src/validate.py
     deps:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 51f2127a6384584e120aea1897d05fb7
+      md5: 4c74901b185be57e23544d832d6f98b6
       size: 32
     - path: data/interim/test.pkl
       hash: md5
@@ -130,22 +135,26 @@ stages:
       hash: md5
       md5: e0ae48310683b6791fcf5790b8fcb16a
       size: 225550
+    - path: docker-compose.yml
+      hash: md5
+      md5: 507deb633df1312ddc163b5a0f5bcdbb
+      size: 3763
     - path: dockerfile
       hash: md5
-      md5: cb09473e637096045fcc78fea529be08
-      size: 561
+      md5: 3fca62550e0100f9260cdac378b1229e
+      size: 580
     - path: requirements/base.txt
       hash: md5
-      md5: e62d28872b975b5b11ff377374713718
-      size: 367
+      md5: 089b285d924c1665c225d2e7659bdbaa
+      size: 630
     - path: requirements/train.txt
       hash: md5
-      md5: 4b62798e08ad85a30e4561ad36a001b7
-      size: 229
+      md5: 0b15c51731ec5c80e8f62393ba58ba20
+      size: 236
     - path: src/config_projeto.py
       hash: md5
-      md5: e5fd691a895955dce24fb5b6154d1c4e
-      size: 1660
+      md5: 7ea1d495f0e3d32694af476372ec01f9
+      size: 2913
     - path: src/validate.py
       hash: md5
       md5: 30610c0fd328faed4357bf4eb5626e02

@@ -145,6 +145,32 @@ def test_migrations_sql_sem_coluna_proibida_de_pii():
         )
 
 
+def test_export_treino_sem_coluna_proibida_de_pii():
+    """`src/export_treino.py` (Passo 9.0) monta um CSV a partir de dados reais
+    de produção -- mesmo critério de PII do schema (`test_migrations_sql_...`),
+    aplicado agora ao código que gera o dataset de treino. `telefone` é a
+    exceção deliberada no schema (Passo 7, contato de envio), mas o export
+    nunca deveria emiti-la -- por isso ela some da lista de proibidas do
+    schema e volta a ser proibida aqui."""
+    colunas_proibidas = ("nome", "cpf", "email", "telefone")
+    caminho = REPO_ROOT / "src" / "export_treino.py"
+    assert caminho.exists(), "src/export_treino.py não existe (Passo 9.0)"
+
+    texto = caminho.read_text(encoding="utf-8").lower()
+    # COLUNAS_SAIDA é a lista literal de colunas que o CSV final carrega --
+    # verificação estrutural, não um grep frágil sobre o arquivo inteiro
+    # (que teria "telefone" nos comentários explicando por que ele não entra).
+    inicio = texto.index("colunas_saida = [")
+    fim = texto.index("]", inicio)
+    bloco_colunas = texto[inicio:fim]
+
+    encontradas = [c for c in colunas_proibidas if c in bloco_colunas]
+    assert not encontradas, (
+        f"COLUNAS_SAIDA de export_treino.py referencia coluna(s) proibida(s) por LGPD: "
+        f"{encontradas}"
+    )
+
+
 def test_architecture_md_sem_placeholder_generico():
     """docs/architecture.md é um template genérico -- este teste falha se algum
     placeholder tipo '[e.g., ...]' ainda não foi preenchido com conteúdo real
