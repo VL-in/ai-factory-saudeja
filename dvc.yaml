@@ -1,17 +1,16 @@
 stages:
   preprocess:
     cmd: >-
-      docker build -t saudeja-train -f dockerfile . &&
-      docker run --rm
-      -v "%cd%/data:/app/data"
+      docker compose run --rm --build -T
       -e DATA_PATH=/app/data/consultas-historicas.csv
       -e TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl
       -e TEST_PATH=/app/data/interim/test.pkl
       -e MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json
-      saudeja-train
+      train
       src/preprocess.py
     deps:
       - dockerfile
+      - docker-compose.yml
       - requirements/base.txt
       - requirements/train.txt
       - src/preprocess.py
@@ -27,20 +26,18 @@ stages:
 
   train:
     cmd: >-
-      docker build -t saudeja-train -f dockerfile . &&
       docker compose up -d --wait mlflow-server &&
-      docker run --rm
-      --network saudeja-net
-      -v "%cd%/data:/app/data"
+      docker compose run --rm --build -T
       -e TRAIN_RAW_PATH=/app/data/interim/train_raw.pkl
       -e MAPA_ESPECIALIDADE_PATH=/app/data/interim/mapa_especialidade.json
       -e MODEL_PATH=/app/data/model.pkl
       -e RUN_ID_PATH=/app/data/interim/mlflow_run_id.txt
       -e MLFLOW_TRACKING_URI=http://mlflow-server:5000
-      saudeja-train
+      train
       src/train.py
     deps:
       - dockerfile
+      - docker-compose.yml
       - requirements/base.txt
       - requirements/train.txt
       - src/train.py
@@ -60,19 +57,17 @@ stages:
 
   validate:
     cmd: >-
-      docker build -t saudeja-train -f dockerfile . &&
       docker compose up -d --wait mlflow-server &&
-      docker run --rm
-      --network saudeja-net
-      -v "%cd%/data:/app/data"
+      docker compose run --rm --build -T
       -e TEST_PATH=/app/data/interim/test.pkl
       -e MODEL_PATH=/app/data/model.pkl
       -e RUN_ID_PATH=/app/data/interim/mlflow_run_id.txt
       -e MLFLOW_TRACKING_URI=http://mlflow-server:5000
-      saudeja-train
+      train
       src/validate.py
     deps:
       - dockerfile
+      - docker-compose.yml
       - requirements/base.txt
       - requirements/train.txt
       - src/validate.py

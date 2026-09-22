@@ -96,9 +96,27 @@ def test_requirements_nao_tem_pacotes_duplicados():
 
 
 def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
-    dvc_yaml_texto = (REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8")
-    assert "-f dockerfile" in dvc_yaml_texto
-    assert (REPO_ROOT / "dockerfile").exists()
+    """O elo dvc.yaml -> dockerfile deixou de ser direto (`docker build -f
+    dockerfile`) e passou a ter o compose no meio: os stages rodam
+    `docker compose run ... train`, e é o serviço `train` que aponta para o
+    dockerfile (Passo 9, decisão 5 -- `%cd%` não expandia no runner Linux).
+    A checagem segue a mesma: o dockerfile que o pipeline usa existe de fato,
+    agora percorrendo os dois saltos."""
+    dvc_yaml = yaml.safe_load((REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8"))
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+
+    servico_train = compose["services"]["train"]
+    dockerfile = REPO_ROOT / servico_train["build"]["dockerfile"]
+    assert dockerfile.exists(), f"{dockerfile.name} referenciado pelo compose não existe"
+
+    for nome, stage in dvc_yaml["stages"].items():
+        assert "docker compose run" in stage["cmd"], (
+            f"stage '{nome}' não usa `docker compose run` -- um `docker run` com mount "
+            "montado à mão volta a quebrar no runner Linux (Passo 9, decisão 5)"
+        )
+        # Sem estas deps, mudar a imagem ou o mount não invalidaria o stage.
+        for dep in ("dockerfile", "docker-compose.yml"):
+            assert dep in stage["deps"], f"stage '{nome}' não declara '{dep}' em deps"
 
 
 def test_migrations_sql_sem_coluna_proibida_de_pii():

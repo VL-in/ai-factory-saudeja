@@ -28,8 +28,22 @@ Baseline herdado (`docs/logs/CHANGELOG.md`, v0.5): acurácia 78%, F1 da classe p
 |---|---|---|
 | Recall da classe positiva (no-show=1) | ≥ 0.75 | Prioridade explícita da Camila (`notas-camila.md`): "o que importa é recall da classe 1 (não quero deixar de avisar quem ia faltar)". Acima do baseline atual — motiva SMOTE / `class_weight='balanced'` / threshold tuning, já listados como próximos passos no notebook. |
 | F1 da classe positiva | ≥ 0.65 (baseline) → alvo de melhoria contínua | Não regredir abaixo do herdado a cada re-treino mensal. |
-| ROC-AUC | reportado a cada re-treino, sem regressão > 0.02 vs. mês anterior | Gate de alerta do pipeline de re-treino (ver notas-camila.md: "cron + script + alerta se a métrica cair"). |
+| ROC-AUC | reportado a cada re-treino, sem regressão além da tolerância da tabela abaixo | Gate de alerta do pipeline de re-treino (ver notas-camila.md: "cron + script + alerta se a métrica cair"). |
 | Threshold de decisão | calibrado por custo, não fixo em 0.5 | Camila: "Threshold default 0.5 não serve. Calibrar com base no custo unitário do SMS vs. perda do no-show." Ver também item 3 do BRIEFING.md. |
+
+### 3.1 Tolerância de regressão do gate de re-treino
+
+Definida em 2026-09-21, ao especificar o Passo 9 do [PLANO-IMPLEMENTACAO.md](PLANO-IMPLEMENTACAO.md). Até então havia um único número (0.02, herdado da linha de ROC-AUC acima) aplicado a todas as métricas — **menor que a granularidade do próprio fold de teste**, o que faria o gate bloquear e promover por ruído de amostragem.
+
+| Métrica | Tolerância de regressão vs. campeão | Por quê |
+|---|---|---|
+| `recall_1` | 0.05 | Métrica de contagem sobre ~21 positivos no fold de teste atual: o menor passo possível é 1/21 ≈ 0.048 — **um único paciente**. Uma tolerância menor que isso não distingue regressão de sorteio. |
+| `f1_1` | 0.05 | Mesma natureza — deriva de precision/recall da mesma contagem de positivos. |
+| `roc_auc` | 0.02 | É contínua (ordenação de probabilidades), não sofre do salto discreto acima. Valor mantido do que já vigorava. |
+
+**A regra, não só o número** — a tolerância das métricas de contagem é aproximadamente **1/(positivos no fold de teste)**, arredondada para cima. Os 0.05 acima valem para o dataset atual (380 linhas, 104 positivos, fold de teste de 20% → ~21 positivos). Conforme a ingestão de desfechos reais pela interface (Passo 9.0) fizer o dataset crescer, o número **deve ser recalculado**: com ≥50 positivos no fold, a tolerância cai para 0.02 e o gate passa a enxergar regressões que hoje são invisíveis. Revisar a cada ciclo em que o volume de treino aumentar de forma relevante, e registrar a mudança aqui junto com o tamanho do fold que a justificou.
+
+**Atenção — tolerância ≠ alvo**: as tolerâncias acima governam **regressão relativa** ao modelo campeão. Os alvos absolutos da tabela da §3 (`recall_1` ≥ 0.75, `f1_1` ≥ 0.65) não são critério de promoção — o modelo vigente já os viola (0.522 / 0.419, ver [ADR-003](adr/adr-003-SMOTE-NC.md)) e, se fossem, nada jamais seria promovido. O gap absoluto é exceção documentada, com fechamento previsto para o Passo 12.
 
 **Gate de re-treino:** se qualquer métrica acima regredir em relação ao modelo em produção, o pipeline mensal deve **alertar e bloquear o rollout automático**, mantendo o modelo anterior em produção até revisão humana (Camila apontou isso como requisito, ainda não implementado — hoje o processo é manual).
 
@@ -60,4 +74,4 @@ Baseline herdado (`docs/logs/CHANGELOG.md`, v0.5): acurácia 78%, F1 da classe p
 
 ## Revisão
 
-Este documento deve ser revisado a cada marco do semestre (BRIEFING.md) e sempre que o [ADR-001](adr/adr-001-stack.md) ou a arquitetura mudar. Última geração: 2026-09-07.
+Este documento deve ser revisado a cada marco do semestre (BRIEFING.md) e sempre que o [ADR-001](adr/adr-001-stack.md) ou a arquitetura mudar. Última geração: 2026-09-07; última revisão: 2026-09-21 (§3.1, tolerâncias de regressão do gate de re-treino).

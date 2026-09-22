@@ -35,6 +35,33 @@ services:
       retries: 12
       start_period: 15s
 
+  # Imagem de treino compartilhada pelos 3 stages do dvc.yaml
+  # (preprocess/train/validate) e pelo tune.py exploratorio. Existe como
+  # servico do compose -- e nao so' como "docker run" solto dentro do
+  # dvc.yaml -- porque o compose resolve "./data" relativo a ESTE arquivo,
+  # nos dois sistemas operacionais. O mount antigo usava "%cd%", sintaxe do
+  # cmd.exe que nao expande no runner Linux do GitHub Actions, o que tornava
+  # "dvc repro" no CI (Passo 9) impossivel. Ver PLANO-IMPLEMENTACAO.md,
+  # Passo 9, decisao 5.
+  #
+  # Sem container_name: "docker compose run" cria um container por execucao,
+  # e um nome fixo impediria duas etapas de rodarem em sequencia/paralelo.
+  # A tag "saudeja-train" e' mantida para os comandos manuais do README
+  # continuarem valendo.
+  #
+  # Sem depends_on do mlflow-server: o stage "preprocess" nao fala com o
+  # MLflow, e so' "train"/"validate" o sobem explicitamente (docker compose
+  # up -d --wait mlflow-server) antes de rodar.
+  train:
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: saudeja-train
+    volumes:
+      - ./data:/app/data
+    networks:
+      - saudeja-net
+
   mlflow-server:
     build:
       context: .

@@ -58,7 +58,7 @@ Os stages `train` e `validate` do `dvc.yaml` já builda a imagem, sobem o `mlflo
    ```
 3. Confira o resultado do run no MLflow UI: `http://localhost:5000`.
 
-> Se `docker compose up -d mlflow-server` for rodado a partir de um terminal Bash, note que o `docker run` embutido nos `cmd` dos stages `train`/`validate` usa sintaxe `%cd%` (cmd.exe) no mount de volume — funciona normalmente quando o DVC dispara o comando pelo shell do sistema, mas não copie esse comando manualmente para um terminal Bash.
+> Os `cmd` dos três stages usam `docker compose run` (serviço `train` do `docker-compose.yml`), e não `docker run` com mount montado à mão: o Compose resolve `./data` relativo ao próprio arquivo, então o mesmo comando vale em PowerShell, em Bash e no runner Linux do GitHub Actions. Antes o mount usava `%cd%`, sintaxe do `cmd.exe` que não expande fora dele — o que inviabilizava `dvc repro` no CI (ver PLANO-IMPLEMENTACAO.md, Passo 9, decisão 5).
 
 ### `dvc run` x `dvc repro` x `dvc exp run`
 
@@ -91,8 +91,8 @@ O histórico dos runs fica registrado no MLflow remote, que roda no container Do
 Este script **não é um stage do `dvc.yaml`** — é exploratório, no mesmo espírito de `scripts/gerar_timestamp_sintetico.py`. Re-otimizar hiperparâmetros a cada re-treino mensal automatizado geraria instabilidade de modelo sem ganho comprovado; a escolha de hiperparâmetros é revisada por um humano e só é promovida a `params.yaml` manualmente.
 
 ```powershell
-docker build -t saudeja-train -f dockerfile .
-docker run --rm -v "%cd%/data:/app/data" -e MLFLOW_TRACKING_URI=http://mlflow-server:5000 --network saudeja-net saudeja-train src/tune.py
+docker compose up -d --wait mlflow-server
+docker compose run --rm --build -e MLFLOW_TRACKING_URI=http://mlflow-server:5000 train src/tune.py
 ```
 
 Imprime e loga no MLflow (run com tag `pipeline_arquitetura=gridsearch-tuning`) os melhores hiperparâmetros encontrados e as métricas médias de CV. Para promover um resultado: atualize `model.*` em `params.yaml` com os valores encontrados e rode `dvc exp run` para validar oficialmente no fold de teste isolado (`validate.py`) antes de decidir manter ou não — a métrica de CV é uma estimativa, não a métrica de decisão final.

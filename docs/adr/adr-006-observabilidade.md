@@ -45,6 +45,8 @@ O dead-man's-switch é a peça que resolve o risco 1 acima: ele alerta **pelo si
 
 **Alerta reaproveita `src/messaging`** (Passo 7), já construído para o gate de re-treino do Passo 9 — não entra canal de alerta novo.
 
+> **Emenda (2026-09-21, ao especificar o Passo 9)**: o canal reaproveitado passa a ser o **Healthchecks.io/GitHub Actions**, não `src/messaging`. A intenção original — nenhum canal de alerta novo, nenhum custo — fica intacta; o que mudou é a constatação de que `src/messaging` não serve ao caso: `enviar_lembrete(telefone, mensagem)` foi desenhada para paciente, por SMS pago na conta trial da Infobip, `mensagens_disparadas` é auditoria de envio a paciente (SLA §6) e não existe destinatário de equipe cadastrado. Gate bloqueado falha o workflow (notificação nativa do GitHub), escreve o comparativo no `$GITHUB_STEP_SUMMARY` e deixa de pingar o check de sucesso — o dead-man's-switch vira o alerta.
+
 **Custo total: US$0/mês**, preservando a margem inteira para a Infobip.
 
 ## Consequências
@@ -76,7 +78,7 @@ A decisão acima foi mantida; três pontos dela não sobreviveram ao contato com
 
 Decisões menores tomadas junto, todas alinhadas ao critério de "nenhuma peça de infraestrutura nova": a **retenção** (risco listado nos Cons) roda como purga dentro do job diário, não em `pg_cron`; o **p95** é calculado em Python sobre a janela lida, porque o PostgREST não expõe `percentile_cont`, e a aba avisa quando a janela foi truncada em vez de publicar um percentil de um pedaço; o módulo importa `supabase-py` **tardiamente**, porque `requirements/api.txt` não o instala (ele mora em `ui.txt`, para não pesar no cold start) e um import no topo quebraria o boot da imagem enxuta da API — que agora simplesmente roda sem registrar eventos.
 
-Fica também registrado o que **não** foi implementado aqui, por depender de URL pública: as duas camadas externas (UptimeRobot e Healthchecks.io) e o alerta por `src/messaging`. A camada interna, que é a que guarda estado, está completa.
+Fica também registrado o que **não** foi implementado aqui, por depender de URL pública: as duas camadas externas (UptimeRobot e Healthchecks.io) e o alerta (hoje via Healthchecks, ver emenda acima). A camada interna, que é a que guarda estado, está completa.
 
 ## Alternativas consideradas
 
