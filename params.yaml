@@ -12,3 +12,21 @@ decision:
 
 features:
   temporais: true       # true | false -- inclui dia_de_semana e horario
+
+# Gate de promoção do re-treino mensal (Passo 9.1, src/retrain_gate.py).
+# Tolerância de REGRESSÃO relativa ao campeão (data/champion_metrics.json),
+# não alvo absoluto -- os alvos do SLO §3 (recall_1>=0.75, f1_1>=0.65) o
+# modelo vigente já viola, e se fossem critério de promoção nada jamais
+# seria promovido (ver SLO §3.1). Os números vivem aqui, e não no código,
+# porque a regra que os gera depende do tamanho do fold: a tolerância das
+# métricas de contagem é ~= 1/(positivos no fold de teste). Com 21
+# positivos, um único paciente move recall_1 em 1/21 ~= 0.048 -- tolerância
+# menor que isso bloquearia/promoveria por ruído de amostragem. roc_auc é
+# contínua e não sofre desse salto. Revisar quando o dataset crescer
+# (Passo 9.0): com >=50 positivos no fold cai para 0.02 -- o gate avisa
+# quando esse ponto chegar.
+gate:
+  tolerancia:
+    recall_1: 0.05
+    f1_1: 0.05
+    roc_auc: 0.02

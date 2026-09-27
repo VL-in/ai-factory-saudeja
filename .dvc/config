@@ -1,4 +1,21 @@
+# Remote do DVC -- Azure Blob Storage (Passo 9.1). Ver README, secao
+# "Remote do DVC (Azure Blob Storage)".
+#
+# Este arquivo E' versionado, e por isso nao guarda nem credencial nem a URL
+# do remote. A credencial e' evidente (AZURE_STORAGE_CONNECTION_STRING, por
+# variavel de ambiente/secret), mas a URL tambem fica fora: ela carrega o nome
+# do container onde o dataset de treino -- que depois do Passo 9.0 contem
+# desfechos reais de pacientes, ainda que pseudonimizados -- esta' versionado.
+# Nome de conta/container em repositorio e' reconhecimento de graca para quem
+# encontrar o repo, sem nenhum ganho em troca. Decisao da autora, 2026-09-21.
+#
+# A URL vive em .dvc/config.local (ignorado pelo git via .dvc/.gitignore) na
+# maquina de quem desenvolve, e em DVC_REMOTE_URL (secret) no GitHub Actions,
+# que escreve o config.local no runner antes de qualquer push/pull:
+#
+#     dvc remote add --local -f azure "$DVC_REMOTE_URL"
+#
+# Sem esse passo, `dvc push`/`dvc pull` falham dizendo que o remote 'azure'
+# nao existe -- falha explicita, melhor que empurrar dado para o lugar errado.
 [core]
-    remote = myremote
-['remote "myremote"']
-    url = /tmp/dvc-remote
+    remote = azure

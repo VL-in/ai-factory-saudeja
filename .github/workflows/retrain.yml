@@ -1,0 +1,188 @@
+# Re-treino mensal + gate de promocao (Passo 9.1 do PLANO-IMPLEMENTACAO.md).
+#
+# O ciclo, em uma frase: pega os desfechos que a clinica registrou na aba
+# "Fila do dia" (Passo 9.0), remonta o dataset de treino, reexecuta o pipeline
+# DVC e promove o modelo novo SO' se ele nao regredir alem da tolerancia do
+# SLO 3.1. Quem decide e' src/retrain_gate.py; aqui ficam as acoes que
+# exigem credencial (remote do DVC, git, Healthchecks) e que por isso nao
+# entram no modulo Python.
+#
+# Tres desfechos, lidos do codigo de saida do gate:
+#   0 -> promovido:  dvc push + branch + PR automatico (revisao humana leve)
+#   1 -> bloqueado:  nada e' publicado, o job FALHA (notificacao nativa do
+#                    GitHub) e o comparativo fica no summary + artifact
+#   2 -> sem dado novo: dataset com o mesmo hash, nada foi re-treinado. Tambem
+#                    FALHA, por decisao da autora (2026-09-21): um mes sem
+#                    desfecho registrado e' um problema de operacao da clinica
+#                    que precisa aparecer, nao uma nao-noticia.
+#
+# Por que o job nao termina no passo do gate: os codigos 1 e 2 precisam de
+# tratamento diferente (summary, ping, artifact) ANTES de o job falhar. O
+# passo "Propagar o resultado" no fim e' o que devolve a falha.
+name: Re-treino mensal (gate de promocao)
+
+on:
+  schedule:
+    # Dia 1 de cada mes, 06:00 UTC = 03:00 America/Sao_Paulo (SLO 5: 100% dos
+    # meses). Workflow agendado e' desativado pelo GitHub depois de 60 dias
+    # sem atividade no repositorio -- e' exatamente isso que o ping do
+    # Healthchecks no fim protege (ADR-006).
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write        # branch de promocao
+  pull-requests: write   # PR automatico
+
+concurrency:
+  # Dois re-treinos simultaneos disputariam o mesmo champion_metrics.json.
+  group: retrain-mensal
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Credencial do remote DVC (Azure Blob Storage). A URL vem separada, em
+      # DVC_REMOTE_URL: .dvc/config e' versionado e nao guarda nem uma nem a
+      # outra (ver .dvc/config e .env.example).
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+      DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      # Supabase: e' de onde saem os desfechos reais do Passo 9.0.
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      HEALTHCHECKS_RETRAIN_URL: ${{ secrets.HEALTHCHECKS_RETRAIN_URL }}
+      # O re-treino nao e' trafego de produto: nao deve poluir `eventos_app`
+      # (Passo 8.5), de onde saem os numeros de latencia/cobertura do SLO.
+      OBSERVABILIDADE_ATIVA: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"   # mesma minor da imagem de treino (dockerfile)
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements/dev.txt
+
+      - name: Configurar remote do DVC
+        # A URL nunca entra em .dvc/config (versionado): e' escrita aqui, no
+        # config.local do runner, a partir do secret. Via env, nao por
+        # interpolacao ${{ }} dentro do shell.
+        run: dvc remote add --local -f azure "$DVC_REMOTE_URL"
+
+      - name: dvc pull (dataset semente + cache do ciclo anterior)
+        # Falha aqui quase sempre significa que o `dvc push` inicial nao foi
+        # feito: data/consultas-historicas.csv (a semente da Camila) nao esta'
+        # em git, so' no remote, e src/export_treino.py nao roda sem ela.
+        run: dvc pull
+
+      - name: Exportar desfechos reais registrados pela clinica (Passo 9.0)
+        # Remonta data/consultas-treino.csv = semente intocada + producao real,
+        # com historico_noshow point-in-time e sem telefone.
+        run: python src/export_treino.py
+
+      - name: Versionar o dataset remontado
+        # No-op silencioso quando nenhum desfecho novo foi registrado: o
+        # conteudo e' identico, o md5 nao muda, e o gate detecta isso adiante.
+        run: dvc add data/consultas-treino.csv
+
+      - name: Gate de promocao (dvc repro + comparacao com o campeao)
+        id: gate
+        # O `dvc repro` daqui builda a imagem de treino e sobe o mlflow-server
+        # via docker compose -- sem cache de layer entre runs, sao alguns
+        # minutos por ciclo. Aceitavel para algo mensal.
+        run: |
+          set +e
+          python src/retrain_gate.py --relatorio-json "$RUNNER_TEMP/gate-report.json"
+          codigo=$?
+          set -e
+          echo "codigo=$codigo" >> "$GITHUB_OUTPUT"
+          echo "Gate terminou com codigo $codigo"
+
+      - name: Guardar o comparativo campeao x desafiante
+        # A evidencia precisa sobreviver ao workflow: o MLflow deste ciclo e'
+        # destruido junto com o runner (ADR-006 -- o coletor nao pode morar
+        # dentro daquilo que ele mede).
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-report
+          path: ${{ runner.temp }}/gate-report.json
+          if-no-files-found: warn
+
+      - name: Publicar o modelo promovido no remote
+        if: steps.gate.outputs.codigo == '0'
+        # Antes do commit: se o push falhar, nao existe PR apontando para um
+        # model.pkl que ninguem consegue baixar (o deploy.yml do Passo 10 faz
+        # `dvc pull` deste remote para levar o modelo ao HF Space).
+        run: dvc push
+
+      - name: Abrir PR de promocao
+        if: steps.gate.outputs.codigo == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # So' o que e' de fato versionado em git: champion_metrics.json (a
+        # fonte de verdade do campeao), dvc.lock (qual codigo+dado gerou qual
+        # modelo) e o .dvc do dataset. O model.pkl NAO vai no commit -- e' out
+        # do DVC, coberto por *.pkl no .gitignore, e chega ao Space pelo
+        # `dvc pull` do deploy.yml.
+        #
+        # Ressalva conhecida: PR aberto com o GITHUB_TOKEN nao dispara outros
+        # workflows, entao o ci.yml (Passo 10) nao roda sozinho neste PR. O
+        # merge, sim, dispara o deploy.yml (evento de push feito por humano).
+        # Se rodar o CI no proprio PR passar a importar, troque por um PAT.
+        run: |
+          set -euo pipefail
+          branch="retrain/$(date -u +%Y-%m)-${GITHUB_RUN_NUMBER}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc
+          git commit -m "(resultado) data/champion_metrics.json, dvc.lock: modelo promovido pelo gate de re-treino mensal"
+          git push origin "$branch"
+
+          relatorio="$RUNNER_TEMP/gate-report.json"
+          {
+            echo "Promocao automatica pelo gate de re-treino mensal (Passo 9.1)."
+            echo
+            echo "**Motivo:** $(jq -r '.motivo' "$relatorio")"
+            echo
+            echo '| Metrica | Campeao | Desafiante | Delta | Tolerancia |'
+            echo '|---|---:|---:|---:|---:|'
+            jq -r '.comparacoes[] | "| `\(.metrica)` | \(.campeao) | \(.desafiante) | \(.delta) | \(.tolerancia) |"' "$relatorio"
+            echo
+            echo "Comparativo completo e avisos: [run #${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            echo
+            echo "O merge deste PR em \`main\` dispara o \`deploy.yml\` (Passo 10), que faz \`dvc pull\` do modelo promovido e sincroniza o HF Space."
+          } > "$RUNNER_TEMP/pr-body.md"
+
+          gh pr create \
+            --title "(resultado) modelo promovido pelo gate de re-treino ($(date -u +%Y-%m))" \
+            --body-file "$RUNNER_TEMP/pr-body.md" \
+            --base "${GITHUB_REF_NAME}" \
+            --head "$branch"
+
+      - name: Ping do dead-man's-switch (sucesso)
+        if: steps.gate.outputs.codigo == '0' && env.HEALTHCHECKS_RETRAIN_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_RETRAIN_URL"
+
+      - name: Ping do dead-man's-switch (falha)
+        # Bloqueio e "sem dado novo" avisam pelo mesmo canal: o check deixa de
+        # receber o sinal de sucesso e recebe /fail, que dispara o e-mail. Nada
+        # de src/messaging aqui -- enviar_lembrete() foi desenhada para
+        # paciente, por SMS pago (decisao 4 do Passo 9).
+        if: steps.gate.outputs.codigo != '0' && env.HEALTHCHECKS_RETRAIN_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_RETRAIN_URL/fail" || true
+
+      - name: Propagar o resultado do gate
+        # E' este passo que faz o job falhar nos codigos 1 e 2, depois de todo
+        # o registro ja' ter sido publicado.
+        if: steps.gate.outputs.codigo != '0'
+        run: |
+          echo "::error::gate de re-treino terminou com codigo ${{ steps.gate.outputs.codigo }} (1=regressao, 2=nenhum re-treino efetivo) -- ver o resumo do run"
+          exit 1

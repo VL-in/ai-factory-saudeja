@@ -6,3 +6,11 @@
 
 # Lint/format -- configuração em ruff.toml (docs/architecture.md §8)
 ruff==0.16.7
+
+# DVC -- pipeline de treino (dvc.yaml) e gate de re-treino (Passo 9.1). Ate'
+# aqui o dvc existia so' no ambiente local da autora, nao declarado em
+# requirements nenhum: o retrain.yml do GitHub Actions roda `dvc repro`/
+# `dvc push` e precisa dele instalado. O extra [azure] traz o adlfs/
+# azure-storage-blob exigidos pelo remote azure:// -- sem ele o `dvc push`
+# falha com "missing dependencies: ['dvc-azure']", e nao com erro de rede.
+dvc[azure]==3.67.1
