@@ -29,6 +29,20 @@ Projeto Supabase criado na região **São Paulo (`sa-east-1`)** — dados de pac
 
 Migrations em `supabase/migrations/` (convenção do Supabase CLI, aplicada automaticamente por `supabase start`/`supabase db reset`), não em `db/migrations/` como sugeria — ajuste técnico, sem impacto de decisão de produto.
 
+### Emenda (2026-09-21, Passo 9.1) — remote do DVC em Azure Blob Storage, e o que isso faz com o argumento de região
+
+O Passo 9.1 precisou decidir **onde o `model.pkl` e o dataset de treino ficam armazenados**, e isso toca esta ADR por dois motivos: ela é a que fixou a região do banco (`sa-east-1`, "dados permanecem no Brasil") e a que decidiu que o modelo é chamado em processo, o que implica que ele precisa estar *dentro* da imagem do Space.
+
+**O problema concreto**: o remote do DVC era `/tmp/dvc-remote`, um caminho local. O GitHub Actions e o HF Space não têm acesso a ele, e `infra/deploy/dockerfile` faz `COPY data/model.pkl` de um arquivo coberto por `*.pkl` no `.gitignore` — ou seja, a verificação do Passo 9 era literalmente inexecutável: não havia caminho pelo qual o modelo promovido chegasse a produção.
+
+**Decisão**: remote em **Azure Blob Storage**, container na região **Chile Central** (escolha da autora, 2026-09-21). Nem a credencial nem a URL entram em `.dvc/config`, que é versionado: lá fica só `[core] remote = azure`, e a URL vem de `.dvc/config.local` (ignorado pelo git) ou do secret `DVC_REMOTE_URL` no Actions. A credencial vai por `AZURE_STORAGE_CONNECTION_STRING`. O modelo chega ao Space pelo `dvc pull` do `deploy.yml` (Passo 10), que força o arquivo no espelho enviado ao Hub — a alternativa (o Space baixar do Azure no build) exigiria credencial Azure como secret do Space e contraria a decisão de que o modelo viaja dentro da imagem.
+
+**A consequência que precisa estar escrita**: Chile Central está **fora do Brasil**. O argumento que sustentou `sa-east-1` na emenda do Passo 5 — "não há transferência internacional a justificar" — **deixa de valer para este artefato**. O que vai para o remote é o dataset de treino, que depois do Passo 9.0 contém desfechos reais de consultas, e o `model.pkl` derivado dele. Sob a LGPD isso é transferência internacional de dado derivado de dado de saúde (Art. 33), mesmo pseudonimizado.
+
+O que **mitiga** é o conteúdo, não a região: o export (`src/export_treino.py`) nunca inclui telefone, nome ou CPF; `id_paciente` é hash sha256 de CPF; sobram atributos demográficos não identificáveis (idade derivada, sexo), operacionais (especialidade, distância, dias de antecedência) e o desfecho. Não há identificador direto no arquivo que sai do país. O que **não** mitiga: um dataset pseudonimizado continua sendo dado pessoal para a LGPD, e a base legal + as cláusulas contratuais padrão do provedor precisam ser registradas em `docs/LGPD.md` (Passo 8) — pendência declarada aqui, não resolvida.
+
+A escolha é **reversível a baixo custo** e vale registrar o caminho: criar um container em Brazil South, apontar `DVC_REMOTE_URL`/`config.local` para ele e rodar `dvc push` de novo. Nada no código depende da região; o que depende dela é a análise de LGPD do Passo 8 e o slide de risco do Passo 12 (o BRIEFING trata dado de saúde como categoria especial desde o protótipo). Se a decisão for mantida, o pitch precisa dizer isso em voz alta em vez de afirmar que "os dados não saem do Brasil" — o que continua verdadeiro para o banco de produção e passou a ser falso para o artefato de treino.
+
 ## Consequências
 Pros:
 - Scheduler externo (GitHub Actions) remove uma dependência de disponibilidade do próprio Space.

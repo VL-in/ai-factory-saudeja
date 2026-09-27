@@ -8,6 +8,26 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
+## [v1.8] (Vanessa + Claude) - 2026-09-21
+
+### Adicionado
+- A clínica passa a registrar o desfecho de cada consulta na "Fila do dia" (`concluído`/`no_show`/`cancelado`), o que é o que alimenta o re-treino com dado real.
+- Re-treino mensal automatizado com gate de promoção: o modelo novo só substitui o que está em produção se `recall_1`, `f1_1` e `roc_auc` não regredirem além da tolerância de `params.yaml` (`gate.tolerancia`). Regressão bloqueia a promoção, mantém o modelo anterior e falha o ciclo; um mês sem desfecho novo registrado também falha, em vez de re-treinar contra o mesmo dado.
+- `data/champion_metrics.json` declara o modelo em produção (métricas medidas, `model_version`, threshold e identidade do dataset). É reescrito apenas quando o gate promove.
+- `data/consultas-treino.csv` passa a ser o dataset de treino: a semente herdada (380 linhas, intocada) mais os desfechos reais exportados do banco, com `historico_noshow` calculado na data de cada consulta — nunca com informação posterior a ela.
+- Novas variáveis de ambiente: `DVC_REMOTE_URL`, `AZURE_STORAGE_CONNECTION_STRING`, `HEALTHCHECKS_RETRAIN_URL`, `CONSULTAS_HISTORICAS_PATH` e `CONSULTAS_TREINO_PATH`.
+
+### Modificado
+- O armazenamento de dataset e modelo deixou de ser um diretório local e passou a ser Azure Blob Storage. Quem clonar o repositório precisa configurar o remote (`dvc remote add --local`) e a credencial antes de `dvc pull`/`dvc push`; sem isso as duas operações falham dizendo que o remote não existe.
+- As métricas do modelo vigente registradas na documentação estavam erradas: `recall_1` é **0.429** (não 0.522, que vinha de outra configuração), com `f1_1` 0.419 e `roc_auc` 0.643 no threshold 0.6.
+
+### Corrigido
+- O `historico_noshow` calculado automaticamente no cadastro dependia de a coluna `status` receber `no_show`, e nada no produto escrevia esse valor desde que a coluna passou a aceitá-lo. Com o registro de desfecho na "Fila do dia", passa a funcionar.
+
+### Segurança
+- O export do dataset de treino nunca inclui telefone, nome ou CPF: `id_paciente` é o hash sha256 do CPF, e a restrição é verificada automaticamente.
+- O dataset de treino e o modelo passam a ser armazenados fora do Brasil (container em Chile Central), ao contrário do banco de produção, que permanece em São Paulo. O que sai do país é pseudonimizado e sem dado de contato; a base legal dessa transferência é pendência declarada.
+
 ## [v1.7] (Vanessa + Claude) - 2026-09-21
 
 ### Adicionado

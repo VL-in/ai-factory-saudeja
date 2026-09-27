@@ -10,6 +10,8 @@ ai-factory-saudeja/
 │   ├── consultas-historicas.csv.dvc   # metadados do DVC
 │   ├── interim/                       # artefatos intermediários do pipeline (train_raw.pkl, test.pkl, mapa_especialidade.json, mlflow_run_id.txt)
 │   ├── model.pkl                      # modelo treinado (saída do stage train)
+│   ├── consultas-treino.csv           # semente + desfechos reais de produção (Passo 9.0, via DVC)
+│   ├── champion_metrics.json          # métricas do modelo em produção (versionado em git, Passo 9.1)
 │   ├── AVISO-DADOS-SINTETICOS.md
 │   └── AVISO-MODELO.md
 ├── docs/
@@ -36,6 +38,8 @@ ai-factory-saudeja/
 │   ├── config_projeto.py              # REPO_ROOT + carregar_params(): caminhos independentes do CWD
 │   ├── agenda_clinica.py              # grade de horários da clínica (cadastro do paciente, Passo 5)
 │   ├── db/                            # client.py (supabase-py) + repositories.py (Passo 5)
+│   ├── export_treino.py               # desfechos reais do Supabase -> consultas-treino.csv (Passo 9.0)
+│   ├── retrain_gate.py                # gate de promoção do re-treino mensal (Passo 9.1)
 │   ├── preprocess.py                  # feature engineering + split treino/teste (stage 1)
 │   ├── train.py                       # SMOTE-NC + treino LightGBM, loga no MLflow (stage 2)
 │   ├── validate.py                    # métricas no fold de teste isolado (stage 3)
@@ -48,7 +52,8 @@ ai-factory-saudeja/
 │   ├── jobs/                          # inferencia_diaria.py: job D-2 (Passo 6)
 │   └── messaging/                     # client.py: interface + stub + InfobipClient (SMS real, Passo 7)
 ├── tests/                             # testes unitários e de integração do pipeline
-├── .dvc/                              # configuração e cache do DVC
+├── .github/workflows/                 # retrain.yml (cron mensal do gate, Passo 9.1); ci.yml/deploy.yml/job_d2.yml no Passo 10
+├── .dvc/                              # configuração e cache do DVC (config versionado só com `core.remote`; URL/credencial fora do git)
 ├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
 ├── params.yaml                        # hiperparâmetros do modelo
 ├── dockerfile / dockerfile.mlflow     # imagens de treino e do servidor MLflow
@@ -142,11 +147,13 @@ Deployment: roda como parte da imagem do HF Space, disparado por GitHub Actions 
 
 Name: Gate de promoção de modelo
 
-Description: Re-treina o pipeline DVC/MLflow contra dados frescos, compara métricas (`recall_1`, `f1_1`, `roc_auc`) contra o campeão atual (`data/champion_metrics.json`, versionado em git) e só promove `data/model.pkl` se não houver regressão além da tolerância do SLO. Bloqueia promoção e alerta a equipe via mensageria (5) em caso de regressão. Ver detalhamento no [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 9.
+Description: Re-treina o pipeline DVC/MLflow contra os desfechos reais que a clínica registra na "Fila do dia" (`src/export_treino.py`, Passo 9.0), compara `recall_1`/`f1_1`/`roc_auc` contra o campeão (`data/champion_metrics.json`, versionado em git) e só promove se não houver **regressão relativa** além da tolerância por métrica de `params.yaml` (`gate.tolerancia`, justificada no [SLO §3.1](SLO.md)). Os alvos absolutos do SLO §3 não são critério de promoção — o modelo vigente já os viola, e se fossem nada seria promovido.
 
-Technologies: Python (`src/retrain_gate.py`), DVC, MLflow (efêmero via `docker-compose`, só durante o workflow)
+Três desfechos, distinguidos pelo código de saída porque o workflow age diferente em cada um: **0** promove (reescreve o campeão, `dvc push`, branch + PR automático), **1** bloqueia por regressão (nada é publicado — o modelo anterior segue em produção por construção, não por convenção) e **2** significa "nenhum re-treino efetivo" (dataset com o mesmo hash: nenhum desfecho novo registrado). Os códigos 1 e 2 falham o workflow; o comparativo campeão × desafiante vai para o `$GITHUB_STEP_SUMMARY` e para um artifact JSON, porque o MLflow daquele ciclo não sobrevive ao job. Alerta por Healthchecks.io/notificação nativa do Actions, **não** por `src/messaging` (5) — ver decisão 4 do Passo 9.
 
-Deployment: GitHub Actions (cron mensal + `workflow_dispatch`), sem infraestrutura própria always-on.
+Technologies: Python (`src/retrain_gate.py`), DVC (remote em Azure Blob Storage), MLflow (efêmero via `docker-compose`, só durante o workflow)
+
+Deployment: GitHub Actions (`.github/workflows/retrain.yml`, cron mensal + `workflow_dispatch`), sem infraestrutura própria always-on.
 
 ## 4. Data Stores
 
@@ -166,7 +173,7 @@ Name: MLflow (backend sqlite + artifacts em volumes Docker locais)
 
 Type: tracking server efêmero (sobe via `docker-compose` só durante treino/validação/gate de re-treino)
 
-Purpose: rastreabilidade de hiperparâmetros/métricas/modelo de cada run de treino (ver README, seção "Pipeline de treino"). A fonte de verdade do "modelo campeão" para produção é `data/champion_metrics.json` (versionado em git), não uma run do MLflow — que não sobrevive entre execuções do workflow mensal (ver Passo 9).
+Purpose: rastreabilidade de hiperparâmetros/métricas/modelo de cada run de treino (ver README, seção "Pipeline de treino"). A fonte de verdade do "modelo campeão" para produção é `data/champion_metrics.json` (versionado em git), não uma run do MLflow — que não sobrevive entre execuções do workflow mensal (ver Passo 9). O arquivo foi semeado no Passo 9.1 com as métricas **medidas** da run que gerou o `model.pkl` vigente (`recall_1` 0.429, `f1_1` 0.419, `roc_auc` 0.643, threshold 0.6), e a partir daí só é reescrito pelo gate ao promover.
 
 ## 5. External Integrations / APIs
 
@@ -192,7 +199,7 @@ Integration Method: API Python do MLflow, servidor local via Docker Compose.
 
 Cloud Provider: Hugging Face Space (SDK Docker) para a aplicação; Supabase (gerenciado) para o banco.
 
-Key Services Used: Hugging Face Space (Streamlit + FastAPI no mesmo container, modelo `data/model.pkl` versionado via DVC e empacotado direto na imagem — não depende de MLflow ao vivo em produção, ver Passo 9); GitHub Actions (CI de PR, deploy por sync ao HF Hub via `huggingface/huggingface-sync-action`, cron mensal do gate de re-treino, cron diário do job D-2 — ver [ADR-005-a](adr/adr-005-integracoes-implicitas.md)).
+Key Services Used: Hugging Face Space (Streamlit + FastAPI no mesmo container, modelo `data/model.pkl` versionado via DVC e empacotado direto na imagem — não depende de MLflow ao vivo em produção, ver Passo 9); Azure Blob Storage como remote do DVC (Passo 9.1 — dataset de treino e `model.pkl`, os dois fora do git; é o que torna o modelo alcançável pelo Actions e pelo deploy, o que o remote anterior `/tmp/dvc-remote` não era); GitHub Actions (CI de PR, deploy por sync ao HF Hub via `huggingface/huggingface-sync-action`, cron mensal do gate de re-treino, cron diário do job D-2 — ver [ADR-005-a](adr/adr-005-integracoes-implicitas.md)).
 
 A imagem combinada vive em `infra/deploy/` (`dockerfile` + `entrypoint.sh`) e já existe desde o Passo 4 — antecipada do Passo 11 para o conjunto poder ser exercitado localmente como ele vai rodar em produção (`docker compose up -d app`: UI em 7860, API em 8000). Um container, dois processos, sem supervisord: `entrypoint.sh` sobe os dois, derruba o container inteiro se qualquer um deles sair (`wait -n`) e encerra ambos em SIGTERM. O `model.pkl` é empacotado na imagem (ao contrário de `infra/api/dockerfile`, que o monta por volume em dev) porque não há DVC nem acesso ao remote no runtime do Space.
 
@@ -204,7 +211,9 @@ Monitoring & Logging: MLflow para métricas de ML (4.2); logging estruturado JSO
 
 ## 7. Security Considerations
 
-Authentication: chaves de serviço do Supabase (`SUPABASE_URL`/`SUPABASE_KEY`) e token do HF Space (`HF_TOKEN`) como secrets, nunca versionados (`.env.example` documenta as variáveis, não os valores).
+Authentication: chaves de serviço do Supabase (`SUPABASE_URL`/`SUPABASE_KEY`), token do HF Space (`HF_TOKEN`) e credencial do remote DVC (`AZURE_STORAGE_CONNECTION_STRING`) como secrets, nunca versionados (`.env.example` documenta as variáveis, não os valores). No caso do DVC, **a própria URL do remote** (`DVC_REMOTE_URL`) também fica fora do git: `.dvc/config` é versionado e guarda só `[core] remote = azure`, porque a URL carrega o nome do container onde o dataset de treino está armazenado.
+
+Data residency: o banco de produção fica em `sa-east-1` (São Paulo), mas o remote do DVC fica em **Chile Central** — ou seja, há transferência internacional de um dataset derivado de dados de saúde. O que limita a exposição é o conteúdo, não a região: o dataset exportado é pseudonimizado (`id_paciente` é hash sha256 de CPF) e nunca inclui telefone, nome ou CPF. Registrado como emenda do Passo 9.1 no [ADR-005](adr/adr-005-integracoes-implicitas.md), com a base legal a ser fechada em `docs/LGPD.md` (Passo 8).
 
 Authorization: não há multiusuário/RBAC no núcleo do produto — dois perfis de UI (Paciente/Funcionário) sem autenticação forte ainda desenhada; fica como debt conhecido (ver §9).
 
@@ -228,7 +237,7 @@ Nota de convenção: os módulos de `src/` são importados "soltos" (sem prefixo
 
 ## 9. Future Considerations / Roadmap
 
-**Debt conhecido — gap de recall**: o recall atual da classe positiva (no-show) é 0.522 (ver [ADR-003](adr/adr-003-SMOTE-NC.md)), abaixo do alvo do SLO (≥0.75). Não é um bug de implementação — é limite do dataset sintético pequeno (380 linhas). Não será resolvido agora; o [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md) cria checkpoints explícitos para revisitar a questão (Passo 6, com dados fluindo pelo job real; Passo 12, fechamento obrigatório antes do pitch — threshold recalibrado ou gap aceito e documentado).
+**Debt conhecido — gap de recall**: o recall da classe positiva (no-show) do modelo **vigente** é 0.429, com `f1_1` 0.419 e `roc_auc` 0.643 (medidos no threshold 0.6, registrados em `data/champion_metrics.json` desde o Passo 9.1), abaixo do alvo do SLO (≥0.75). O 0.522 que este documento citava vinha do [ADR-003](adr/adr-003-SMOTE-NC.md), medido em outra configuração (antes de `features.temporais=true` e em outro threshold) — não era o número do modelo em produção. Não é um bug de implementação — é limite do dataset sintético pequeno (380 linhas). Não será resolvido agora; o [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md) cria checkpoints explícitos para revisitar a questão (Passo 6, com dados fluindo pelo job real; Passo 12, fechamento obrigatório antes do pitch — threshold recalibrado ou gap aceito e documentado).
 
 Outros itens de roadmap: autenticação/RBAC para os dois perfis de usuário (não desenhada ainda); LLM/TrueFoundry (Passo 13, opcional, fora do SLA/SLO); Langfuse para tracing do LLM quando este for ativado.
 
@@ -240,7 +249,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-20 (Passo 7)
+Date of Last Update: 2026-09-21 (Passo 9.1)
 
 ## 11. Glossary / Acronyms
 
