@@ -329,6 +329,54 @@ def test_cadastro_repassa_o_nome_ao_repositorio(monkeypatch):
     assert capturado["id_paciente_externo"] == logic._id_paciente_externo_de_cpf("52998224725")
 
 
+class _ErroDeSchema(Exception):
+    """Imita o `APIError` do supabase-py: o que identifica a causa é o
+    atributo `code`, não o texto da mensagem."""
+
+    def __init__(self, code, message):
+        super().__init__({"message": message, "code": code})
+        self.code = code
+
+
+def test_banco_sem_a_migration_diz_o_que_fazer(monkeypatch):
+    """Regressão de um incidente real (2026-09-28): a migration de
+    `nome_completo` estava no Supabase local, onde os testes de integração
+    rodam, e não no projeto remoto, para onde o `.env` aponta. A tela mostrou
+    o dicionário cru do PostgREST -- que diz o que falta, mas não o que fazer.
+
+    Não é erro de uso nem indisponibilidade: é ambiente fora de sincronia, e
+    volta a cada migration nova, inclusive no deploy do Passo 11."""
+
+    def _coluna_inexistente(_dia):
+        raise _ErroDeSchema("42703", "column pacientes_1.nome_completo does not exist")
+
+    monkeypatch.setattr(logic.repositories, "buscar_fila_do_dia", _coluna_inexistente)
+
+    with pytest.raises(logic.ErroPersistencia) as capturado:
+        logic.buscar_fila_do_dia(date(2026, 9, 28))
+
+    mensagem = str(capturado.value)
+    assert "supabase db push" in mensagem
+    # A mensagem original continua junto: sem ela não dá para saber QUAL
+    # migration falta.
+    assert "nome_completo" in mensagem
+
+
+def test_falha_de_banco_comum_nao_vira_conselho_sobre_migration(monkeypatch):
+    """O conselho só vale para o código certo -- sugerir `supabase db push`
+    diante de um banco fora do ar mandaria a pessoa para o lugar errado."""
+
+    def _indisponivel(_dia):
+        raise _ErroDeSchema("08006", "connection failure")
+
+    monkeypatch.setattr(logic.repositories, "buscar_fila_do_dia", _indisponivel)
+
+    with pytest.raises(logic.ErroPersistencia) as capturado:
+        logic.buscar_fila_do_dia(date(2026, 9, 28))
+
+    assert "supabase db push" not in str(capturado.value)
+
+
 def test_fila_do_dia_nao_pede_telefone_ao_banco():
     """`buscar_fila_do_dia` deixou o `select("*")` para trás (ADR-007): numa
     tabela que guarda PII por exceção, a lista de colunas é a fronteira, e o

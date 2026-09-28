@@ -20,6 +20,9 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 - A consulta da fila do dia passou a pedir colunas específicas ao banco em vez de todas: o telefone do paciente deixou de ser trazido para a tela, onde não era usado.
 - O cadastro recusa nome vazio ou com mais de 120 caracteres antes de gravar.
 
+### Corrigido
+- Quando o banco está atrás das migrations do repositório, a interface passa a dizer qual comando aplicar (`supabase db push` no projeto remoto, `supabase db reset` no local) em vez de mostrar o erro cru do PostgREST. Aparecia ao abrir a "Fila do dia" logo depois desta versão, porque a migration do nome precisa ser aplicada também no projeto remoto.
+
 ### Segurança
 - O nome do paciente é autorizado **apenas** na tela da equipe da clínica. Ele não sai para log, para a tabela de observabilidade, para o dataset de treino (que é armazenado fora do Brasil), para a resposta da API pública, para a mensagem enviada pela Infobip nem para o provedor de LLM previsto. Cada uma dessas sete saídas tem verificação automatizada.
 - A fronteira do LLM passou a ser aplicada pela própria interface de explicação: qualquer implementação futura recebe o contexto já sem dado pessoal, sem depender de lembrar de filtrá-lo.

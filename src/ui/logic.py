@@ -311,9 +311,30 @@ class ItemFila:
         return f"(cadastro sem nome) {self.id_paciente_externo[:8]}"
 
 
+# Códigos do Postgres que significam a MESMA causa operacional: o banco em que
+# a aplicação está falando não recebeu as migrations que o repositório já tem.
+# 42703 = undefined_column, 42P01 = undefined_table.
+# https://www.postgresql.org/docs/current/errcodes-appendix.html
+_CODIGOS_DE_SCHEMA_DESATUALIZADO = frozenset({"42703", "42P01"})
+
+
 def _relatar_falha_persistencia(exc: Exception, acao: str):
     if isinstance(exc, ConfiguracaoSupabaseAusente):
         raise ErroPersistencia(str(exc)) from exc
+    if getattr(exc, "code", None) in _CODIGOS_DE_SCHEMA_DESATUALIZADO:
+        # Aconteceu de verdade em 2026-09-28, ao ligar `nome_completo`: a
+        # migration estava aplicada no Supabase local (onde os testes de
+        # integração rodam) e não no projeto remoto, que é para onde o `.env`
+        # aponta. A tela mostrou o dicionário cru do PostgREST -- que diz o que
+        # falta, mas não o que fazer. A distinção vale código porque não é um
+        # erro de uso nem indisponibilidade: é ambiente fora de sincronia, e a
+        # mesma situação volta a cada migration nova, inclusive no deploy do
+        # Passo 11.
+        raise ErroPersistencia(
+            f"{acao}: o banco está desatualizado em relação às migrations do "
+            f"repositório ({exc}). Aplique com `supabase db push` (projeto remoto) "
+            "ou `supabase db reset` (local) -- ver README, seção 'Banco de dados'."
+        ) from exc
     raise ErroPersistencia(f"{acao}: {exc}") from exc
 
 

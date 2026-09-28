@@ -210,6 +210,8 @@ pytest -m integracao tests/test_db.py -v
 
 Para aplicar as migrations num projeto remoto (fora do fluxo local acima): `supabase link --project-ref <ref>` seguido de `supabase db push`.
 
+> **Migration nova exige os dois bancos.** `supabase db reset` aplica só no local — é lá que `pytest -m integracao` roda. O `.env` da máquina de quem desenvolve normalmente aponta para o **projeto remoto**, então a interface continua falando com um banco sem a coluna nova até `supabase db push` rodar. O sintoma é um erro de coluna inexistente (`42703`) ao abrir a aba que usa a coluna; desde 2026-09-28 a UI reconhece esse código e diz qual comando rodar, em vez de mostrar o erro cru do PostgREST. O mesmo vale para o deploy do Passo 11: o Space fala com o projeto remoto.
+
 ## Job de inferência diária (D-2)
 
 `src/jobs/inferencia_diaria.py` (`processar_dia()`/`main()`) fecha o loop do produto: busca no Supabase os agendamentos marcados para dois dias à frente (`buscar_agendamentos_d2_pendentes`), roda predição+explicação reaproveitando `src/inference.py`/`src/explain.py` (Passos 1/2 — mesmos módulos que a API usa, sem lógica duplicada), grava em `predicoes` e decide o disparo de lembrete pago conforme `decision.threshold` (`params.yaml`), sempre registrando a decisão (`enviado`/`nao_enviado`) em `mensagens_disparadas` para auditoria (SLA §6). Modelo carregado em processo, não via HTTP à API (ADR-005 b) — o job roda dentro da mesma imagem do HF Space (Passo 11).
