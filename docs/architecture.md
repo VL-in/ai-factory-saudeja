@@ -214,7 +214,7 @@ A imagem combinada vive em `infra/deploy/` (`dockerfile` + `entrypoint.sh`) e j�
 
 **Ponto em aberto para o Passo 11**: o HF Space (SDK Docker) publica **uma única porta** (`app_port`, default 7860). Com UI e API em portas diferentes, só uma fica acessível de fora — a UI. Como a UI chama o modelo em processo (ADR-005 b), o produto funciona; o que fica sem endereço público é o papel da API como porta de entrada para integrações externas ao Saúde Já (diagrama C2). Decidir no Passo 11 entre: expor só a UI e adiar a API pública, colocar um proxy reverso na frente dos dois, ou publicar a API e servir a UI por outro caminho. Localmente as duas portas são publicadas e o dilema não aparece.
 
-CI/CD Pipeline: GitHub Actions — `ci.yml` (lint + pytest em PRs) e `deploy.yml` (sync `main` → HF Space, só após `ci.yml` passar). Ver Passo 10.
+CI/CD Pipeline: GitHub Actions — `ci.yml` (lint + pytest em PRs) e `deploy.yml`, que aplica as migrations do Supabase (`supabase db push`) e **depois** sincroniza `main` → HF Space, só após `ci.yml` passar. A ordem importa: o Space rebuilda sozinho ao receber o espelho, então não há janela entre o sync e o container novo em que dê para migrar com segurança. Nada na imagem do Space aplica migration — `supabase/` não entra nela. Ver Passo 10.1, que também fixa a regra de compatibilidade (migration aditiva pode ir junto do código que a exige; destrutiva/restritiva, nunca).
 
 Monitoring & Logging: MLflow para métricas de ML (4.2); `eventos_app` no Supabase como fonte de verdade das métricas de aplicação (4.1/ADR-006); logging estruturado JSON com redação de PII (`src/logging_config.py`, Passo 8) para a aplicação. Sem Langfuse/APM dedicado no núcleo — reservado para tracing do LLM opcional (Passo 13).
 

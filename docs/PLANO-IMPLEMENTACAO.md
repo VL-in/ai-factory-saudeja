@@ -309,6 +309,49 @@ A ressalva vale registrar porque não generaliza: `dvc commit` é uma afirmaçã
 
 **Verificação**: abrir PR de teste, confirmar que `ci.yml` dispara e passa; quebrar um teste de propósito, confirmar que o CI falha e `deploy.yml` não roda; mergear um PR válido em `main` e confirmar que `deploy.yml` sincroniza e o HF Space rebuilda automaticamente (sem passo manual).
 
+### 10.1 — Migrations de banco no deploy
+
+> Acrescentado em 2026-09-28, a partir de um incidente real — não estava previsto no texto original do passo.
+
+**O buraco que este sub-passo fecha.** O texto acima descreve um deploy que sincroniza **código** e nada mais. Nada em `infra/deploy/dockerfile` aplica migrations — o diretório `supabase/` nem entra na imagem, e não há CLI do Supabase dentro dela. Resultado: **o deploy é automático e a migration é manual**. Basta um PR com migration ser mergeado sem ninguém rodar `supabase db push` para o código de produção rodar contra schema antigo.
+
+Isso não é hipótese. Aconteceu em 2026-09-28, ao ligar `pacientes.nome_completo` ([ADR-007](adr/adr-007-nome-do-paciente.md)): a migration foi aplicada no Supabase local — onde `pytest -m integracao` roda —, os testes passaram, e a interface quebrou com `42703 column pacientes_1.nome_completo does not exist`, porque o `.env` da máquina aponta para o projeto **remoto**. Em desenvolvimento o custo foi um erro na tela de quem escreveu o código. Em produção o erro apareceria para a clínica, num Space cujo log é efêmero (ADR-006) e apaga a própria evidência.
+
+**Dois agravantes específicos deste projeto:**
+
+1. **Não existe separação dev/prod de banco.** Há um único projeto Supabase remoto: é o mesmo que o `.env` de desenvolvimento aponta e o mesmo que o Space vai apontar. Um `supabase db push` rodado da máquina de quem desenvolve **é** uma migration de produção, sem ensaio prévio possível.
+2. **A ordem está invertida em relação ao padrão seguro.** Como o banco é compartilhado, a migration muda produção *antes* de o código que precisa dela ser deployado. Para coluna nullable isso é inofensivo (código antigo a ignora). Mas duas migrations já no repositório **não** são retrocompatíveis — `20260920010000_cadastro_pacientes.sql` faz `drop column idade` e `20260920020000_telefone_paciente.sql` faz `alter column telefone set not null`. Qualquer uma delas aplicada com o código antigo ainda no ar quebraria produção na hora.
+
+**Decisão**: `deploy.yml` aplica as migrations **antes** do sync ao Space, e a ordem do workflow passa a ser `ci.yml` verde → `supabase db push` → sync. Aplicar antes, e não depois, porque o Space rebuilda sozinho assim que recebe o espelho: entre o sync e o container novo no ar não há janela em que dê para rodar a migration com segurança.
+
+```yaml
+# esboço, dentro do job de deploy, antes do passo de sync
+- uses: supabase/setup-cli@v1
+  with:
+    version: latest
+- run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+- run: supabase db push
+  env:
+    SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+```
+
+Três secrets novos: `SUPABASE_ACCESS_TOKEN` (token pessoal do CLI, **não** a chave do projeto), `SUPABASE_DB_PASSWORD` e `SUPABASE_PROJECT_REF`. O ref entra como secret, não como valor versionado, pela mesma razão que a URL do remote do DVC ficou fora de `.dvc/config` (Passo 9.1): identificador de infraestrutura em repositório é reconhecimento de graça. Documentar em `.env.example` como variável, nunca com valor.
+
+**Regra de compatibilidade, que vale mais que o passo de workflow** — com um banco só e deploy automático, a disciplina de escrever migration tem de ser a de sistema em produção:
+
+| Tipo de migration | Quando pode ir | Exemplo no repo |
+|---|---|---|
+| **Aditiva** (coluna nullable, tabela nova, índice) | Junto do deploy, antes do código. Código antigo ignora o que não conhece | `20260928000000_nome_paciente.sql`, `20260921000000_eventos_app.sql` |
+| **Destrutiva ou restritiva** (`drop column`, `set not null`, `check` mais estreito) | **Nunca no mesmo deploy que o código que a exige.** Vai num deploy posterior, depois de o código que não depende mais da coluna já estar no ar | `drop column idade` e `set not null` em `telefone` — ambas passariam batido pelo workflow acima e quebrariam produção |
+
+Ou seja: o passo de workflow resolve o **esquecimento**, não a **incompatibilidade**. A segunda é decisão de quem escreve a migration, e é por isso que está escrita aqui em vez de virar só YAML.
+
+**Alternativas consideradas.** (a) Guarda no `ci.yml` que falha o PR quando há migration nova sem registro de aplicação: impede o merge silencioso, mas não aplica nada — continua exigindo passo manual, e o modo de falha vira "PR travado" em vez de "produção quebrada", o que é melhor mas não resolve. (b) Só documentar como checklist de release do Passo 11: é exatamente o que existe hoje, e foi o que falhou. Ficam as duas como reforço opcional, não como substituto.
+
+**Verificação**: abrir PR com uma migration aditiva de brincadeira (ex. coluna `_teste_deploy` nullable), mergear e confirmar que (i) `supabase db push` roda antes do sync, (ii) a coluna existe no projeto remoto ao fim do workflow, (iii) o Space rebuilda depois disso e não antes. Depois, `supabase db push` de uma migration que a remove, para não deixar resíduo. Conferir também o caminho de falha: apontar `SUPABASE_DB_PASSWORD` para um valor errado e confirmar que o deploy **falha antes do sync**, em vez de sincronizar código contra schema não migrado.
+
 ---
 
 ## Passo 11 — Deploy no Hugging Face Space
@@ -319,6 +362,7 @@ A ressalva vale registrar porque não generaliza: `dvc commit` é uma afirmaçã
 - Resta aqui: front-matter YAML do HF Space, `APP_ENV=prod`, segredos configurados na UI do Space (não versionados), e a checagem de usuário não-root/permissões de escrita que o Space exige.
 - **Porta única do Space**: o HF Space (SDK Docker) publica só uma porta (`app_port`, default 7860). Hoje a imagem expõe UI em 7860 e API em 8000 — em produção só a primeira ficaria acessível. A UI não sofre (chama o modelo em processo, ADR-005 b); quem fica sem endereço público é a API como porta de entrada para integrações externas (diagrama C2). Decidir entre: (a) expor só a UI e adiar a API pública para quando houver um consumidor externo real, (b) proxy reverso na frente dos dois na porta publicada, (c) publicar a API e servir a UI por outro caminho. Registrar a escolha como emenda ao ADR-005 ou ADR novo, conforme o peso.
 - **Ligar as sondas externas do Passo 8.5**, que só agora têm URL pública para apontar: monitor do UptimeRobot em `/health` do Space e checks do Healthchecks.io para o job D-2 e o re-treino. Vale anotar que o Space free **hiberna por inatividade** — o monitor batendo de minutos em minutos mantém o container acordado como efeito colateral, o que melhora o cold start percebido (SLO §2) mas mascara o comportamento real de hibernação. Decidir conscientemente se isso é desejável antes de medir o cold start para o pitch.
+- **Antes do primeiro sync**, conferir que o projeto Supabase remoto está com todas as migrations aplicadas (`supabase db push`) e que os três secrets do sub-passo [10.1](#101--migrations-de-banco-no-deploy) existem no repositório — senão o primeiro deploy sincroniza código contra schema antigo, que é o incidente de 2026-09-28 acontecendo com a clínica na frente.
 - Deploy inicial: criar o HF Space e rodar manualmente o `deploy.yml` do Passo 10 (`workflow_dispatch`) para o primeiro sync via `huggingface/huggingface-sync-action`. Dali em diante, todo push em `main` (deploy manual de código ou promoção automática do Passo 9) usa o mesmo workflow — não há um segundo mecanismo de deploy a manter.
 
 **Verificação**: Space público respondendo `/health` 200 com a `model_version` esperada; smoke test manual fim a fim (criar agendamento → job via `workflow_dispatch` → predição+explicação visível na fila do Streamlit → log de decisão de mensageria); medição manual do cold start vs. SLO <10s; smoke test do loop de deploy automático (merge de um PR de promoção do Passo 9 → confirmar que o Space rebuilda sozinho, sem passo manual).
