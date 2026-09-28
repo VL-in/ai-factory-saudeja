@@ -387,3 +387,31 @@ def purgar_eventos_app(anteriores_a: datetime) -> int:
         .data
     )
     return len(removidas or [])
+def purgar_dados_derivados(anteriores_a: datetime) -> dict[str, int]:
+    """Retenção das tabelas **derivadas** (`predicoes`,
+    `mensagens_disparadas`), política do Passo 8 / `docs/LGPD.md` §5.
+
+    Pendurada na mesma purga diária de `eventos_app` pelo mesmo motivo do
+    ADR-006: o job já roda uma vez por dia, e agendador novo é peça de infra a
+    manter. Devolve o que saiu de cada tabela, para o log do job dizer o que
+    aconteceu em vez de um total indistinto.
+
+    `pacientes`/`agendamentos` não entram -- ver
+    `config_projeto.retencao_dados_derivados_dias`. Apagar `predicoes` não afeta
+    o re-treino: `src/export_treino.py` lê o desfecho de `agendamentos.status`,
+    nunca a probabilidade que o modelo previu.
+    """
+    client = obter_client()
+    removidas = {}
+    for tabela in ("predicoes", "mensagens_disparadas"):
+        linhas = (
+            client.table(tabela)
+            .delete()
+            .lt("criado_em", anteriores_a.isoformat())
+            .execute()
+            .data
+        )
+        removidas[tabela] = len(linhas or [])
+    return removidas
+
+

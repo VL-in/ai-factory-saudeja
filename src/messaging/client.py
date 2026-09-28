@@ -56,7 +56,28 @@ class ErroEnvioInfobip(Exception):
     """Infobip respondeu com erro (credenciais inválidas, número não
     verificado no sandbox de teste, payload rejeitado) ou não respondeu --
     o job (Passo 6) trata isso como falha de envio de UM agendamento, não
-    deixa a exceção crua derrubar o processamento do resto da fila do dia."""
+    deixa a exceção crua derrubar o processamento do resto da fila do dia.
+
+    **A mensagem não carrega o corpo da resposta** (mudança do Passo 8): a
+    Infobip ecoa o payload enviado no corpo de erro, com o `to` -- o telefone
+    do paciente -- dentro. Essa string ia inteira para `resultado["erros"]`
+    do job, era exibida crua por `st.json` na aba de dev e vazaria em qualquer
+    `logger.warning(f"...{exc}")` futuro. O que fica na mensagem é o par
+    (status HTTP, `messageId` da Infobip), que é o que identifica a causa --
+    foi assim que se diagnosticou `EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL` no
+    Passo 7.
+
+    `corpo_bruto` guarda a resposta completa para inspeção em depurador, e
+    **não deve ser logado nem exibido**: é o único lugar do repositório onde
+    telefone de paciente pode aparecer em texto livre. O filtro de
+    `src/logging_config.py` cobre o caso de alguém esquecer isso; este
+    atributo existe para não perder a capacidade de diagnosticar uma falha
+    nova, não para ser impresso.
+    """
+
+    def __init__(self, mensagem: str, corpo_bruto: str | None = None):
+        super().__init__(mensagem)
+        self.corpo_bruto = corpo_bruto
 
 
 class InfobipClient(MessagingClient):
@@ -116,6 +137,27 @@ class InfobipClient(MessagingClient):
 
         if resposta.status_code >= 400:
             raise ErroEnvioInfobip(
-                f"Infobip respondeu HTTP {resposta.status_code}: {resposta.text}"
+                f"Infobip respondeu HTTP {resposta.status_code} ({_codigo_de_erro(resposta)})",
+                corpo_bruto=resposta.text,
             )
         return resposta.json()
+
+
+def _codigo_de_erro(resposta: httpx.Response) -> str:
+    """`messageId` da resposta de erro da Infobip (ex.
+    `EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL`) -- o campo que de fato diz a
+    causa, sem trazer o corpo inteiro com o telefone do destinatário junto
+    (ver `ErroEnvioInfobip`).
+
+    Formato documentado em
+    https://www.infobip.com/docs/essentials/response-status-and-error-codes
+    (`requestError.serviceException.messageId`). Resposta fora desse formato
+    (proxy, HTML de gateway) devolve um rótulo genérico: não vale arriscar
+    devolver um pedaço de texto arbitrário justamente na string que vai para
+    o log."""
+    try:
+        excecao = resposta.json()["requestError"]["serviceException"]
+    except (ValueError, KeyError, TypeError):
+        return "sem código de erro no corpo"
+    codigo = excecao.get("messageId")
+    return str(codigo) if codigo else "sem código de erro no corpo"

@@ -27,7 +27,15 @@ if str(SRC_DIR) not in sys.path:
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
+from logging_config import configurar_logging  # noqa: E402
 from ui import logic  # noqa: E402
+
+# No topo do módulo, não dentro de um callback (Passo 8): o Streamlit reexecuta
+# este script inteiro a cada interação, e já instalou os handlers dele antes de
+# chegar aqui. `configurar_logging` é idempotente -- não duplica handler nem
+# linha -- e a cada rerun reaplica o filtro de redação em handler que tenha
+# aparecido no meio do caminho.
+configurar_logging()
 
 # 'dev' como default: em produção o Passo 11 define APP_ENV=prod
 # explicitamente no Space, e rodar local não exige configurar nada para ver

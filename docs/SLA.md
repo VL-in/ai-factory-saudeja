@@ -32,8 +32,9 @@ Está **fora de escopo**: disponibilidade dos provedores externos de WhatsApp/SM
 
 ## 6. Privacidade e conformidade (LGPD)
 
-- Nenhum dado pessoal identificável (nome, CPF) será registrado em logs de aplicação, em nenhuma circunstância (BRIEFING.md: "Sem PII em logs. Nunca."; ver [SLO §6](SLO.md#6-privacidade--lgpd-não-funcional-mas-mensurável)).
-- Dados de saúde são tratados como **categoria especial** (Art. 5º, II e Art. 11 da LGPD) mesmo durante a fase de protótipo com dados sintéticos (`data/AVISO-DADOS-SINTETICOS.md`), com criptografia em repouso e base legal documentada.
+- Nenhum dado pessoal identificável (nome, CPF, e-mail, telefone, IP) será registrado em logs de aplicação, em nenhuma circunstância (BRIEFING.md: "Sem PII em logs. Nunca."; ver [SLO §6/§6.1](SLO.md#6-privacidade--lgpd-não-funcional-mas-mensurável)). A lista original desta cláusula dizia apenas "nome, CPF", de antes de `telefone` entrar no schema no Passo 7 — telefone é hoje o único identificador direto que o runtime manipula.
+- Dados de saúde são tratados como **categoria especial** (Art. 5º, II e Art. 11 da LGPD) mesmo durante a fase de protótipo com dados sintéticos (`data/AVISO-DADOS-SINTETICOS.md`), com criptografia em repouso e base legal documentada — base legal, inventário, retenção e riscos residuais em [`LGPD.md`](LGPD.md) (Passo 8).
+- Na relação com a clínica-cliente, a SaúdeJá atua como **operadora** e a clínica como **controladora** (Art. 5º, VI e VII). Pedidos de titular (Art. 18) chegam pela clínica; ver [`LGPD.md` §1 e §6](LGPD.md).
 - Qualquer incidente de exposição de dados sensíveis é reportado à clínica-cliente e ao DPO em até 72h, alinhado às boas práticas de resposta a incidentes da LGPD.
 
 ## 7. Limites e exclusões conhecidas (estágio de protótipo)
@@ -48,4 +49,4 @@ Estes limites devem ser comunicados explicitamente às partes interessadas — n
 
 Este SLA será apresentado, com números validados e riscos de LGPD explicitados, no pitch ao Conselho de Investidores na Semana 16 (BRIEFING.md, item 4). Deve ser revisado sempre que o [SLO.md](SLO.md) ou a arquitetura (`architecture.md`) mudarem.
 
-Última geração: 2026-09-07.
+Última geração: 2026-09-07; última revisão: 2026-09-27 (item 6, escopo da PII em log e papéis controlador/operador, Passo 8).

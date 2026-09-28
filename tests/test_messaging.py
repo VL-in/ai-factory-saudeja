@@ -97,3 +97,57 @@ def test_infobip_client_levanta_erro_proprio_em_falha_http():
 
     with pytest.raises(ErroEnvioInfobip, match="401"):
         cliente.enviar_lembrete(telefone="5511987654321", mensagem="Confirma?")
+
+
+def test_mensagem_de_erro_nao_carrega_o_corpo_da_resposta():
+    """Blindagem LGPD do Passo 8. A Infobip ecoa o payload enviado no corpo de
+    erro -- com o `to`, que é o telefone do paciente. Até o Passo 7 essa string
+    ia inteira para a mensagem da exceção, de onde seguia para
+    `resultado["erros"]` do job, para o `st.json` da aba de dev e para qualquer
+    log futuro.
+
+    O que a mensagem carrega agora é o par (status HTTP, `messageId`), que é o
+    que de fato identifica a causa: foi assim que se diagnosticou
+    `EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL` na validação real do Passo 7."""
+    telefone = "5511987654321"
+    corpo_com_telefone = {
+        "requestError": {
+            "serviceException": {
+                "messageId": "EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL",
+                "text": f"Account not provisioned for SMS, destination {telefone}",
+            }
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json=corpo_com_telefone)
+
+    cliente = _cliente_infobip_com_transporte(handler)
+
+    with pytest.raises(ErroEnvioInfobip) as capturado:
+        cliente.enviar_lembrete(telefone=telefone, mensagem="Confirma?")
+
+    assert telefone not in str(capturado.value)
+    assert "403" in str(capturado.value)
+    assert "EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL" in str(capturado.value)
+    # O corpo completo continua acessível para depuração, e é o único lugar do
+    # repositório onde telefone aparece em texto livre -- não deve ser logado
+    # nem exibido (ver docstring de ErroEnvioInfobip).
+    assert telefone in capturado.value.corpo_bruto
+
+
+def test_corpo_de_erro_fora_do_formato_documentado_nao_vira_texto_livre():
+    """Gateway/proxy respondendo HTML no lugar do JSON da Infobip: a mensagem
+    não pode passar a carregar um pedaço arbitrário de corpo justamente na
+    string que vai para o log."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, text="<html>Bad Gateway 5511987654321</html>")
+
+    cliente = _cliente_infobip_com_transporte(handler)
+
+    with pytest.raises(ErroEnvioInfobip) as capturado:
+        cliente.enviar_lembrete(telefone="5511987654321", mensagem="Confirma?")
+
+    assert "5511987654321" not in str(capturado.value)
+    assert "502" in str(capturado.value)

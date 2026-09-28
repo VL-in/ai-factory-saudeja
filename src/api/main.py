@@ -12,6 +12,7 @@ então precisa fazer esse ajuste explicitamente para funcionar independente
 de como for iniciado (uvicorn a partir da raiz do repo, TestClient nos
 testes, ou o CMD do container em infra/api/dockerfile).
 """
+import logging
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -27,10 +28,13 @@ import inference  # noqa: E402
 import observabilidade  # noqa: E402
 from config_projeto import caminho_de_env  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
+from logging_config import configurar_logging  # noqa: E402
 
 from .schemas import PacienteConsultaIn, PredictOut  # noqa: E402
 
 MODEL_PATH = caminho_de_env("MODEL_PATH", "data/model.pkl")
+
+logger = logging.getLogger(__name__)
 
 # Só as rotas cujo tempo de resposta o SLO §2 compromete. `/health` fica de
 # fora de propósito: a sonda externa do ADR-006 bate nela de minutos em minutos
@@ -45,6 +49,13 @@ explicador_llm = ExplicadorLLMDesativado()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Antes de qualquer outra coisa (Passo 8): o uvicorn já instalou os
+    # handlers de `uvicorn.access`/`uvicorn.error` neste ponto, com
+    # `propagate=False`, e é aqui que eles recebem o filtro de redação de PII.
+    # Configurar depois do primeiro request deixaria o log de acesso inicial --
+    # que carrega o IP do cliente -- passar sem redação.
+    configurar_logging()
+
     # Carregado uma vez no startup, não por request -- crítico para o SLO
     # de latência p95<2s (recarregar o LightGBM/SHAP explainer a cada
     # chamada custaria muito mais que a própria predição).
@@ -54,6 +65,14 @@ async def lifespan(app: FastAPI):
     app.state.explainer = construir_explicador(model)
     app.state.threshold = inference.PARAMS["decision"]["threshold"]
     app.state.model_version = inference.calcular_model_version(MODEL_PATH)
+    logger.info(
+        "api de predição pronta",
+        extra={
+            "model_version": app.state.model_version,
+            "threshold": app.state.threshold,
+            "especialidades": len(mapa_especialidade),
+        },
+    )
     yield
 
 
@@ -89,6 +108,13 @@ async def registrar_latencia(request: Request, call_next):
             duracao_ms=round((time.perf_counter() - inicio) * 1000),
             model_version=getattr(app.state, "model_version", None),
             detalhe={"rota": request.url.path, "excecao": exc.__class__.__name__},
+        )
+        # Sem `exc_info`: o traceback completo já sai pelo `uvicorn.error`, que
+        # desde o `configurar_logging()` do lifespan passa pelo mesmo filtro de
+        # redação. Duplicá-lo aqui só dobraria o volume do log efêmero do Space.
+        logger.error(
+            "erro ao servir requisição",
+            extra={"rota": request.url.path, "excecao": exc.__class__.__name__},
         )
         raise
 

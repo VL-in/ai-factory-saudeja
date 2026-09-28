@@ -8,6 +8,25 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
+## [v1.9] (Vanessa + Claude) - 2026-09-27
+
+### Adicionado
+- [`docs/LGPD.md`](../LGPD.md): papéis (a clínica é controladora, a SaúdeJá é operadora), inventário do que é tratado, base legal, retenção, transferência internacional, direitos do titular, incidentes e riscos residuais. Fecha as duas pendências de LGPD que os passos anteriores declararam e adiaram.
+- A aplicação passa a emitir log estruturado (uma linha JSON por registro) com redação automática de PII — nome, sobrenome, CPF, e-mail, telefone e IP. Vale também para o log das bibliotecas de terceiros (`uvicorn`, `httpx`, `streamlit`), que é o que existe em volume em produção.
+- `scripts/auditoria_lgpd.py` varre arquivos, diretórios ou a entrada padrão em busca de PII e devolve código de saída 1 se achar algo. O relatório mostra a linha e a regra, nunca o valor encontrado.
+- `predicoes` e `mensagens_disparadas` passam a ser purgadas após 365 dias, pela mesma execução diária que já limpava `eventos_app`. `pacientes` e `agendamentos` não são purgados: o registro do atendimento é da clínica.
+- Novas variáveis de ambiente: `LOG_LEVEL`, `LOG_FORMATO` (`json` ou `texto`) e `RETENCAO_DADOS_DERIVADOS_DIAS`.
+
+### Modificado
+- O resumo de fim de execução do job D-2 deixou de ser uma frase em português e passou a ser uma linha JSON com os contadores, incluindo quantos registros cada purga removeu. Quem consumia essa saída por texto precisa ler os campos.
+- A mensagem de erro de envio da Infobip mudou de conteúdo: onde antes vinha o corpo inteiro da resposta, agora vem o status HTTP e o código de erro do provedor. É o que aparece em "agendamentos com erro" na aba de dev.
+- O compromisso de "nenhuma PII em log" do [SLA §6](../SLA.md) passa a listar explicitamente e-mail, telefone e IP, não só nome e CPF. O [SLO §6](../SLO.md) registra que a verificação é preventiva (filtro no código e teste automatizado), porque o log do ambiente de produção é apagado a cada reinício e não pode ser auditado depois.
+
+### Segurança
+- O telefone do paciente deixou de circular no texto de erro de envio. A Infobip ecoa o payload recebido no corpo de erro, e esse corpo ia inteiro para a lista de erros do job e para a tela de dev.
+- O endereço IP de quem acessa passa a ser redigido no log de acesso, junto do restante da PII.
+- A proibição de PII em log é verificada automaticamente sobre o próprio código: uma varredura falha se qualquer chamada de log em `src/` referenciar campo proibido.
+
 ## [v1.8] (Vanessa + Claude) - 2026-09-21
 
 ### Adicionado

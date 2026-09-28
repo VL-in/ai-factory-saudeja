@@ -43,6 +43,8 @@ O que **mitiga** é o conteúdo, não a região: o export (`src/export_treino.py
 
 A escolha é **reversível a baixo custo** e vale registrar o caminho: criar um container em Brazil South, apontar `DVC_REMOTE_URL`/`config.local` para ele e rodar `dvc push` de novo. Nada no código depende da região; o que depende dela é a análise de LGPD do Passo 8 e o slide de risco do Passo 12 (o BRIEFING trata dado de saúde como categoria especial desde o protótipo). Se a decisão for mantida, o pitch precisa dizer isso em voz alta em vez de afirmar que "os dados não saem do Brasil" — o que continua verdadeiro para o banco de produção e passou a ser falso para o artefato de treino.
 
+**Pendência fechada (2026-09-27, Passo 8)**: a decisão foi **manter Chile Central**, e a base legal ficou registrada em [`LGPD.md` §4](../LGPD.md) — Art. 33, II, alínea "d" (cláusulas contratuais padrão, via o acordo de processamento de dados do provedor de nuvem). O que o Passo 8 acrescentou à análise acima: um dataset pseudonimizado **não** é equiparado a anônimo (Art. 12 só faz isso para o irreversível), e o hash sha256 de CPF é reversível por força bruta sobre o espaço de CPFs válidos — a pseudonimização reduz a gravidade de um incidente, não tira a transferência do escopo do Art. 33. O risco residual está nomeado em `LGPD.md` §9, item 1, e a formulação correta para o pitch está fixada em `architecture.md` §7. O caminho de reversão para Brazil South segue válido e documentado acima.
+
 ## Consequências
 Pros:
 - Scheduler externo (GitHub Actions) remove uma dependência de disponibilidade do próprio Space.

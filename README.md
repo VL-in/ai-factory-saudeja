@@ -254,6 +254,44 @@ pytest tests/test_observabilidade.py -v
 pytest -m integracao tests/test_observabilidade.py -v
 ```
 
+## Blindagem LGPD (Passo 8)
+
+Dados de saúde são categoria especial (Art. 5º, II e Art. 11 da LGPD) e o BRIEFING manda tratá-los como reais desde o protótipo. [`docs/LGPD.md`](docs/LGPD.md) é o documento de referência: papéis (a clínica é **controladora**, a SaúdeJá é **operadora**), inventário do que é tratado, base legal, retenção, transferência internacional, direitos do titular, incidentes e — explicitamente — os riscos residuais que vão para o pitch.
+
+O requisito operacional é um: **"Sem PII em logs. Nunca."** (BRIEFING; 0 ocorrências no SLO §6). Ele é garantido de forma **preventiva**, não por auditoria posterior — o log de runtime do HF Space é efêmero (restart apaga, sem busca, sem retenção), então no dia do pitch não haverá log de produção para varrer ([ADR-006](docs/adr/adr-006-observabilidade.md)).
+
+`src/logging_config.py` instala o log estruturado e o filtro de redação. Duas decisões explicam a forma dele:
+
+- **O filtro mora no handler, e é aplicado a todo handler do processo.** O log que existe em volume em produção não é o nosso: é o de acesso (com IP de cliente) e o de erro do `uvicorn`, do `httpx` e do `streamlit`. O `uvicorn` põe `propagate=False` nos loggers dele, então nem o handler da raiz os alcançaria — `configurar_logging()` passeia pelos handlers já instalados e blinda cada um.
+- **Duas famílias de regra, porque PII tem duas naturezas.** CPF, telefone, e-mail e IP têm forma reconhecível. **Nome não tem** — "Ana Souza" é indistinguível de qualquer par de palavras —, então o que se reconhece é a chave que o anuncia (`nome=`, `"nome":`, `extra={"nome": ...}`).
+
+Chamado uma vez por entrypoint: `lifespan` da API, `main()` do job e o topo de `src/ui/app.py`. Os scripts do pipeline de treino seguem com `print` de propósito (rodam sobre dataset pseudonimizado, saída lida por humano).
+
+```powershell
+$env:LOG_FORMATO="texto"   # legível no terminal; a redação continua valendo
+$env:LOG_LEVEL="DEBUG"
+```
+
+Varredura de log (ferramenta de verificação local, **não** a evidência principal):
+
+```powershell
+python scripts/auditoria_lgpd.py caminho/do/log.txt   # ou um diretório
+docker compose logs app | python scripts/auditoria_lgpd.py -
+```
+
+Código de saída 1 se achar algo, para pendurar num smoke test sem ninguém precisar ler a saída. O relatório mostra arquivo, linha, regra e um excerto **mascarado** — nunca o valor encontrado, senão a auditoria é o vazamento com outro nome. As regras são as mesmas do filtro (`logging_config.REGRAS_DE_PII`), não uma segunda cópia.
+
+A prova automatizada fica em dois lugares:
+
+| Onde | O que garante |
+|---|---|
+| `tests/test_logging_lgpd.py` | A redação pega as quatro formas de PII do produto, **não** estraga os identificadores pseudonimizados de que o diagnóstico depende (`id_agendamento`, hash de CPF, `model_version`, `duracao_ms`), alcança handler de terceiro instalado antes, redige traceback preservando a classe da exceção, e o ciclo fecha: a saída do handler configurado, varrida pelo script, dá zero achado |
+| `tests/test_coerencia_repo.py::test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii` | Percorre a AST de todo `src/*.py` e falha se alguma chamada de log referenciar campo proibido — por variável, atributo, índice ou chave de `extra`. Tem controle negativo próprio, porque varredura que deixa de reconhecer as chamadas daria verde sem verificar nada |
+
+**Retenção** (`RETENCAO_DADOS_DERIVADOS_DIAS`, default 365): `predicoes` e `mensagens_disparadas` são purgadas pelo job diário, junto da purga de `eventos_app` que já existia — sem agendador novo. `pacientes`/`agendamentos` ficam de fora de propósito: o registro do atendimento é do controlador, e apagá-lo por conta própria seria a operadora decidindo sobre dado que não é dela ([`docs/LGPD.md`](docs/LGPD.md) §5).
+
+> **Correção que veio junto**: `ErroEnvioInfobip` embutia o corpo da resposta da Infobip na mensagem — e a Infobip ecoa o payload enviado, **com o telefone do paciente**. Essa string ia para `resultado["erros"]` do job e era exibida crua na aba de dev. Agora a mensagem carrega (status HTTP, `messageId`), que é o que identifica a causa; o corpo completo fica em `exc.corpo_bruto`, que não deve ser logado nem exibido.
+
 ## Aplicação completa em container (API + Streamlit)
 
 A imagem de `infra/deploy/dockerfile` roda **os dois processos no mesmo container**, do jeito que o Hugging Face Space vai rodar (Passo 11). Ela foi antecipada para o Passo 4 justamente para dar para ver o conjunto montado — e não só cada peça isolada por `pytest`/`curl`.

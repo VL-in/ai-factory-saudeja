@@ -68,8 +68,23 @@ Os números do modelo vigente, **medidos** no fold de teste isolado e registrado
 
 | Métrica | Alvo | Observação |
 |---|---|---|
-| PII (nome, CPF) em logs de aplicação | 0 ocorrências | Requisito absoluto do BRIEFING.md ("Sem PII em logs. Nunca.") e das notas da Camila. Verificável via auditoria/regex nos logs. |
-| Dados sensíveis (Art. 5º/11 LGPD) em repouso | 100% criptografados | Dados de saúde são categoria especial mesmo sendo sintéticos no protótipo (`AVISO-DADOS-SINTETICOS.md`, `notas-camila.md`). |
+| PII em logs de aplicação | 0 ocorrências | Requisito absoluto do BRIEFING.md ("Sem PII em logs. Nunca.") e das notas da Camila. Como é verificado: ver §6.1. |
+| Dados sensíveis (Art. 5º/11 LGPD) em repouso | 100% criptografados | Dados de saúde são categoria especial mesmo sendo sintéticos no protótipo (`AVISO-DADOS-SINTETICOS.md`, `notas-camila.md`). Herdado do provedor gerenciado (Supabase, Azure Blob Storage), não implementado por nós — registrado como risco residual em [LGPD.md §9](LGPD.md). |
+| Retenção de dados derivados | `predicoes`/`mensagens_disparadas` purgadas em ≤ 365 dias | Princípio da necessidade (Art. 6º, III). Purga no job diário; política por tabela em [LGPD.md §5](LGPD.md). |
+
+### 6.1 Como o "zero PII em log" é verificado (revisão de 2026-09-27, Passo 8)
+
+Duas correções ao texto original desta seção, decididas ao implementar o Passo 8:
+
+**(a) "Verificável via auditoria/regex nos logs" não é executável em produção.** O [ADR-006](adr/adr-006-observabilidade.md) (risco 2) já havia registrado isto: o log de runtime do Hugging Face Space é efêmero — restart ou rebuild apaga, sem busca e sem retenção. No dia do pitch não haverá log de produção para varrer. A métrica continua sendo 0 ocorrências; o que muda é o **método de verificação**, que passa a ser preventivo:
+
+| Camada | O que cobre |
+|---|---|
+| Filtro de redação em todo handler do processo (`src/logging_config.py`) | O log de **terceiros** (`uvicorn`, `httpx`, `streamlit`), que é o único que existe em volume em produção e o único que não temos como reescrever |
+| Guarda estática sobre a AST de `src/` (`tests/test_coerencia_repo.py`) | Código nosso passando campo de PII para uma chamada de log — o caso que não deveria nem chegar ao filtro |
+| `scripts/auditoria_lgpd.py` | Varredura de log **local** (smoke test do Passo 11, artifact do Actions). Ferramenta de verificação, não a evidência apresentada no pitch |
+
+**(b) A lista "(nome, CPF)" estava incompleta.** Ela vem de antes do Passo 7, que acrescentou `telefone` a `pacientes` como exceção deliberada à minimização de PII — e telefone é hoje o **único identificador direto** que o runtime manipula, justamente no ponto mais exposto (a resposta de erro da Infobip ecoava o número enviado). O alvo passa a valer para nome, CPF, e-mail, telefone e IP. O inventário completo do que é tratado está em [LGPD.md §2](LGPD.md).
 
 ## 7. Features pendentes que afetam SLOs futuros
 
@@ -78,4 +93,4 @@ Os números do modelo vigente, **medidos** no fold de teste isolado e registrado
 
 ## Revisão
 
-Este documento deve ser revisado a cada marco do semestre (BRIEFING.md) e sempre que o [ADR-001](adr/adr-001-stack.md) ou a arquitetura mudar. Última geração: 2026-09-07; última revisão: 2026-09-21 (§3.1, tolerâncias de regressão do gate de re-treino e correção das métricas do modelo vigente, agora medidas e registradas em `data/champion_metrics.json`).
+Este documento deve ser revisado a cada marco do semestre (BRIEFING.md) e sempre que o [ADR-001](adr/adr-001-stack.md) ou a arquitetura mudar. Última geração: 2026-09-07; última revisão: 2026-09-27 (§6/§6.1, método de verificação do zero-PII e escopo da lista de campos; §3.1 revisado em 2026-09-21 com as tolerâncias de regressão do gate e a correção das métricas do modelo vigente, agora medidas e registradas em `data/champion_metrics.json`).

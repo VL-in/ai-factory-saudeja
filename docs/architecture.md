@@ -16,6 +16,7 @@ ai-factory-saudeja/
 │   └── AVISO-MODELO.md
 ├── docs/
 │   ├── BRIEFING.md
+│   ├── LGPD.md                        # base legal, retenção, direitos, riscos residuais (Passo 8)
 │   ├── PLANO-IMPLEMENTACAO.md
 │   ├── SLA.md
 │   ├── SLO.md
@@ -30,12 +31,14 @@ ai-factory-saudeja/
 │   ├── api/                            # dockerfile da API FastAPI isolada (Passo 3)
 │   └── deploy/                         # dockerfile + entrypoint.sh combinados Streamlit+FastAPI (Passo 11, antecipado no Passo 4)
 ├── scripts/
+│   ├── auditoria_lgpd.py              # varredura de PII em log (Passo 8, ferramenta local)
 │   └── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 ├── supabase/
 │   ├── config.toml                    # config do Supabase CLI (supabase start, região local)
 │   └── migrations/                    # schema versionado (pacientes/agendamentos/predicoes/mensagens_disparadas, Passo 5; índice de agendamentos.id_paciente, Passo 6; eventos_app, Passo 8.5)
 ├── src/
 │   ├── config_projeto.py              # REPO_ROOT + carregar_params(): caminhos independentes do CWD
+│   ├── logging_config.py              # log estruturado JSON + redação de PII (Passo 8)
 │   ├── agenda_clinica.py              # grade de horários da clínica (cadastro do paciente, Passo 5)
 │   ├── db/                            # client.py (supabase-py) + repositories.py (Passo 5)
 │   ├── export_treino.py               # desfechos reais do Supabase -> consultas-treino.csv (Passo 9.0)
@@ -137,7 +140,7 @@ Deployment: Hugging Face Space (SDK Docker), junto com o Streamlit no mesmo cont
 
 Name: Job de inferência no-show
 
-Description: Executado diariamente (agendado externamente, ver ADR-005-a), busca no Supabase os agendamentos marcados para dois dias à frente, roda a predição+explicação (import direto de `src/inference.py`, mesmo módulo usado pela API), grava o resultado na tabela `predicoes` e aciona o disparo de mensageria (5) quando a probabilidade ultrapassa o threshold de `params.yaml`. Também exposto na aba "Dev: disparo manual" do Streamlit para acompanhamento sem depender de CLI/cron separados.
+Description: Executado diariamente (agendado externamente, ver ADR-005-a), busca no Supabase os agendamentos marcados para dois dias à frente, roda a predição+explicação (import direto de `src/inference.py`, mesmo módulo usado pela API), grava o resultado na tabela `predicoes` e aciona o disparo de mensageria (5) quando a probabilidade ultrapassa o threshold de `params.yaml`. É também onde as duas políticas de retenção rodam (`eventos_app` e dados derivados, ver 4.1) -- o job já é diário, e agendador novo seria peça de infra a manter. Também exposto na aba "Dev: disparo manual" do Streamlit para acompanhamento sem depender de CLI/cron separados.
 
 Technologies: Python (`src/jobs/inferencia_diaria.py`)
 
@@ -170,6 +173,8 @@ Key Schemas/Collections: `pacientes`, `agendamentos` (status inclui `no_show`, u
 ### 4.2. Tracking de experimentos de ML
 
 Name: MLflow (backend sqlite + artifacts em volumes Docker locais)
+
+Retenção (Passo 8, [`LGPD.md` §5](LGPD.md)): `eventos_app` 90 dias (teto do free tier, ADR-006) e `predicoes`/`mensagens_disparadas` 365 dias (`RETENCAO_DADOS_DERIVADOS_DIAS`, necessidade — Art. 6º, III), as duas purgas penduradas no job diário, sem agendador novo. `pacientes`/`agendamentos` **não** têm purga automática: são registro do atendimento, cuja exclusão é decisão do controlador (§7).
 
 Type: tracking server efêmero (sobe via `docker-compose` só durante treino/validação/gate de re-treino)
 
@@ -207,19 +212,23 @@ A imagem combinada vive em `infra/deploy/` (`dockerfile` + `entrypoint.sh`) e j�
 
 CI/CD Pipeline: GitHub Actions — `ci.yml` (lint + pytest em PRs) e `deploy.yml` (sync `main` → HF Space, só após `ci.yml` passar). Ver Passo 10.
 
-Monitoring & Logging: MLflow para métricas de ML (4.2); logging estruturado JSON com redação de PII (`src/logging_config.py`, Passo 8) para a aplicação. Sem Langfuse/APM dedicado no núcleo — reservado para tracing do LLM opcional (Passo 13).
+Monitoring & Logging: MLflow para métricas de ML (4.2); `eventos_app` no Supabase como fonte de verdade das métricas de aplicação (4.1/ADR-006); logging estruturado JSON com redação de PII (`src/logging_config.py`, Passo 8) para a aplicação. Sem Langfuse/APM dedicado no núcleo — reservado para tracing do LLM opcional (Passo 13).
+
+O filtro de redação é instalado por `configurar_logging()`, chamado uma vez em cada entrypoint (`lifespan` da API, `main()` do job, topo de `src/ui/app.py`), e mora no **handler** — aplicado a todos os handlers já presentes no processo, não só ao da raiz. Isso é o que faz a garantia valer para o log de terceiros (`uvicorn` põe `propagate=False` nos loggers dele; o Streamlit faz algo equivalente), que é o único que existe em volume em produção. Detalhe da decisão em [`LGPD.md` §8](LGPD.md).
 
 ## 7. Security Considerations
 
 Authentication: chaves de serviço do Supabase (`SUPABASE_URL`/`SUPABASE_KEY`), token do HF Space (`HF_TOKEN`) e credencial do remote DVC (`AZURE_STORAGE_CONNECTION_STRING`) como secrets, nunca versionados (`.env.example` documenta as variáveis, não os valores). No caso do DVC, **a própria URL do remote** (`DVC_REMOTE_URL`) também fica fora do git: `.dvc/config` é versionado e guarda só `[core] remote = azure`, porque a URL carrega o nome do container onde o dataset de treino está armazenado.
 
-Data residency: o banco de produção fica em `sa-east-1` (São Paulo), mas o remote do DVC fica em **Chile Central** — ou seja, há transferência internacional de um dataset derivado de dados de saúde. O que limita a exposição é o conteúdo, não a região: o dataset exportado é pseudonimizado (`id_paciente` é hash sha256 de CPF) e nunca inclui telefone, nome ou CPF. Registrado como emenda do Passo 9.1 no [ADR-005](adr/adr-005-integracoes-implicitas.md), com a base legal a ser fechada em `docs/LGPD.md` (Passo 8).
+Data residency: o banco de produção fica em `sa-east-1` (São Paulo), mas o remote do DVC fica em **Chile Central** — ou seja, há transferência internacional de um dataset derivado de dados de saúde. O que limita a exposição é o conteúdo, não a região: o dataset exportado é pseudonimizado (`id_paciente` é hash sha256 de CPF) e nunca inclui telefone, nome ou CPF. Registrado como emenda do Passo 9.1 no [ADR-005](adr/adr-005-integracoes-implicitas.md); base legal fechada no Passo 8 em [`LGPD.md` §4](LGPD.md) (Art. 33, II, "d" — cláusulas contratuais padrão do DPA do provedor), com o risco residual declarado ali e destinado ao slide de risco do Passo 12. A formulação correta para o pitch: "os dados não saem do Brasil" é verdade para o banco de produção e **falso** para o artefato de treino.
 
-Authorization: não há multiusuário/RBAC no núcleo do produto — dois perfis de UI (Paciente/Funcionário) sem autenticação forte ainda desenhada; fica como debt conhecido (ver §9).
+Papéis LGPD: a **clínica-cliente é a controladora** (decide finalidade, tem a relação com o paciente, responde pelo prontuário) e a **SaúdeJá é operadora** (trata em nome dela, nos limites do contrato do SaaS) — ver [`LGPD.md` §1](LGPD.md). Isso é o que determina de quem é a base legal, por onde chega um pedido do Art. 18 e, concretamente, o que a retenção automática pode apagar: só dado **derivado** (`predicoes`, `mensagens_disparadas`, 365 dias, purga no job diário). `pacientes`/`agendamentos` nunca são purgados por iniciativa nossa.
+
+Authorization: não há multiusuário/RBAC no núcleo do produto — dois perfis de UI (Paciente/Funcionário) sem autenticação forte ainda desenhada; fica como debt conhecido (ver §9) e é o **risco residual mais grave** do [`LGPD.md` §9](LGPD.md): não é falta de tempo, é falta de controle de acesso sobre dado sensível.
 
 Data Encryption: TLS em trânsito (HTTPS do HF Space, conexão do `supabase-py` ao Postgres gerenciado); repouso sob responsabilidade do Supabase gerenciado.
 
-Key Security Tools/Practices: minimização de PII por design no schema (4.1), redação de PII em log (`src/logging_config.py`), auditoria de LGPD via `scripts/auditoria_lgpd.py` — ver [`docs/LGPD.md`](LGPD.md) (criado no Passo 8) para base legal, retenção e contato DPO.
+Key Security Tools/Practices: minimização de PII por design no schema (4.1), pseudonimização do CPF antes da persistência, RLS sem policies em todas as tabelas, redação de PII em log (`src/logging_config.py`) mais a guarda estática sobre a AST de `src/` (`tests/test_coerencia_repo.py::test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii`), e `scripts/auditoria_lgpd.py` como varredura de log — rebaixada de evidência principal a ferramenta de verificação local, porque o log do Space é efêmero (ADR-006). `ErroEnvioInfobip` deixou de embutir o corpo da resposta da Infobip, que ecoava o telefone do destinatário. Base legal, retenção, direitos do titular e riscos residuais em [`docs/LGPD.md`](LGPD.md) (Passo 8).
 
 ## 8. Development & Testing Environment
 
@@ -249,7 +258,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-21 (Passo 9.1)
+Date of Last Update: 2026-09-27 (Passo 8 — blindagem LGPD)
 
 ## 11. Glossary / Acronyms
 
@@ -263,4 +272,6 @@ SLA/SLO: Service Level Agreement / Service Level Objective — ver [`docs/SLA.md
 
 ADR: Architecture Decision Record — ver [`docs/adr/`](adr/).
 
-LGPD: Lei Geral de Proteção de Dados (Brasil) — ver [`docs/LGPD.md`](LGPD.md), a ser criado no Passo 8 do plano de implementação.
+LGPD: Lei Geral de Proteção de Dados (Brasil) — ver [`docs/LGPD.md`](LGPD.md).
+
+Controlador / Operador: quem decide a finalidade do tratamento (a clínica-cliente) e quem trata em nome dele (a SaúdeJá) — Art. 5º, VI e VII da LGPD. Ver [`LGPD.md` §1](LGPD.md).

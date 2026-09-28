@@ -17,6 +17,7 @@ Rodar como script (`python src/jobs/inferencia_diaria.py`) ou via
 `main()` -- a aba "Dev: disparo manual" do Streamlit (Passo 4) chama esta
 última para acompanhar o pipeline sem CLI/cron separados.
 """
+import logging
 import os
 import sys
 import time
@@ -30,10 +31,17 @@ if str(SRC_DIR) not in sys.path:
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
 import observabilidade  # noqa: E402
-from config_projeto import caminho_de_env, hoje_na_clinica  # noqa: E402
+from config_projeto import (  # noqa: E402
+    caminho_de_env,
+    hoje_na_clinica,
+    retencao_dados_derivados_dias,
+)
 from explain import construir_explicador, explicar  # noqa: E402
 from features import calcular_idade  # noqa: E402
+from logging_config import configurar_logging  # noqa: E402
 from messaging.client import ErroEnvioInfobip, InfobipClient, StubMessagingClient  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 class ProvedorMensageriaDesconhecido(Exception):
@@ -135,6 +143,17 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
                 model_version=model_version,
                 detalhe={"excecao": exc.__class__.__name__},
             )
+            # `id_agendamento` no log de propósito (Passo 8): é uuid interno,
+            # não PII, e sem ele o diagnóstico de "por que este paciente não
+            # recebeu lembrete" não sai do lugar. `str(exc)` fica de fora --
+            # ele carrega o dado do agendamento que causou a falha.
+            logger.warning(
+                "agendamento sem predição",
+                extra={
+                    "id_agendamento": agendamento["id"],
+                    "excecao": exc.__class__.__name__,
+                },
+            )
             continue
 
         probabilidade = float(inference.predizer(model, X)[0])
@@ -178,6 +197,17 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
                 # inteira -- registra e segue, mesma filosofia do agendamento
                 # malformado acima.
                 resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
+                # `str(exc)` é seguro aqui desde o Passo 8: `ErroEnvioInfobip`
+                # deixou de embutir o corpo da resposta, que ecoava o telefone
+                # do destinatário -- sobrou (status HTTP, messageId).
+                logger.warning(
+                    "falha ao enviar lembrete",
+                    extra={
+                        "id_agendamento": agendamento["id"],
+                        "canal": canal,
+                        "motivo": str(exc),
+                    },
+                )
                 repositories.registrar_mensagem(
                     id_agendamento=agendamento["id"], canal=canal, status_envio="falha_envio"
                 )
@@ -217,18 +247,53 @@ def purgar_eventos_antigos() -> int:
         return 0
 
 
+def purgar_dados_derivados_antigos() -> dict:
+    """Retenção de `predicoes`/`mensagens_disparadas` (Passo 8, `docs/LGPD.md`
+    §5) -- LGPD Art. 6º, III: dado derivado não fica guardado indefinidamente
+    só porque o banco aguenta.
+
+    Roda junto da purga de `eventos_app` e falha do mesmo jeito: sem derrubar o
+    job. Perder a limpeza de um dia é irrelevante perto de perder a fila de
+    lembretes, e a janela (365 dias) tem folga de sobra para uma execução
+    perdida não virar retenção indevida."""
+    try:
+        limite = observabilidade.inicio_da_janela(
+            horas=24 * retencao_dados_derivados_dias()
+        )
+        return repositories.purgar_dados_derivados(limite)
+    except Exception as exc:
+        logger.warning(
+            "purga de dados derivados falhou", extra={"excecao": exc.__class__.__name__}
+        )
+        return {}
+
+
 def main() -> dict:
+    # Antes de tudo (Passo 8): o job é o único processo que toca telefone de
+    # paciente (`enviar_lembrete`), então nenhuma linha dele pode sair antes de
+    # o filtro de redação estar instalado.
+    configurar_logging()
     resultado = processar_dia()
     purgados = purgar_eventos_antigos()
+    derivados_purgados = purgar_dados_derivados_antigos()
     # Processo curto: sem o flush, os eventos enfileirados morreriam junto com
     # o processo antes de o worker daemon gravá-los (ver observabilidade.flush).
     observabilidade.flush()
-    print(
-        f"job D-2: {resultado['agendamentos_encontrados']} agendamento(s) encontrado(s), "
-        f"{resultado['predicoes_gravadas']} predição(ões) gravada(s), "
-        f"{resultado['mensagens_disparadas']} mensagem(ns) disparada(s), "
-        f"{len(resultado['erros'])} erro(s), "
-        f"{purgados} evento(s) de observabilidade purgado(s)"
+    # Uma linha JSON em vez do `print` de antes: o job roda por cron no
+    # GitHub Actions (Passo 10), onde a única saída que sobra é stdout -- e o
+    # resumo precisa ser grep-ável junto do resto do log, não um formato só
+    # dele. Contadores, nunca a lista de erros: ela carrega `motivo` por
+    # agendamento, que é texto de exceção.
+    logger.info(
+        "job D-2 concluído",
+        extra={
+            "agendamentos_encontrados": resultado["agendamentos_encontrados"],
+            "predicoes_gravadas": resultado["predicoes_gravadas"],
+            "mensagens_disparadas": resultado["mensagens_disparadas"],
+            "erros": len(resultado["erros"]),
+            "eventos_purgados": purgados,
+            "derivados_purgados": derivados_purgados,
+        },
     )
     return resultado
 

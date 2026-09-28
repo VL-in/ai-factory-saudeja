@@ -5,6 +5,7 @@ Não testam lógica de negócio -- servem para pegar "drift" de configuração
 (ex.: artefato binário commitado por engano, dependência referenciada mas
 ausente).
 """
+import ast
 import subprocess
 from pathlib import Path
 
@@ -169,6 +170,130 @@ def test_export_treino_sem_coluna_proibida_de_pii():
         f"COLUNAS_SAIDA de export_treino.py referencia coluna(s) proibida(s) por LGPD: "
         f"{encontradas}"
     )
+
+
+_METODOS_DE_LOG = frozenset(
+    {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+)
+# Espelha src/logging_config.py::CHAVES_PROIBIDAS. Duplicado de propósito: esta
+# guarda é estática e precisa falhar mesmo que alguém quebre o import do módulo
+# de logging -- é a evidência do SLO §6 (ADR-006), não pode depender de o código
+# que ela audita estar importável.
+_IDENTIFICADORES_PROIBIDOS_EM_LOG = frozenset(
+    {"sobrenome", "nome", "name", "cpf", "email", "e_mail", "telefone", "celular", "phone"}
+)
+
+
+def _e_chamada_de_log(no: ast.Call) -> bool:
+    """`logger.info(...)`, `logging.warning(...)`, `log.error(...)` -- reconhece
+    pelo nome do objeto, que é a convenção usada em todo `src/`."""
+    func = no.func
+    if not isinstance(func, ast.Attribute) or func.attr not in _METODOS_DE_LOG:
+        return False
+    alvo = func.value
+    nome_do_objeto = alvo.id if isinstance(alvo, ast.Name) else getattr(alvo, "attr", "")
+    return nome_do_objeto in {"logger", "logging", "log", "_logger"}
+
+
+def _identificadores_da_chamada(no: ast.Call):
+    """Nomes de variável, atributos, chaves de dict e índices de subscript que
+    aparecem nos argumentos da chamada.
+
+    Só identificadores -- não o texto das mensagens. `logger.warning("telefone
+    inválido")` é uma mensagem sobre o campo, não o valor dele, e flagrar isso
+    treinaria a autora a ignorar a guarda. O que pega PII de verdade é
+    `paciente["telefone"]`, `paciente.telefone`, `telefone` e
+    `extra={"telefone": ...}`.
+    """
+    for filho in ast.walk(no):
+        if isinstance(filho, ast.Name):
+            yield filho.id
+        elif isinstance(filho, ast.Attribute):
+            yield filho.attr
+        elif isinstance(filho, ast.Subscript) and isinstance(filho.slice, ast.Constant):
+            if isinstance(filho.slice.value, str):
+                yield filho.slice.value
+        elif isinstance(filho, ast.Dict):
+            for chave in filho.keys:
+                if isinstance(chave, ast.Constant) and isinstance(chave.value, str):
+                    yield chave.value
+
+
+def _proibido(identificador: str) -> bool:
+    alvo = identificador.lower()
+    return any(
+        alvo == proibido or alvo.startswith(f"{proibido}_") or alvo.endswith(f"_{proibido}")
+        for proibido in _IDENTIFICADORES_PROIBIDOS_EM_LOG
+    )
+
+
+def test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii():
+    """Guarda preventiva do SLO §6 ("0 ocorrências de PII em log"), na forma que
+    o [ADR-006](../docs/adr/adr-006-observabilidade.md) definiu: o log do HF
+    Space é efêmero, então não existe varredura a posteriori que sirva de
+    evidência -- a prova tem de ser sobre o código.
+
+    Complementa o filtro de `src/logging_config.py` em vez de duplicá-lo: o
+    filtro é a rede de segurança para o log de terceiros (uvicorn/httpx), que
+    não temos como reescrever; esta guarda barra o caso que não deveria nem
+    chegar lá, que é código nosso passando PII para uma chamada de log.
+
+    Mesmo espírito de `test_migrations_sql_sem_coluna_proibida_de_pii`: a
+    proibição vale desde a estrutura, não por convenção de revisão.
+    """
+    encontrados = []
+    for arquivo in sorted((REPO_ROOT / "src").rglob("*.py")):
+        arvore = ast.parse(arquivo.read_text(encoding="utf-8"), filename=str(arquivo))
+        for no in ast.walk(arvore):
+            if not isinstance(no, ast.Call) or not _e_chamada_de_log(no):
+                continue
+            for identificador in _identificadores_da_chamada(no):
+                if _proibido(identificador):
+                    encontrados.append(
+                        f"{arquivo.relative_to(REPO_ROOT)}:{no.lineno} -> {identificador}"
+                    )
+
+    assert not encontrados, (
+        "Chamada(s) de log em src/ referenciando campo proibido por LGPD "
+        f"(BRIEFING.md: 'Sem PII em logs. Nunca.'): {encontrados}"
+    )
+
+
+def test_a_guarda_de_log_realmente_detecta_pii():
+    """Controle negativo da guarda acima. Uma varredura estática que passa
+    porque deixou de reconhecer as chamadas seria pior que não existir: daria
+    verde sem verificar nada, e é ela que sustenta o SLO §6 no pitch.
+
+    Os casos "ok" são igualmente parte do contrato -- mensagem *sobre* o campo e
+    identificador interno (uuid, nome de classe de exceção) não podem virar
+    falso positivo, ou a guarda passa a ser ignorada."""
+    deve_flagrar = [
+        'logger.info(f"enviando para {telefone}")',
+        'logger.warning("falha", extra={"telefone": t})',
+        'logger.info("agendamento %s", paciente["telefone"])',
+        'logger.info("cadastro", extra={"paciente_nome": n})',
+        'logger.error("erro %s", paciente.cpf)',
+        'logging.info("contato %s", email)',
+    ]
+    nao_deve_flagrar = [
+        'logger.info("telefone inválido -- confira os números")',
+        'logger.info("ok", extra={"id_agendamento": a, "excecao": e})',
+        'print(f"{telefone}")',
+    ]
+
+    for codigo in deve_flagrar:
+        no = ast.parse(codigo).body[0].value
+        achados = [i for i in _identificadores_da_chamada(no) if _proibido(i)]
+        assert _e_chamada_de_log(no) and achados, f"guarda deixou passar: {codigo}"
+
+    for codigo in nao_deve_flagrar:
+        no = ast.parse(codigo).body[0].value
+        achados = (
+            [i for i in _identificadores_da_chamada(no) if _proibido(i)]
+            if _e_chamada_de_log(no)
+            else []
+        )
+        assert not achados, f"falso positivo da guarda: {codigo}"
 
 
 def test_architecture_md_sem_placeholder_generico():

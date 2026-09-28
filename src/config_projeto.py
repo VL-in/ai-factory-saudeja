@@ -50,6 +50,32 @@ def hoje_na_clinica() -> date:
     return datetime.now(tz=fuso_da_clinica()).date()
 
 
+RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS = 365
+
+
+def retencao_dados_derivados_dias() -> int:
+    """Janela de retenção de `predicoes` e `mensagens_disparadas`
+    (`RETENCAO_DADOS_DERIVADOS_DIAS`, default 365) -- princípio da necessidade
+    da LGPD (Art. 6º, III), detalhado em `docs/LGPD.md` §5.
+
+    Só dado **derivado**: a probabilidade que o modelo calculou e o registro de
+    que uma mensagem foi (ou não) disparada. `pacientes`/`agendamentos` ficam
+    de fora de propósito -- o registro do atendimento é da clínica, que é a
+    controladora; apagá-lo por conta própria seria a operadora decidindo sobre
+    dado que não é dela.
+
+    365 dias, e não os 90 de `eventos_app`: a auditoria de disparo de lembrete
+    é compromisso do SLA §6, e um ciclo contratual anual é o horizonte em que
+    ela pode ser cobrada. Valor inválido cai no default em vez de levantar --
+    mesma escolha de `observabilidade.retencao_dias()`.
+    """
+    try:
+        bruto = os.environ.get("RETENCAO_DADOS_DERIVADOS_DIAS")
+        return max(int(bruto or RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS), 1)
+    except ValueError:
+        return RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS
+
+
 def caminho_de_env(variavel: str, default_relativo: str) -> str:
     """Valor de `variavel` se definida; senão o default, resolvido a partir
     da raiz do repositório em vez do CWD do processo."""
