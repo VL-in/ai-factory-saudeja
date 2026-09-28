@@ -27,13 +27,14 @@ Três consequências práticas:
 
 ## 2. Inventário: que dado existe, e por que ele é sensível
 
-O produto foi desenhado com minimização de PII desde o schema (`architecture.md` §4.1), então o inventário é curto de propósito. **Nome e CPF nunca são persistidos em lugar nenhum**: a tela de cadastro os coleta, usa o nome só na mensagem de confirmação em tela e converte o CPF no hash sha256 que identifica o paciente (`src/ui/logic.py::_id_paciente_externo_de_cpf`).
+O produto foi desenhado com minimização de PII desde o schema (`architecture.md` §4.1), então o inventário é curto de propósito. **O CPF nunca é persistido**: a tela de cadastro o coleta e o converte no hash sha256 que identifica o paciente (`src/ui/logic.py::_id_paciente_externo_de_cpf`). O **nome completo passou a ser gravado em 2026-09-28** ([ADR-007](adr/adr-007-nome-do-paciente.md)) — ver §2.1, que explica por que e o que limita a saída dele.
 
 | Dado | Onde fica | Classificação |
 |---|---|---|
 | `id_paciente_externo` (hash sha256 de CPF) | `pacientes` (Supabase) | **Pessoal pseudonimizado** — Art. 12/13. Não é anônimo: o hash é reversível por força bruta sobre o espaço de CPFs válidos. |
 | `data_nascimento`, `sexo` | `pacientes` | Pessoal |
 | `telefone` | `pacientes` | **Pessoal, identificador direto** — exceção deliberada da minimização (Passo 7): sem contato não existe o produto (lembrete pago). |
+| `nome_completo` | `pacientes` | **Pessoal, identificador direto** — segunda exceção deliberada (ADR-007): sem nome a fila do dia não é operável por quem atende. Ver §2.1 |
 | `especialidade` do agendamento | `agendamentos` | **Sensível (Art. 5º, II)** — ver abaixo |
 | `distancia_km`, `dias_entre_agendamento_consulta`, `historico_noshow`, `data_hora_agendada` | `agendamentos` | Pessoal (operacional) |
 | `status` do agendamento (`concluido`/`no_show`/`cancelado`) | `agendamentos` | **Sensível** — comparecimento a consulta é dado referente à saúde |
@@ -41,6 +42,33 @@ O produto foi desenhado com minimização de PII desde o schema (`architecture.m
 | Canal e status de envio do lembrete | `mensagens_disparadas` | Pessoal (auditoria de comunicação, SLA §6) |
 | Latência, contadores, nome de classe de exceção | `eventos_app` | **Não pessoal** — sem nenhuma coluna de PII por construção ([ADR-006](adr/adr-006-observabilidade.md)) |
 | Dataset de treino (`data/consultas-treino.csv`) e `model.pkl` | Azure Blob Storage, via DVC | Pessoal pseudonimizado — ver §4 |
+
+### 2.1 As duas exceções à minimização, e o que as justifica
+
+`telefone` (Passo 7) e `nome_completo` ([ADR-007](adr/adr-007-nome-do-paciente.md)) são identificadores diretos gravados de propósito. O critério é o mesmo nos dois casos, e é o princípio da **necessidade** (Art. 6º, III), não conveniência:
+
+| Coluna | Sem ela, o que deixa de funcionar |
+|---|---|
+| `telefone` | O disparo de lembrete pago — que é o produto inteiro. Não há para onde mandar mensagem. |
+| `nome_completo` | A aba "Fila do dia". A coluna "Paciente" mostrava o hash sha256 de **64 caracteres**: ninguém chama `9f86d081884c7d65…` na sala de espera, e o registro de desfecho (`concluido`/`no_show`, de onde sai o dado do re-treino mensal) depende de quem atende saber de quem é a linha. |
+
+**Nenhum destinatário novo entra em cena.** O funcionário que vê o nome é preposto da **clínica**, que é a controladora (§1): ele já tem a relação com o paciente, já detém o prontuário e assinou termo de confidencialidade. A base legal não muda (§3, Art. 11, II, "f").
+
+**O que impede o nome de sair da tela da equipe** — sete portas, cada uma com teste automatizado travando (tabela completa no ADR-007):
+
+| Porta | Mecanismo |
+|---|---|
+| Log de aplicação | `nome` é chave proibida no filtro de `src/logging_config.py` (§8) |
+| Código que loga | Guarda sobre a AST de `src/*.py` (§8) |
+| `eventos_app` | Allowlist fechada de `detalhe` ([ADR-006](adr/adr-006-observabilidade.md)) |
+| Dataset de treino (sai do Brasil, §4) | `COLUNAS_SAIDA` de `src/export_treino.py` |
+| API `/predict` (integrações externas) | Campo inexistente em `src/api/schemas.py` |
+| SMS via Infobip (processador externo) | Select do job D-2 não traz a coluna |
+| **LLM/TrueFoundry** (Passo 13) | `explain.contexto_sem_pii`, aplicada pela classe-base de `ExplicadorLLM` |
+
+A última merece nota, porque foi a preocupação que motivou a decisão: **cifrar a coluna no banco não protegeria o nome do LLM.** A chamada ao provedor sai de dentro do mesmo processo que já leu o nome para desenhar a tela — a chave estaria na mesma memória. O que protege é o nome não entrar no dicionário que vira prompt, e isso é garantido por construção: `explicar_em_texto` é concreta e sanitiza o contexto antes de delegar à implementação, que sobrescreve `_gerar_texto`. Um teste impede qualquer subclasse de pular essa fronteira.
+
+**Armazenamento em texto puro**, com a mesma proteção que `telefone` já tinha (§7): RLS sem policies, acesso só pela chave secreta do backend, TLS em trânsito, criptografia em repouso do provedor. Cifrar `nome_completo` deixando `telefone` em claro seria incoerente; a alternativa foi avaliada e recusada no ADR-007, com o caminho de reversão registrado.
 
 **Onde exatamente está a sensibilidade** — vale ser preciso, porque isso muda o enquadramento e o argumento do pitch. Idade, sexo e distância, isolados, são dado pessoal comum. O que torna o tratamento sujeito ao Art. 11 é a combinação de dois campos: **`especialidade`** (saber que alguém consulta cardiologia é informação sobre a saúde dessa pessoa) e **o próprio fato de haver um agendamento médico**. Não há diagnóstico, prontuário, exame ou medicamento no sistema — e essa é uma escolha de desenho, não uma sorte: o modelo não precisa deles para prever falta.
 
@@ -105,7 +133,7 @@ Como operadora, a SaúdeJá não atende o titular diretamente — atende a clín
 
 | Direito | Como é atendido | Limite conhecido |
 |---|---|---|
-| Confirmação e acesso (I, II) | Consulta pelo `id_paciente_externo` (hash do CPF do titular) devolve tudo o que existe sobre ele nas quatro tabelas | Requer que a clínica forneça o CPF para recalcular o hash — não há busca por nome, porque nome não é armazenado |
+| Confirmação e acesso (I, II) | Consulta pelo `id_paciente_externo` (hash do CPF do titular) devolve tudo o que existe sobre ele nas quatro tabelas | O caminho canônico segue sendo o CPF, recalculando o hash. Desde o ADR-007 há `nome_completo` gravado, mas busca por nome não é confiável para atender um pedido de titular (homônimo, grafia) — serve para operar a fila, não para identificar juridicamente |
 | Correção (III) | Alteração direta em `pacientes`/`agendamentos` | — |
 | Eliminação (VI) | `on delete cascade` de `pacientes` remove agendamentos, predições e mensagens em uma operação | **Não há interface para isso**: hoje é operação manual no banco. Pendência declarada em §9 |
 | Portabilidade (V) | Export das linhas do titular | Sem ferramenta dedicada; ver §9 |
@@ -119,7 +147,9 @@ O que já está implementado e verificado, não o que se pretende fazer:
 
 | Medida | Onde | Garantia |
 |---|---|---|
-| Minimização por design | `supabase/migrations/` | Nome/CPF/e-mail não têm coluna. Guarda automatizada: `test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii` |
+| Minimização por design | `supabase/migrations/` | CPF e e-mail não têm coluna, sem exceção. As duas exceções (`telefone`, `nome_completo`) são autorizadas por par (coluna, migration) -- a coluna só vale no arquivo que a introduziu. Guarda automatizada: `test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii` |
+| Fronteira de PII para fora do sistema | `src/explain.py::contexto_sem_pii` | O contexto do prompt do LLM é sanitizado pela classe-base, não por convenção de cada implementação (ADR-007) |
+| Colunas explícitas na leitura da fila | `repositories._COLUNAS_FILA_DO_DIA` | O `select("*")` anterior fazia toda coluna nova de `pacientes` fluir para a UI sem decisão -- `telefone` já ia, sem uso |
 | Pseudonimização | `src/ui/logic.py::_id_paciente_externo_de_cpf` | CPF vira hash sha256 antes de chegar ao banco |
 | Idade nunca persistida | `src/features.py::calcular_idade` | Guarda-se `data_nascimento`; a idade é calculada na hora da predição |
 | RLS em todas as tabelas, sem policies | migrations | URL do projeto vazada não dá acesso: só a chave secreta do backend enxerga algo |
@@ -153,12 +183,14 @@ O requisito é absoluto no BRIEFING e mensurável no [SLO §6](SLO.md) (0 ocorr�
 Nada aqui é surpresa oculta — cada item é para constar do slide de risco do Passo 12:
 
 1. **Transferência internacional do artefato de treino** (§4). Mitigada pelo conteúdo (pseudonimizado, sem contato), não eliminada. Reversível a baixo custo se a decisão mudar.
-2. **Eliminação de titular é operação manual.** O `on delete cascade` existe e funciona, mas não há interface nem script para o pedido do Art. 18, VI. Enquanto o volume é o de um protótipo, é aceitável; não é aceitável em operação real.
-3. **Dataset versionado não tem purga.** O DVC guarda histórico por construção — é o que dá rastreabilidade de qual dado gerou qual modelo (SLO §5). Um pedido de eliminação de titular não alcança as versões antigas do dataset sem reescrever o histórico. Tensão real entre rastreabilidade de ML e Art. 18, VI, sem solução implementada.
-4. **Sem autenticação nem RBAC.** Os dois perfis da interface (Paciente/Funcionário) não têm autenticação forte desenhada (`architecture.md` §9). Qualquer um com a URL do Space vê a fila do dia da clínica. **É o risco mais grave desta lista** e o mais barato de ser mal interpretado como "falta de tempo": é falta de controle de acesso sobre dado sensível.
-5. **Criptografia em repouso é herdada do provedor**, não verificada por nós.
-6. **Este documento não tem validação jurídica** (ver cabeçalho).
-7. **`especialidade` é o campo que carrega a sensibilidade** (§2). Se o produto crescer para aceitar motivo da consulta, diagnóstico ou medicação, esta análise precisa ser refeita do zero — não é um "mais um campo".
+2. **A superfície de reidentificação cresceu com o nome gravado** ([ADR-007](adr/adr-007-nome-do-paciente.md), §2.1). Um vazamento do banco agora expõe nome + telefone + especialidade + desfecho, o que identifica a pessoa diretamente; antes exigia quebrar o hash de CPF. É o custo assumido de ter uma fila do dia operável, e vai para o slide de risco do Passo 12 em voz alta — **o pitch não pode mais usar "não temos nome de paciente" como argumento de redução de risco**. A formulação correta: "temos nome, restrito à tela da equipe, com sete portas de saída fechadas e testadas".
+3. **A tela da recepção fica visível para a sala de espera.** A "Fila do dia" mostra a fila inteira com nome, e quem espera pode ler o monitor — exposição a terceiros que não assinaram confidencialidade nenhuma. Mitigado por aviso na própria tela, **não por mecanismo**: onde posicionar o monitor é decisão da clínica. A alternativa (nome abreviado na tabela, completo só na linha selecionada) foi avaliada e recusada por custo de operação (ADR-007).
+4. **Eliminação de titular é operação manual.** O `on delete cascade` existe e funciona, mas não há interface nem script para o pedido do Art. 18, VI. Enquanto o volume é o de um protótipo, é aceitável; não é aceitável em operação real.
+5. **Dataset versionado não tem purga.** O DVC guarda histórico por construção — é o que dá rastreabilidade de qual dado gerou qual modelo (SLO §5). Um pedido de eliminação de titular não alcança as versões antigas do dataset sem reescrever o histórico. Tensão real entre rastreabilidade de ML e Art. 18, VI, sem solução implementada.
+6. **Sem autenticação nem RBAC.** Os dois perfis da interface (Paciente/Funcionário) não têm autenticação forte desenhada (`architecture.md` §9). Qualquer um com a URL do Space vê a fila do dia da clínica. **É o risco mais grave desta lista** e o mais barato de ser mal interpretado como "falta de tempo": é falta de controle de acesso sobre dado sensível. **Piorou com o ADR-007**: a justificativa para exibir o nome é que quem vê assinou termo de confidencialidade — e hoje nada no sistema verifica que quem está vendo é essa pessoa. Fechar autenticação deixou de ser dívida de roadmap e passou a ser **pré-requisito da própria decisão do ADR-007** em operação real.
+7. **Criptografia em repouso é herdada do provedor**, não verificada por nós.
+8. **Este documento não tem validação jurídica** (ver cabeçalho).
+9. **`especialidade` é o campo que carrega a sensibilidade** (§2). Se o produto crescer para aceitar motivo da consulta, diagnóstico ou medicação, esta análise precisa ser refeita do zero — não é um "mais um campo".
 
 ---
 
@@ -181,4 +213,4 @@ O que existe de capacidade de investigação hoje: `eventos_app` (90 dias, sobre
 
 ## Revisão
 
-Revisar sempre que: (a) uma coluna nova entrar em `supabase/migrations/`, (b) a região de qualquer armazenamento mudar, (c) uma integração externa nova passar a receber dado de paciente — o LLM do Passo 13 é o próximo candidato —, ou (d) o [SLO.md](SLO.md)/[SLA.md](SLA.md)/[architecture.md](architecture.md) mudarem. Última geração: 2026-09-27 (Passo 8).
+Revisar sempre que: (a) uma coluna nova entrar em `supabase/migrations/`, (b) a região de qualquer armazenamento mudar, (c) uma integração externa nova passar a receber dado de paciente — o LLM do Passo 13 é o próximo candidato —, ou (d) o [SLO.md](SLO.md)/[SLA.md](SLA.md)/[architecture.md](architecture.md) mudarem. Última geração: 2026-09-27 (Passo 8); revisado em 2026-09-28 (§2/§2.1/§6/§7/§9 — nome do paciente gravado e visível à equipe, ADR-007).

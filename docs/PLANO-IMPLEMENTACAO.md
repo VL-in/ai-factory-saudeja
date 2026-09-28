@@ -98,7 +98,7 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 
 **Objetivo**: schema para pacientes/agendamentos/predições, usando o SDK oficial do Supabase (decisão validada), e conectar as abas placeholder do Passo 4 a persistência de verdade.
 
-**Minimização de PII por design**: tabela `pacientes` guarda só `id_paciente_externo` (referência ao sistema core da clínica) + atributos demográficos não identificáveis — nunca nome/CPF, reduzindo a superfície de risco LGPD estruturalmente, não só por convenção de logging (Passo 8).
+**Minimização de PII por design**: tabela `pacientes` guarda `id_paciente_externo` (referência ao sistema core da clínica) + atributos demográficos não identificáveis — **nunca CPF nem e-mail**, reduzindo a superfície de risco LGPD estruturalmente, não só por convenção de logging (Passo 8). Duas exceções deliberadas foram abertas depois, cada uma por dado ser necessário à finalidade e com ADR/migration própria: `telefone` (Passo 7) e `nome_completo` ([ADR-007](adr/adr-007-nome-do-paciente.md), 2026-09-28).
 
 - Criar projeto Supabase (free tier, região compatível com LGPD — confirmado no Passo 0) e `db/migrations/0001_init.sql`: `pacientes` (id, id_paciente_externo, idade, sexo, criado_em), `agendamentos` (id, id_paciente FK, especialidade, distancia_km, data_hora_agendada, dias_entre_agendamento_consulta, historico_noshow, status), `predicoes` (id, id_agendamento FK, probabilidade, classe_prevista, threshold_usado, explicacao_shap jsonb, explicacao_texto text nullable — plug do LLM, Passo 2/13, fica `NULL` até ser ativado, model_version, criado_em), `mensagens_disparadas` (id, id_agendamento FK, canal, status_envio, criado_em — auditoria do SLA §6).
 - `src/db/client.py`: wrapper fino sobre `supabase-py` (client único, configurado via `SUPABASE_URL`/`SUPABASE_KEY`).
@@ -115,6 +115,19 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 - `src/db/repositories.py` ganhou `inserir_paciente` (upsert por `id_paciente_externo`) além das quatro funções listadas acima — necessária para o formulário de cadastro de paciente persistir de verdade (agendamento sempre depende de um paciente já existir).
 - RLS habilitado em todas as tabelas, sem policies (só a `SUPABASE_SECRET_KEY` do backend acessa) — não estava explícito no plano, decisão tomada durante a migration inicial por ser o default seguro do Supabase.
 - `python-dotenv` (já era dependência de `requirements/base.txt`, mas nunca usado) passou a ser carregado em `src/config_projeto.py` via `load_dotenv()`, para que `SUPABASE_URL`/`SUPABASE_SECRET_KEY` do `.env` cheguem ao processo em execuções locais fora de Docker (`streamlit run`, `pytest`) sem exigir exportar variáveis manualmente. Não sobrescreve variáveis já definidas no ambiente (`env_file` do `docker-compose.yml`, secrets do HF Space).
+
+**Ajuste posterior (2026-09-28) — nome do paciente na "Fila do dia" ([ADR-007](adr/adr-007-nome-do-paciente.md))**
+
+A "Fila do dia" entregue neste passo mostrava o **hash sha256 de 64 caracteres** na coluna "Paciente". Não era um problema de UX: era uma tela que não podia ser operada — ninguém chama `9f86d081884c7d65…` na sala de espera, e o registro de desfecho do Passo 9.0 (`concluido`/`no_show`, de onde sai o dado real do re-treino) depende de quem atende saber de quem é a linha. Decisão da autora, com o racional completo e as alternativas recusadas no ADR-007:
+
+- `pacientes.nome_completo` passa a ser persistido (migration `20260928000000_nome_paciente.sql`, nullable, **sem backfill** — fabricar nome de paciente é pior que admitir a lacuna, e a UI mostra o início do hash nas linhas antigas). **CPF segue nunca gravado.**
+- O critério é o mesmo que abriu a exceção do `telefone` no Passo 7: **necessidade**, não conveniência. Sem contato não há lembrete; sem nome não há fila operável. E nenhum destinatário novo entra em cena — o funcionário é preposto da controladora e já detém o prontuário.
+- A guarda de migrations deixou de ser "lista de colunas proibidas" e passou a autorizar por **par (coluna, arquivo)**: `telefone` só vale na migration que o introduziu, `nome_completo` só na dele; em qualquer outro arquivo, `nome_completo` volta a cair na proibição de `nome`. CPF e e-mail seguem proibidos sem exceção.
+- **Dois achados colaterais, ambos corrigidos**: (a) `buscar_fila_do_dia` usava `select("*, pacientes(*), predicoes(*)")` — o curinga já trazia `telefone` para a camada de UI sem nenhum uso, e faria o mesmo com qualquer coluna de PII futura; virou lista explícita de colunas, que é a fronteira que um teste consegue inspecionar. (b) `ExplicadorLLM.explicar_em_texto` era abstrata, então cada implementação futura teria de lembrar de sanitizar o contexto do prompt; passou a ser concreta, aplicando `contexto_sem_pii` antes de delegar a `_gerar_texto`. A fronteira do LLM existe **antes** do Passo 13, não depois dele estar funcionando.
+- **Registrado porque foi perguntado**: cifrar a coluna no banco **não** protegeria o nome do LLM — a chamada sai do mesmo processo que já leu o nome para desenhar a tela, com a chave na mesma memória. Cripto na aplicação defende contra vazamento do dump/da chave do Supabase, que é outro risco; foi avaliada e adiada no ADR-007 (teria de cobrir `telefone` também, e perder a chave é perder todos os nomes).
+- **Custo assumido**, em `LGPD.md` §9: a superfície de reidentificação cresceu (vazamento do banco agora expõe nome + telefone + especialidade + desfecho), a tela da recepção fica legível para a sala de espera (mitigado por aviso, não por mecanismo) e o risco de ausência de autenticação **piorou** — a justificativa para exibir o nome é que quem vê assinou confidencialidade, e nada no sistema verifica isso hoje. Fechar autenticação virou pré-requisito da própria decisão em operação real.
+
+**Verificado**: `ruff` limpo, **222 testes** rápidos (baseline 205 ao fim do Passo 8) e integração real contra o Supabase local depois de `supabase db reset` — 10 testes de `test_db.py` (round-trip do nome até o rótulo da tela, recadastro sem nome não apagando o nome gravado, e a fila não trazendo `telefone` do banco) mais 6 de `test_job_inferencia.py`/`test_observabilidade.py`, todos verdes. A guarda das portas de saída tem controle negativo conferido: acrescentar `nome_completo` ao select do job D-2 faz o teste falhar.
 
 ---
 
@@ -148,19 +161,6 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 
 **Ajuste vindo do [ADR-006](adr/adr-006-observabilidade.md) (2026-09-21)**: o log de runtime do HF Space é **efêmero** (restart ou rebuild apaga, sem busca e sem retenção), então a auditoria a posteriori prevista no SLO §6 não é executável em produção. A garantia de zero-PII passa a ser **preventiva**: o teste estático sobre `src/` descrito acima é a evidência principal, e `scripts/auditoria_lgpd.py` vira ferramenta de verificação local, não a prova apresentada no pitch.
 
----
-
-## Passo 8.5 — Observabilidade de aplicação
-
-> Numerado como 8.5 de propósito: renumerar os Passos 9-13 quebraria dezenas de referências cruzadas neste plano, no README e nos ADRs, sem ganho algum.
-
-**Objetivo**: tornar os números do SLO coletáveis em produção, em vez de estimados na véspera do pitch. Vem depois do Passo 8 porque reaproveita o logging estruturado criado lá, e antes do Passo 9 porque o gate de re-treino já precisa de um canal de alerta e de prova de execução. A decisão completa, com alternativas descartadas, está no [ADR-006](adr/adr-006-observabilidade.md).
-
-**Princípio que organiza o desenho**: o coletor não pode morar dentro daquilo que ele mede. Métrica coletada dentro do Space some junto com o Space quando ele hiberna ou cai — inclusive a evidência de que caiu. Daí a separação entre camada interna (Supabase, fonte de verdade) e camadas externas (sondas).
-
-- Nova migration `supabase/migrations/*_eventos_app.sql`: tabela `eventos_app` (id, `criado_em`, `tipo` — ex. `predicao`/`job_d2`/`erro`, `duracao_ms`, `status`, `model_version`, `detalhe jsonb`). **Sem nenhuma coluna de PII** — a guarda de `tests/test_coerencia_repo.py` já cobre isso automaticamente e não precisa ser estendida.
-- `src/db/repositories.py`: `registrar_evento(...)` e as leituras agregadas que a aba consome (p95 de `duracao_ms` por período, contagem de erros, cobertura de SHAP).
-- Middleware do FastAPI em `src/api/main.py` e instrumentação equivalente em `src/jobs/inferencia_diaria.py`, gravando um evento por predição/execução. **Escrita não bloqueante** — o registro não pode entrar no caminho crítico da latência que ele existe para medir (SLO §2).
 ### Estado: implementado em 2026-09-27 — o que mudou em relação ao texto acima
 
 O texto do passo foi confrontado com o repositório real antes de implementar, e quatro coisas nele não se sustentavam. As quatro decisões foram tomadas com a autora.
@@ -181,6 +181,19 @@ O texto do passo foi confrontado com o repositório real antes de implementar, e
 
 **Pendência conhecida**: `tests/test_ui_smoke.py` não roda no ambiente local por falta de `streamlit` instalado no `.venv` (`requirements/ui.txt` não aplicado) — condição anterior a este passo. As duas linhas adicionadas a `src/ui/app.py` (`configurar_logging()` no topo) só são exercitadas onde o smoke test roda; o CI do Passo 10 instala `requirements/dev.txt`, que inclui `ui.txt`.
 
+---
+
+## Passo 8.5 — Observabilidade de aplicação
+
+> Numerado como 8.5 de propósito: renumerar os Passos 9-13 quebraria dezenas de referências cruzadas neste plano, no README e nos ADRs, sem ganho algum.
+
+**Objetivo**: tornar os números do SLO coletáveis em produção, em vez de estimados na véspera do pitch. Vem depois do Passo 8 porque reaproveita o logging estruturado criado lá, e antes do Passo 9 porque o gate de re-treino já precisa de um canal de alerta e de prova de execução. A decisão completa, com alternativas descartadas, está no [ADR-006](adr/adr-006-observabilidade.md).
+
+**Princípio que organiza o desenho**: o coletor não pode morar dentro daquilo que ele mede. Métrica coletada dentro do Space some junto com o Space quando ele hiberna ou cai — inclusive a evidência de que caiu. Daí a separação entre camada interna (Supabase, fonte de verdade) e camadas externas (sondas).
+
+- Nova migration `supabase/migrations/*_eventos_app.sql`: tabela `eventos_app` (id, `criado_em`, `tipo` — ex. `predicao`/`job_d2`/`erro`, `duracao_ms`, `status`, `model_version`, `detalhe jsonb`). **Sem nenhuma coluna de PII** — a guarda de `tests/test_coerencia_repo.py` já cobre isso automaticamente e não precisa ser estendida.
+- `src/db/repositories.py`: `registrar_evento(...)` e as leituras agregadas que a aba consome (p95 de `duracao_ms` por período, contagem de erros, cobertura de SHAP).
+- Middleware do FastAPI em `src/api/main.py` e instrumentação equivalente em `src/jobs/inferencia_diaria.py`, gravando um evento por predição/execução. **Escrita não bloqueante** — o registro não pode entrar no caminho crítico da latência que ele existe para medir (SLO §2).
 - Nova aba **"Observabilidade"** em `src/ui/app.py`: p95 de latência, contagem de erros, cobertura de explicação (`predicoes.explicacao_shap IS NOT NULL`), última execução bem-sucedida do job D-2. É daqui que saem os números do Passo 12.
 - Contas gratuitas nos dois serviços externos, ambos recebendo apenas sinal binário (nenhum dado de paciente): **UptimeRobot** (ou Better Stack) batendo em `/health` do Space, e **Healthchecks.io** como dead-man's-switch dos jobs agendados. A configuração efetiva depende da URL pública e acontece no Passo 11; os workflows que pingam são criados no Passo 10.
 - Alerta reusa `src/messaging` (Passo 7) — nenhum canal novo. **Emendado em 2026-09-21 (decisão 4 do Passo 9)**: o alerta sai por Healthchecks/GitHub Actions, não por `src/messaging` — `enviar_lembrete(telefone, mensagem)` foi desenhada para paciente, por SMS pago, e não há destinatário de equipe cadastrado em lugar nenhum. Continua valendo o princípio (nenhum canal novo), muda qual canal existente é reaproveitado.

@@ -40,7 +40,11 @@ def verificar_conexao() -> None:
 
 
 def inserir_paciente(
-    id_paciente_externo: str, data_nascimento: date, sexo: str, telefone: str
+    id_paciente_externo: str,
+    data_nascimento: date,
+    sexo: str,
+    telefone: str,
+    nome_completo: str | None = None,
 ) -> dict:
     """Upsert por `id_paciente_externo` (unique -- ver migration): recadastrar
     o mesmo paciente atualiza os dados em vez de duplicar a linha.
@@ -53,19 +57,29 @@ def inserir_paciente(
     `20260920020000_telefone_paciente.sql`) já chega normalizado
     (`ui/logic.py::normalizar_telefone`) -- é a exceção deliberada à
     minimização de PII: sem contato, o job D-2 não tem para onde mandar o
-    lembrete real via Infobip."""
+    lembrete real via Infobip.
+
+    `nome_completo` (migration `20260928000000_nome_paciente.sql`, ADR-007) é a
+    segunda exceção: a "Fila do dia" é operada por uma pessoa, que precisa
+    chamar o paciente pelo nome -- o hash não serve para isso. Opcional na
+    assinatura porque as linhas cadastradas antes dela realmente não têm nome
+    para recuperar, e porque `None` não pode sobrescrever um nome já gravado
+    (ver `_sem_sobrescrever_com_nulo` abaixo)."""
     client = obter_client()
+    registro = {
+        "id_paciente_externo": id_paciente_externo,
+        "data_nascimento": data_nascimento.isoformat(),
+        "sexo": sexo,
+        "telefone": telefone,
+    }
+    if nome_completo:
+        # Chave ausente, não `None`: o upsert é por `id_paciente_externo`, e
+        # mandar `nome_completo: None` APAGARIA o nome de um paciente que já o
+        # tinha, num recadastro feito por um caminho que não coleta nome.
+        registro["nome_completo"] = nome_completo.strip()
     resposta = (
         client.table("pacientes")
-        .upsert(
-            {
-                "id_paciente_externo": id_paciente_externo,
-                "data_nascimento": data_nascimento.isoformat(),
-                "sexo": sexo,
-                "telefone": telefone,
-            },
-            on_conflict="id_paciente_externo",
-        )
+        .upsert(registro, on_conflict="id_paciente_externo")
         .execute()
     )
     return resposta.data[0]
@@ -250,17 +264,35 @@ def buscar_agendamentos_com_desfecho() -> list[dict]:
     )
 
 
+# Lista explícita, em vez do `*, pacientes(*), predicoes(*)` que vigorava até
+# 2026-09-28 (ADR-007). O curinga fazia TODA coluna nova de `pacientes` fluir
+# para a camada de UI sem ninguém decidir isso: `telefone` já ia (sem uso, já
+# que `ItemFila` não o carrega) e `nome_completo` passaria a ir por acidente,
+# não por escolha. Numa tabela que guarda PII por exceção, a lista de colunas é
+# a fronteira -- e é ela que o teste de coerência consegue inspecionar.
+_COLUNAS_FILA_DO_DIA = (
+    "id, especialidade, data_hora_agendada, status, "
+    "pacientes(id_paciente_externo, nome_completo), "
+    "predicoes(criado_em, probabilidade, classe_prevista, explicacao_shap, "
+    "explicacao_texto, model_version)"
+)
+
+
 def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
     """Agendamentos do dia (default hoje) com paciente e última predição
     embutidos, ordenados por probabilidade desc -- quem ainda não tem
     predição (job ainda não rodou/D-2 não bateu) vai para o fim da fila, não
-    para o topo, já que não há risco calculado para ordenar."""
+    para o topo, já que não há risco calculado para ordenar.
+
+    Traz `nome_completo` (ADR-007) e **não** traz `telefone`: o funcionário
+    precisa chamar o paciente pelo nome, não discar para ele -- quem envia
+    mensagem é o job D-2, por outro caminho e com outro select."""
     client = obter_client()
     inicio, fim = _intervalo_do_dia(dia or hoje_na_clinica())
 
     agendamentos = (
         client.table("agendamentos")
-        .select("*, pacientes(*), predicoes(*)")
+        .select(_COLUNAS_FILA_DO_DIA)
         .gte("data_hora_agendada", inicio)
         .lt("data_hora_agendada", fim)
         .order("data_hora_agendada")
@@ -373,20 +405,6 @@ def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
     return total, com_explicacao
 
 
-def purgar_eventos_app(anteriores_a: datetime) -> int:
-    """Política de retenção do ADR-006 (a tabela divide o teto do free tier do
-    Supabase com os dados do produto). Executada pelo job diário, não por
-    pg_cron: o job já roda uma vez por dia e um agendador novo seria mais uma
-    peça de infra a manter. Devolve quantas linhas saíram."""
-    client = obter_client()
-    removidas = (
-        client.table("eventos_app")
-        .delete()
-        .lt("criado_em", anteriores_a.isoformat())
-        .execute()
-        .data
-    )
-    return len(removidas or [])
 def purgar_dados_derivados(anteriores_a: datetime) -> dict[str, int]:
     """Retenção das tabelas **derivadas** (`predicoes`,
     `mensagens_disparadas`), política do Passo 8 / `docs/LGPD.md` §5.
@@ -415,3 +433,17 @@ def purgar_dados_derivados(anteriores_a: datetime) -> dict[str, int]:
     return removidas
 
 
+def purgar_eventos_app(anteriores_a: datetime) -> int:
+    """Política de retenção do ADR-006 (a tabela divide o teto do free tier do
+    Supabase com os dados do produto). Executada pelo job diário, não por
+    pg_cron: o job já roda uma vez por dia e um agendador novo seria mais uma
+    peça de infra a manter. Devolve quantas linhas saíram."""
+    client = obter_client()
+    removidas = (
+        client.table("eventos_app")
+        .delete()
+        .lt("criado_em", anteriores_a.isoformat())
+        .execute()
+        .data
+    )
+    return len(removidas or [])

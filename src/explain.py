@@ -15,10 +15,17 @@ tradução dessas contribuições em texto via LLM (Passo 13) -- o
 ExplicadorLLMDesativado nunca chama rede; ele só existe para
 API/job (Passo 3/6) e o schema de `predicoes` (Passo 5) já reservarem o
 formato (`explicacao_texto: str | None`) sem exigir migração depois.
+
+Este plug é também a **fronteira de PII para fora do sistema** (ADR-007): é o
+único ponto por onde dado de paciente sairia para um provedor de LLM. Desde
+que `pacientes.nome_completo` passou a ser gravado, `ExplicadorLLM` sanitiza o
+contexto do prompt por construção -- ver `contexto_sem_pii`.
 """
 from abc import ABC, abstractmethod
 
 import shap
+
+from logging_config import chave_de_pii
 
 
 def construir_explicador(model):
@@ -86,19 +93,55 @@ def _explicar_linha(colunas, valores_da_linha):
     return contribuicoes
 
 
+def contexto_sem_pii(contexto: dict | None) -> dict:
+    """Remove do contexto do prompt qualquer campo que nomeie PII.
+
+    Esta é a fronteira que impede o nome do paciente (gravado a partir de
+    2026-09-28, ADR-007) de sair para o LLM/TrueFoundry. **O que protege aqui é
+    o código, não a forma de armazenamento**: o LLM é chamado de dentro do
+    mesmo processo que já leu o nome para desenhar a "Fila do dia", então
+    cifrar a coluna no banco não ajudaria -- a chave estaria na mesma memória.
+    O que ajuda é o nome nunca entrar no dicionário que vira prompt.
+
+    Reusa `logging_config.chave_de_pii` em vez de ter lista própria: duas
+    noções de "campo de PII" divergiriam, e a que divergisse em silêncio seria
+    justamente esta, que guarda a fronteira externa.
+
+    Descarta em silêncio, não levanta: um caller novo passando `nome_completo`
+    por engano não pode derrubar a tela do funcionário -- mas também não pode
+    mandar o nome para um provedor de LLM fora do Brasil.
+    """
+    if not contexto:
+        return {}
+    return {
+        chave: valor for chave, valor in contexto.items() if not chave_de_pii(chave)
+    }
+
+
 class ExplicadorLLM(ABC):
     """Interface para tradução das contribuições SHAP em texto. O SHAP
     continua sendo a fonte de verdade numérica; o LLM, quando ligado
     (Passo 13), só traduz contribuições já calculadas em uma frase -- nunca
-    recalcula nem substitui a explicação."""
+    recalcula nem substitui a explicação.
+
+    `explicar_em_texto` é **concreta de propósito** e o que as implementações
+    sobrescrevem é `_gerar_texto`: assim a sanitização do contexto (ADR-007)
+    acontece por construção, e não porque cada implementação futura lembrou de
+    chamá-la. `tests/test_explain.py` trava isso -- nenhuma subclasse pode
+    sobrescrever `explicar_em_texto` e pular a fronteira.
+    """
+
+    def explicar_em_texto(self, contribuicoes: list, contexto: dict) -> str | None:
+        return self._gerar_texto(contribuicoes, contexto_sem_pii(contexto))
 
     @abstractmethod
-    def explicar_em_texto(self, contribuicoes: list, contexto: dict) -> str | None:
-        ...
+    def _gerar_texto(self, contribuicoes: list, contexto: dict) -> str | None:
+        """Recebe o contexto **já sem PII**. É aqui que a implementação real
+        (Passo 13) monta o prompt e chama o provedor."""
 
 
 class ExplicadorLLMDesativado(ExplicadorLLM):
     """Plug inativo (default até o Passo 13). Nunca faz chamada de rede."""
 
-    def explicar_em_texto(self, contribuicoes: list, contexto: dict) -> str | None:
+    def _gerar_texto(self, contribuicoes: list, contexto: dict) -> str | None:
         return None

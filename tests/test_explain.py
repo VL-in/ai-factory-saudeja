@@ -100,6 +100,79 @@ def test_explicador_llm_e_interface_abstrata():
         explain.ExplicadorLLM()
 
 
+# --- fronteira de PII para fora do sistema (ADR-007) --------------------------
+
+
+class _ExplicadorEspiao(explain.ExplicadorLLM):
+    """Implementação que só registra o que chegaria ao prompt. Faz o papel do
+    `ExplicadorLLMTrueFoundry` do Passo 13 sem nenhuma rede."""
+
+    def __init__(self):
+        self.contexto_recebido = None
+
+    def _gerar_texto(self, contribuicoes, contexto):
+        self.contexto_recebido = contexto
+        return "explicação em texto"
+
+
+def test_contexto_enviado_ao_llm_nunca_carrega_nome_do_paciente():
+    """Desde 2026-09-28 (ADR-007) `pacientes.nome_completo` é gravado, para a
+    "Fila do dia" ser operável por quem atende. Esta é a fronteira que impede
+    o nome de sair para um provedor de LLM.
+
+    Vale registrar por que a proteção é aqui e não no banco: o LLM é chamado de
+    dentro do mesmo processo que já leu o nome para desenhar a tela, então
+    cifrar a coluna não ajudaria -- a chave estaria na mesma memória. O que
+    ajuda é o nome não entrar no dicionário que vira prompt."""
+    espiao = _ExplicadorEspiao()
+
+    espiao.explicar_em_texto(
+        contribuicoes=[{"feature": "idade", "contribuicao": 0.3}],
+        contexto={
+            "nome_completo": "Ana Souza",
+            "telefone": "5511987654321",
+            "cpf": "52998224725",
+            "id_agendamento": "550e8400-e29b-41d4-a716-446655440000",
+            "especialidade": "cardiologia",
+        },
+    )
+
+    assert espiao.contexto_recebido == {
+        "id_agendamento": "550e8400-e29b-41d4-a716-446655440000",
+        "especialidade": "cardiologia",
+    }
+
+
+def test_contexto_sem_pii_tolera_ausencia_e_dicionario_vazio():
+    assert explain.contexto_sem_pii(None) == {}
+    assert explain.contexto_sem_pii({}) == {}
+
+
+def test_nenhuma_implementacao_de_explicador_pode_pular_a_fronteira():
+    """`explicar_em_texto` é concreta justamente para a sanitização acontecer
+    por construção. Uma subclasse que a sobrescrevesse voltaria a receber o
+    contexto cru -- e o vazamento seria silencioso, porque nada na chamada
+    mudaria de forma. Este teste é o que impede isso de passar em revisão.
+
+    Percorre as subclasses recursivamente: uma sobrescrita escondida dois
+    níveis abaixo vaza igual."""
+
+    def _subclasses(classe):
+        for sub in classe.__subclasses__():
+            yield sub
+            yield from _subclasses(sub)
+
+    infratoras = [
+        sub.__name__
+        for sub in _subclasses(explain.ExplicadorLLM)
+        if "explicar_em_texto" in sub.__dict__
+    ]
+    assert not infratoras, (
+        f"{infratoras} sobrescreve(m) explicar_em_texto e pula(m) contexto_sem_pii "
+        "(ADR-007) -- implemente _gerar_texto"
+    )
+
+
 def test_explicar_recusa_x_com_mais_de_uma_linha(explicacao_real):
     """Regressão: explicar() devolvia silenciosamente a explicação só da
     primeira linha. No job diário (Passo 6), que roda sobre a fila de D+2,

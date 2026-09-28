@@ -8,6 +8,24 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
+## [v1.10] (Vanessa + Claude) - 2026-09-28
+
+### Adicionado
+- A "Fila do dia" mostra o **nome do paciente** na coluna "Paciente", no registro de desfecho e no painel de explicação. Antes mostrava o hash de 64 caracteres, que não permitia chamar ninguém na sala de espera. O identificador interno continua visível em letra miúda, no detalhe da linha.
+- O nome completo digitado no cadastro passa a ser gravado (`pacientes.nome_completo`). Cadastros feitos antes desta versão não têm nome — a tela mostra "(cadastro sem nome)" seguido do início do identificador, em vez de inventar um.
+- Aviso na aba informando que a tela contém dado pessoal e não deve ficar exposta à sala de espera.
+
+### Modificado
+- **O CPF continua nunca sendo gravado.** O que mudou é só o nome; o identificador do paciente no banco segue sendo o hash do CPF.
+- A consulta da fila do dia passou a pedir colunas específicas ao banco em vez de todas: o telefone do paciente deixou de ser trazido para a tela, onde não era usado.
+- O cadastro recusa nome vazio ou com mais de 120 caracteres antes de gravar.
+
+### Segurança
+- O nome do paciente é autorizado **apenas** na tela da equipe da clínica. Ele não sai para log, para a tabela de observabilidade, para o dataset de treino (que é armazenado fora do Brasil), para a resposta da API pública, para a mensagem enviada pela Infobip nem para o provedor de LLM previsto. Cada uma dessas sete saídas tem verificação automatizada.
+- A fronteira do LLM passou a ser aplicada pela própria interface de explicação: qualquer implementação futura recebe o contexto já sem dado pessoal, sem depender de lembrar de filtrá-lo.
+- A verificação de PII no schema passou a autorizar cada exceção por coluna **e** arquivo: `telefone` e `nome_completo` só são aceitos nas migrations que os introduziram. CPF e e-mail seguem proibidos sem exceção.
+- Registrado em `docs/LGPD.md` que a superfície de reidentificação aumentou, que a tela da recepção fica legível para quem espera e que a falta de autenticação passou a ser pré-requisito, não dívida: a justificativa para exibir o nome é o termo de confidencialidade de quem vê, e nada no sistema verifica quem está vendo.
+
 ## [v1.9] (Vanessa + Claude) - 2026-09-27
 
 ### Adicionado

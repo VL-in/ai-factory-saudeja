@@ -149,6 +149,94 @@ def test_inserir_paciente_e_upsert_por_id_externo(db):
 
 
 @pytest.mark.integracao
+def test_nome_do_paciente_faz_round_trip_e_chega_na_fila_do_dia(db):
+    """ADR-007: a "Fila do dia" mostrava o hash sha256 de 64 caracteres na
+    coluna "Paciente". Prova o caminho inteiro -- gravação, select explícito da
+    fila e o rótulo que a tela desenha."""
+    import db.repositories as repositories
+    from ui import logic
+
+    paciente, _ = _criar_paciente_e_agendamento_com_nome(
+        repositories, dias=0, id_externo="EXT-NOME", nome_completo="Ana Souza Costa"
+    )
+    assert paciente["nome_completo"] == "Ana Souza Costa"
+
+    fila = logic.buscar_fila_do_dia(hoje_na_clinica())
+    item = next(i for i in fila if i.id_paciente_externo == "EXT-NOME")
+
+    assert item.nome_completo == "Ana Souza Costa"
+    assert item.rotulo_paciente == "Ana Souza Costa"
+
+
+@pytest.mark.integracao
+def test_recadastro_sem_nome_nao_apaga_o_nome_ja_gravado(db):
+    """O upsert é por `id_paciente_externo`. Mandar `nome_completo: None` num
+    recadastro feito por um caminho que não coleta nome apagaria o nome de quem
+    já o tinha -- perda silenciosa de dado que a clínica depende para operar a
+    fila. `inserir_paciente` omite a chave em vez de enviar nulo."""
+    import db.repositories as repositories
+
+    repositories.inserir_paciente(
+        id_paciente_externo="EXT-PRESERVA",
+        data_nascimento=DATA_NASCIMENTO_PADRAO,
+        sexo="F",
+        telefone=TELEFONE_PADRAO,
+        nome_completo="Bruno Lima",
+    )
+    depois = repositories.inserir_paciente(
+        id_paciente_externo="EXT-PRESERVA",
+        data_nascimento=DATA_NASCIMENTO_PADRAO,
+        sexo="F",
+        telefone=TELEFONE_PADRAO,
+    )
+
+    assert depois["nome_completo"] == "Bruno Lima"
+
+
+@pytest.mark.integracao
+def test_fila_do_dia_nao_traz_telefone_do_banco(db):
+    """O select explícito (ADR-007) é a fronteira: antes, `pacientes(*)`
+    trazia `telefone` para a camada de UI sem nenhum uso -- e faria o mesmo com
+    qualquer coluna de PII futura."""
+    import db.repositories as repositories
+
+    _criar_paciente_e_agendamento_com_nome(
+        repositories, dias=0, id_externo="EXT-SEM-TEL", nome_completo="Carla Dias"
+    )
+
+    linhas = repositories.buscar_fila_do_dia(hoje_na_clinica())
+    paciente_embutido = next(
+        linha["pacientes"]
+        for linha in linhas
+        if linha["pacientes"]["id_paciente_externo"] == "EXT-SEM-TEL"
+    )
+
+    assert set(paciente_embutido) == {"id_paciente_externo", "nome_completo"}
+
+
+def _criar_paciente_e_agendamento_com_nome(repositories, dias, id_externo, nome_completo):
+    paciente = repositories.inserir_paciente(
+        id_paciente_externo=id_externo,
+        data_nascimento=DATA_NASCIMENTO_PADRAO,
+        sexo="F",
+        telefone=TELEFONE_PADRAO,
+        nome_completo=nome_completo,
+    )
+    data_hora = datetime.combine(
+        hoje_na_clinica() + timedelta(days=dias), HORA_DA_CONSULTA, tzinfo=fuso_da_clinica()
+    )
+    agendamento = repositories.inserir_agendamento(
+        id_paciente=paciente["id"],
+        especialidade="cardiologia",
+        distancia_km=5.5,
+        data_hora_agendada=data_hora,
+        dias_entre_agendamento_consulta=14,
+        historico_noshow=1,
+    )
+    return paciente, agendamento
+
+
+@pytest.mark.integracao
 def test_inserir_agendamento_aparece_na_fila_do_dia(db):
     import db.repositories as repositories
 
@@ -292,6 +380,7 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
         distancia_km=18.0,
         data_consulta=data_consulta,
         hora_consulta=HORA_DA_CONSULTA,
+        nome_completo="Daniela Reis",
     )
 
     item = next(
@@ -301,6 +390,11 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
     )
 
     assert item.data_hora_agendada.timetz().replace(tzinfo=None) == HORA_DA_CONSULTA
+    # O nome digitado na tela chega à fila; o CPF, não -- o que identifica o
+    # paciente no banco é o hash dele (ADR-007).
+    assert item.nome_completo == "Daniela Reis"
+    paciente = db.table("pacientes").select("*").execute().data[0]
+    assert "cpf" not in paciente
     agendamento = (
         db.table("agendamentos").select("dias_entre_agendamento_consulta").execute().data[0]
     )

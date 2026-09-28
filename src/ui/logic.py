@@ -293,10 +293,22 @@ class ItemFila:
     explicacao_texto: str | None = None
     model_version: str | None = None
     status: str = "agendado"
+    nome_completo: str | None = None
 
     @property
     def tem_predicao(self) -> bool:
         return self.probabilidade is not None
+
+    @property
+    def rotulo_paciente(self) -> str:
+        """O que a coluna "Paciente" da fila mostra (ADR-007). Nome quando
+        existe; senão os primeiros caracteres do hash, rotulados como cadastro
+        antigo -- essas linhas foram criadas antes de a coluna existir e
+        realmente não têm nome para recuperar. Inventar um placeholder que
+        pareça nome seria pior que admitir a lacuna."""
+        if self.nome_completo:
+            return self.nome_completo
+        return f"(cadastro sem nome) {self.id_paciente_externo[:8]}"
 
 
 def _relatar_falha_persistencia(exc: Exception, acao: str):
@@ -335,6 +347,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
                 explicacao_texto=ultima.get("explicacao_texto") if ultima else None,
                 model_version=ultima.get("model_version") if ultima else None,
                 status=linha["status"],
+                nome_completo=linha["pacientes"].get("nome_completo"),
             )
         )
     return itens
@@ -462,6 +475,20 @@ def status_banco() -> dict:
     return {"conectado": True, "detalhe": "conectado"}
 
 
+NOME_MINIMO = 2
+NOME_MAXIMO = 120
+
+
+def nome_valido(nome_completo: str) -> bool:
+    """Confere só a forma -- mesmo escopo de `cpf_valido`/`telefone_valido`:
+    não existe "validar nome" de verdade (nomes brasileiros têm partícula,
+    acento, apóstrofo, hífen e um único termo é possível). O que se barra é
+    campo vazio, espaço em branco e texto longo demais para uma coluna de
+    nome, que são os casos de preenchimento claramente errado. Limites batem
+    com o `check` da migration `20260928000000_nome_paciente.sql`."""
+    return NOME_MINIMO <= len((nome_completo or "").strip()) <= NOME_MAXIMO
+
+
 def cadastrar_paciente_e_agendamento(
     cpf: str,
     telefone: str,
@@ -471,16 +498,21 @@ def cadastrar_paciente_e_agendamento(
     distancia_km: float,
     data_consulta: date,
     hora_consulta: time,
+    nome_completo: str | None = None,
 ) -> dict:
     """Cadastro do paciente (visão Paciente, Passo 5 + ajuste de realismo) --
     upsert do paciente seguido do agendamento.
 
-    Nome completo não é parâmetro aqui de propósito: a tela usa o valor
-    digitado só para a mensagem de confirmação, sem passar por esta função
-    nem tocar o banco -- nome nunca é persistido (LGPD, architecture.md
-    §4.1). CPF também não é gravado: vira só o hash que identifica o
-    paciente (`_id_paciente_externo_de_cpf`), substituindo o antigo campo de
-    identificador livre digitado na tela. `telefone` (Passo 7) é a exceção
+    `nome_completo` passou a ser parâmetro em 2026-09-28 (ADR-007) e **é
+    gravado**. Até então a tela usava o valor digitado só para a mensagem de
+    confirmação e o descartava: a "Fila do dia" mostrava o hash sha256 de 64
+    caracteres na coluna "Paciente", inútil para quem atende no balcão e
+    precisa chamar a pessoa pelo nome. Continua opcional na assinatura para
+    não quebrar quem chama sem ele, e `None` nunca apaga um nome já gravado
+    (ver `repositories.inserir_paciente`).
+
+    **CPF segue não sendo gravado**: vira só o hash que identifica o paciente
+    (`_id_paciente_externo_de_cpf`). `telefone` (Passo 7) é a primeira exceção
     deliberada à minimização de PII -- é gravado (normalizado), porque sem
     contato o job D-2 não tem para onde mandar o lembrete real via Infobip.
 
@@ -493,6 +525,10 @@ def cadastrar_paciente_e_agendamento(
     `timestamptz`, então gravar um datetime naive deixaria o Postgres
     interpretá-lo no fuso do servidor (UTC no container) e a consulta
     apareceria 3h deslocada na fila do dia."""
+    if nome_completo is not None and not nome_valido(nome_completo):
+        raise ErroValidacaoCadastro(
+            f"Nome inválido -- informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
+        )
     if not cpf_valido(cpf):
         raise ErroValidacaoCadastro("CPF inválido -- confira os números digitados.")
     if not telefone_valido(telefone):
@@ -511,6 +547,7 @@ def cadastrar_paciente_e_agendamento(
             data_nascimento=data_nascimento,
             sexo=sexo,
             telefone=normalizar_telefone(telefone),
+            nome_completo=nome_completo,
         )
         historico_noshow = repositories.contar_no_shows_anteriores(paciente["id"])
         return repositories.inserir_agendamento(

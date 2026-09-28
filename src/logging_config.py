@@ -185,9 +185,15 @@ def _redigir_valor_de_campo(chave: str, valor):
     return valor
 
 
-def _chave_proibida(chave: str) -> bool:
-    """Mesmas três formas que a regra de texto reconhece: exata (`nome`), com
-    sufixo (`nome_completo`) e com prefixo (`paciente_nome`)."""
+def chave_de_pii(chave: str) -> bool:
+    """`chave` nomeia um campo de PII? Mesmas três formas que a regra de texto
+    reconhece: exata (`nome`), com sufixo (`nome_completo`) e com prefixo
+    (`paciente_nome`).
+
+    Público porque não serve só ao log: `src/explain.py` usa esta mesma função
+    para barrar PII no contexto enviado ao LLM (Passo 13). Duas noções de "o
+    que é campo de PII" no repositório divergiriam, e a que divergisse em
+    silêncio seria a que guarda a fronteira externa."""
     alvo = str(chave).lower()
     return any(
         alvo == proibida
@@ -195,6 +201,10 @@ def _chave_proibida(chave: str) -> bool:
         or alvo.endswith(f"_{proibida}")
         for proibida in CHAVES_PROIBIDAS
     )
+
+
+def _chave_proibida(chave: str) -> bool:
+    return chave_de_pii(chave)
 
 
 class FiltroRedacaoPII(logging.Filter):

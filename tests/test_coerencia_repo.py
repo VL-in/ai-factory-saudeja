@@ -120,17 +120,36 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
             assert dep in stage["deps"], f"stage '{nome}' não declara '{dep}' em deps"
 
 
+# Exceções deliberadas à minimização de PII, cada uma amarrada à migration que
+# a declara: a coluna é permitida NAQUELE arquivo e em nenhum outro. Uma lista
+# solta de "colunas permitidas" deixaria qualquer migration futura acrescentar
+# `nome_completo` em outra tabela sem ninguém notar -- o que é exatamente o
+# tipo de drift que esta guarda existe para pegar.
+COLUNAS_DE_PII_PERMITIDAS_POR_MIGRATION = {
+    # Passo 7: sem contato de envio não existe lembrete pago, que é o produto.
+    "telefone": "20260920020000_telefone_paciente.sql",
+    # 2026-09-28 (ADR-007): a fila do dia é operada por uma pessoa, que precisa
+    # chamar o paciente pelo nome -- o hash sha256 não serve para isso.
+    "nome_completo": "20260928000000_nome_paciente.sql",
+}
+
+
 def test_migrations_sql_sem_coluna_proibida_de_pii():
     """Minimização de PII por design (BRIEFING.md, architecture.md §4.1):
-    `pacientes` guarda só id_paciente_externo + demografia não identificável.
+    `pacientes` guarda só id_paciente_externo + demografia não identificável,
+    mais as exceções deliberadas de `COLUNAS_DE_PII_PERMITIDAS_POR_MIGRATION`.
     Guarda automatizável desde o schema, não só por convenção de código.
 
-    `telefone` não está mais na lista (Passo 7): é a exceção deliberada --
-    sem contato de envio o disparo de lembrete real (Infobip) não existe --
-    documentada na migration `20260920020000_telefone_paciente.sql`. Segue
-    proibido gravar nome/CPF/email, que servem só para identificar/exibir,
-    não para o produto funcionar."""
-    colunas_proibidas = ("nome", "cpf", "email")
+    **CPF e e-mail seguem proibidos sem exceção** -- servem só para
+    identificar, nunca para o produto funcionar, e o CPF já está representado
+    pelo hash em `id_paciente_externo`.
+
+    A guarda é por par (coluna, arquivo), não por lista de colunas: `telefone`
+    só pode aparecer na migration que o introduziu, e `nome_completo` só na
+    dele. Em qualquer outro arquivo, `nome_completo` volta a cair na proibição
+    de `nome` (a checagem é por substring, então a variação composta não
+    escapa)."""
+    colunas_proibidas = ("nome", "cpf", "email", "telefone")
     migrations_dir = REPO_ROOT / "supabase" / "migrations"
     assert migrations_dir.exists(), "supabase/migrations/ não existe (Passo 5)"
 
@@ -140,9 +159,33 @@ def test_migrations_sql_sem_coluna_proibida_de_pii():
             for linha in migration.read_text(encoding="utf-8").lower().splitlines()
         )
         texto = "\n".join(linhas_sem_comentario)
+        # Retira do texto só as exceções que ESTE arquivo tem direito de
+        # declarar, antes de procurar o que sobrou.
+        for coluna, arquivo in COLUNAS_DE_PII_PERMITIDAS_POR_MIGRATION.items():
+            if migration.name == arquivo:
+                texto = texto.replace(coluna, "")
+
         encontradas = [c for c in colunas_proibidas if c in texto]
         assert not encontradas, (
-            f"{migration.name} referencia coluna(s) proibida(s) por LGPD: {encontradas}"
+            f"{migration.name} referencia coluna(s) proibida(s) por LGPD: {encontradas}. "
+            "Exceção nova exige entrada em COLUNAS_DE_PII_PERMITIDAS_POR_MIGRATION, "
+            "ADR próprio e atualização de docs/LGPD.md §2."
+        )
+
+
+def test_excecoes_de_pii_apontam_para_migrations_que_existem():
+    """Se a migration da exceção for renomeada ou removida, a entrada vira um
+    passe livre silencioso: a coluna deixaria de ser retirada de qualquer
+    arquivo e, pior, nada acusaria a inconsistência."""
+    migrations_dir = REPO_ROOT / "supabase" / "migrations"
+    for coluna, arquivo in COLUNAS_DE_PII_PERMITIDAS_POR_MIGRATION.items():
+        caminho = migrations_dir / arquivo
+        assert caminho.exists(), (
+            f"exceção de PII para '{coluna}' aponta para {arquivo}, que não existe"
+        )
+        texto = caminho.read_text(encoding="utf-8").lower()
+        assert f"add column {coluna}" in texto, (
+            f"{arquivo} não declara a coluna '{coluna}' que a exceção autoriza"
         )
 
 
@@ -170,6 +213,49 @@ def test_export_treino_sem_coluna_proibida_de_pii():
         f"COLUNAS_SAIDA de export_treino.py referencia coluna(s) proibida(s) por LGPD: "
         f"{encontradas}"
     )
+
+
+def test_nome_do_paciente_nao_vaza_pelas_portas_de_saida():
+    """`pacientes.nome_completo` passou a ser gravado em 2026-09-28 (ADR-007)
+    para a "Fila do dia" ser operável por quem atende. A autorização é para
+    aquela tela, e só para ela -- este teste guarda as portas que levariam o
+    nome para fora, cada uma com um mecanismo diferente de saída:
+
+    - **select do job D-2**: traria o nome para o processo que monta a mensagem
+      enviada à Infobip, um processador externo;
+    - **schema da API**: `/predict` é a porta de entrada para integrações
+      externas ao Saúde Já (diagrama C2 de architecture.md);
+    - **export de treino**: o dataset vai para o remote do DVC, fora do Brasil
+      (LGPD.md §4).
+
+    O export já tem guarda própria (`test_export_treino_...`), por lista de
+    colunas; aqui a checagem é por ausência do termo nos arquivos que definem
+    as outras duas fronteiras."""
+    portas = {
+        "src/db/repositories.py": ("_COLUNAS_AGENDAMENTO_PARA_INFERENCIA",),
+        "src/api/schemas.py": None,  # arquivo inteiro: nenhum campo de nome
+    }
+
+    for caminho, trechos in portas.items():
+        texto = (REPO_ROOT / caminho).read_text(encoding="utf-8")
+        alvos = []
+        if trechos is None:
+            alvos = [texto]
+        else:
+            for nome_do_trecho in trechos:
+                inicio = texto.index(nome_do_trecho)
+                alvos.append(texto[inicio : texto.index(")", inicio)])
+
+        for alvo in alvos:
+            # Comentário fora: os dois arquivos explicam por que o nome NÃO
+            # entra, e um grep cru sobre o texto inteiro acusaria a explicação.
+            sem_comentario = "\n".join(
+                linha.split("#", 1)[0] for linha in alvo.splitlines()
+            )
+            assert "nome" not in sem_comentario.lower(), (
+                f"{caminho} referencia 'nome' numa porta de saída -- o nome do paciente "
+                "é autorizado só na 'Fila do dia' (ADR-007)"
+            )
 
 
 _METODOS_DE_LOG = frozenset(

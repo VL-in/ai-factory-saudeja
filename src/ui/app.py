@@ -209,7 +209,7 @@ def _registrar_desfecho(item):
     (Passo 9.0) -- sem isto, `agendamentos.status` nunca sai de 'agendado' e
     o re-treino mensal (Passo 9.1) nunca tem dado real para aprender, além do
     `historico_noshow` automático do cadastro nunca contar nada de verdade."""
-    st.write(f"**Registrar desfecho de `{item.id_paciente_externo}`**")
+    st.write(f"**Registrar desfecho de {item.rotulo_paciente}**")
     st.caption(f"Status atual: `{item.status}`")
 
     col1, col2, col3 = st.columns(3)
@@ -242,6 +242,14 @@ def _aba_fila_do_dia():
         "ainda não tem predição aparece no fim -- o job D-2 (Passo 6) ainda "
         "não rodou para esse agendamento."
     )
+    # Aviso na tela, não só no ADR: quem opera precisa saber que a tela carrega
+    # dado pessoal, porque a decisão de onde posicionar o monitor da recepção é
+    # dela, não do código (ADR-007, risco aceito).
+    st.caption(
+        "🔒 Esta tela mostra **nome de paciente**. Visível apenas "
+        "para a equipe da clínica, sob o termo de confidencialidade assinado -- "
+        "evite deixá-la exposta a quem está na sala de espera."
+    )
 
     dia = st.date_input("Data da fila", value=logic.hoje_na_clinica())
 
@@ -268,7 +276,7 @@ def _aba_fila_do_dia():
     tabela = pd.DataFrame(
         [
             {
-                "Paciente": item.id_paciente_externo,
+                "Paciente": item.rotulo_paciente,
                 "Especialidade": item.especialidade,
                 "Horário": item.data_hora_agendada,
                 "Probabilidade": item.probabilidade,
@@ -306,7 +314,11 @@ def _aba_fila_do_dia():
     st.divider()
     _registrar_desfecho(item)
     st.divider()
-    st.write(f"**Por que o paciente `{item.id_paciente_externo}` tem esse risco**")
+    st.write(f"**Por que {item.rotulo_paciente} tem esse risco**")
+    # O hash continua visível, em letra miúda: é por ele que se rastreia o
+    # paciente no banco e nos logs (onde o nome nunca aparece), então sem ele o
+    # suporte perde o único identificador comum entre tela e diagnóstico.
+    st.caption(f"identificador interno: `{item.id_paciente_externo}`")
     if not item.tem_predicao:
         st.info(
             "Este agendamento ainda não foi predito pelo job D-2 (Passo 6) -- "
@@ -466,13 +478,15 @@ def _visao_funcionario():
 def _visao_paciente():
     st.subheader("Cadastro e agendamento")
     st.caption(
-        "Nome completo e CPF ficam só nesta tela -- o banco nunca grava "
-        "nenhum dos dois (LGPD, minimização de PII por design, "
-        "docs/architecture.md §4.1). O identificador do paciente no banco é "
-        "gerado automaticamente a partir do CPF, e o histórico de no-show é "
-        "calculado pela clínica, não autodeclarado. O telefone é a exceção: "
-        "fica gravado (normalizado), pois é para onde o lembrete real é "
-        "enviado (Infobip, Passo 7)."
+        "**O CPF nunca é gravado** -- o identificador do paciente no banco é o "
+        "hash dele, gerado automaticamente (LGPD, minimização de PII por "
+        "design, docs/architecture.md §4.1), e o histórico de no-show é "
+        "calculado pela clínica, não autodeclarado. Nome completo e telefone "
+        "**são** gravados: o nome para a equipe conseguir chamar o paciente na "
+        "fila do dia (ADR-007) e o telefone porque é para onde o lembrete real "
+        "é enviado (Infobip, Passo 7). Nenhum dos dois sai para log, para o "
+        "dataset de treino, para a API pública ou para o LLM -- ver "
+        "docs/LGPD.md."
     )
 
     especialidades = logic.listar_especialidades()
@@ -549,6 +563,7 @@ def _visao_paciente():
             distancia_km=distancia_km,
             data_consulta=data_consulta,
             hora_consulta=hora_consulta,
+            nome_completo=nome_completo,
         )
     except logic.ErroValidacaoCadastro as exc:
         st.warning(str(exc))

@@ -114,7 +114,7 @@ flowchart LR
 
 Name: App Web (Streamlit)
 
-Description: Interface única para dois perfis de usuário — Paciente (cadastro/agendamento) e Funcionário da clínica (consulta da fila do dia com probabilidade de no-show, disparo manual do job de inferência em modo dev, consulta ao LLM sobre um paciente específico). Organizada em abas (`st.tabs`) que crescem incrementalmente conforme backend/banco/job ficam prontos (ver [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 4): "Testar predição" e "Explicabilidade" já funcionais desde o Passo 4; "Fila do dia" ligada no Passo 5; "Dev: disparo manual" (visível só com `APP_ENV=dev`) ligada no Passo 6.
+Description: Interface única para dois perfis de usuário — Paciente (cadastro/agendamento) e Funcionário da clínica (consulta da fila do dia com probabilidade de no-show, disparo manual do job de inferência em modo dev, consulta ao LLM sobre um paciente específico). Organizada em abas (`st.tabs`) que crescem incrementalmente conforme backend/banco/job ficam prontos (ver [`PLANO-IMPLEMENTACAO.md`](PLANO-IMPLEMENTACAO.md), Passo 4): "Testar predição" e "Explicabilidade" já funcionais desde o Passo 4; "Fila do dia" ligada no Passo 5 — e operável de fato desde 2026-09-28, quando a coluna "Paciente" deixou de mostrar o hash sha256 e passou a mostrar o nome ([ADR-007](adr/adr-007-nome-do-paciente.md)); "Dev: disparo manual" (visível só com `APP_ENV=dev`) ligada no Passo 6.
 
 Separação interna: `src/ui/app.py` é só apresentação; toda a lógica (montagem do payload, tradução de erro para mensagem, escolha do backend) vive em `src/ui/logic.py`, que não importa `streamlit` e é testado sem o runtime dele.
 
@@ -166,15 +166,19 @@ Name: Supabase (decisão vigente: [ADR-004](adr/adr-004-decisão-técnica.md), v
 
 Type: PostgreSQL gerenciado (SDK oficial, não camada Postgres genérica)
 
-Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda só `id_paciente_externo` + atributos demográficos não identificáveis (`data_nascimento`, `sexo`) + `telefone` (guarda automatizada em `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`, que segue proibindo nome/CPF/email). `telefone` (migration `20260920020000_telefone_paciente.sql`, Passo 7) é a exceção deliberada a essa minimização — sem um contato de envio, o disparo de lembrete real via Infobip não tem para onde mandar mensagem; nome/CPF continuam nunca persistidos, por servirem só para identificar/exibir, não para o produto funcionar. Desde o ajuste de cadastro de 2026-09-20, `id_paciente_externo` deixou de ser um texto livre digitado pelo paciente na UI: é o hash sha256 do CPF, calculado em `src/ui/logic.py::_id_paciente_externo_de_cpf` — o CPF (e o nome completo, também coletado na tela para a mensagem de confirmação) nunca chegam a este banco. `idade` também não é mais coluna: guarda-se `data_nascimento`, e a idade usada como feature de inferência é sempre calculada sob demanda (`src/features.py::calcular_idade`), nunca persistida. Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
+Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens, com minimização de PII por design — `pacientes` guarda `id_paciente_externo` + atributos demográficos não identificáveis (`data_nascimento`, `sexo`) + **duas exceções deliberadas**, `telefone` e `nome_completo`. A guarda automatizada (`tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`) segue proibindo **CPF e e-mail sem exceção**, e autoriza cada exceção por par (coluna, migration): a coluna só pode aparecer no arquivo que a introduziu.
+
+`telefone` (migration `20260920020000_telefone_paciente.sql`, Passo 7): sem um contato de envio, o disparo de lembrete real via Infobip não tem para onde mandar mensagem. `nome_completo` (migration `20260928000000_nome_paciente.sql`, [ADR-007](adr/adr-007-nome-do-paciente.md)): a aba "Fila do dia" é operada por uma pessoa que precisa chamar o paciente pelo nome — a coluna "Paciente" mostrava o hash sha256 de 64 caracteres, o que não é operável. Os dois seguem o mesmo critério: dado **necessário** à finalidade, não acessório. O funcionário é preposto da controladora (§7) e já detém o prontuário, então nenhum destinatário novo entra em cena. Nullable e sem backfill — as linhas anteriores não têm nome a recuperar, e a UI mostra o início do hash em vez de fabricar uma pessoa.
+
+**CPF segue nunca persistido**: `id_paciente_externo` é o hash sha256 dele, calculado em `src/ui/logic.py::_id_paciente_externo_de_cpf`. O ADR-007 fecha sete portas de saída para o nome (log, guarda de AST, `eventos_app`, export de treino, schema da API, select do job D-2 → Infobip, e o contexto do LLM), cada uma com teste travando. `idade` também não é mais coluna: guarda-se `data_nascimento`, e a idade usada como feature de inferência é sempre calculada sob demanda (`src/features.py::calcular_idade`), nunca persistida. Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
 
 Key Schemas/Collections: `pacientes`, `agendamentos` (status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb` e `explicacao_texto` nullable — plug do LLM, Passo 13), `mensagens_disparadas` (auditoria de envio, SLA §6), `eventos_app` (observabilidade de aplicação, Passo 8.5/[ADR-006](adr/adr-006-observabilidade.md) — latência por predição, execução do job e erros; **sem nenhuma coluna de PII**, e o `detalhe jsonb` é restringido por allowlist em `src/observabilidade.py`, já que o grep de nome de coluna não alcança dentro de um jsonb). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
+
+Retenção (Passo 8, [`LGPD.md` §5](LGPD.md)): `eventos_app` 90 dias (teto do free tier, ADR-006) e `predicoes`/`mensagens_disparadas` 365 dias (`RETENCAO_DADOS_DERIVADOS_DIAS`, necessidade — Art. 6º, III), as duas purgas penduradas no job diário, sem agendador novo. `pacientes`/`agendamentos` **não** têm purga automática: são registro do atendimento, cuja exclusão é decisão do controlador (§7).
 
 ### 4.2. Tracking de experimentos de ML
 
 Name: MLflow (backend sqlite + artifacts em volumes Docker locais)
-
-Retenção (Passo 8, [`LGPD.md` §5](LGPD.md)): `eventos_app` 90 dias (teto do free tier, ADR-006) e `predicoes`/`mensagens_disparadas` 365 dias (`RETENCAO_DADOS_DERIVADOS_DIAS`, necessidade — Art. 6º, III), as duas purgas penduradas no job diário, sem agendador novo. `pacientes`/`agendamentos` **não** têm purga automática: são registro do atendimento, cuja exclusão é decisão do controlador (§7).
 
 Type: tracking server efêmero (sobe via `docker-compose` só durante treino/validação/gate de re-treino)
 
@@ -258,7 +262,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-27 (Passo 8 — blindagem LGPD)
+Date of Last Update: 2026-09-28 (ADR-007 — nome do paciente na fila do dia)
 
 ## 11. Glossary / Acronyms
 

@@ -14,6 +14,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import db.repositories as repositories
 import inference
 from api.main import app
 from api.schemas import PacienteConsultaIn
@@ -203,7 +204,13 @@ def test_backends_produzem_a_mesma_predicao(payload):
 # --- fila do dia e cadastro (Passo 5), sem tocar no banco ----------------------
 
 
-def _item(probabilidade=None, classe_prevista=None, explicacao=None, id_externo="EXT-1"):
+def _item(
+    probabilidade=None,
+    classe_prevista=None,
+    explicacao=None,
+    id_externo="EXT-1",
+    nome_completo=None,
+):
     return logic.ItemFila(
         id_agendamento="a1",
         id_paciente_externo=id_externo,
@@ -212,6 +219,7 @@ def _item(probabilidade=None, classe_prevista=None, explicacao=None, id_externo=
         probabilidade=probabilidade,
         classe_prevista=classe_prevista,
         explicacao=explicacao or [],
+        nome_completo=nome_completo,
     )
 
 
@@ -232,6 +240,106 @@ def test_resumo_da_fila_separa_alto_risco_de_sem_predicao():
 def test_item_sem_predicao_nao_finge_ter_probabilidade():
     assert _item().tem_predicao is False
     assert _item(probabilidade=0.4, classe_prevista=0).tem_predicao is True
+
+
+# --- nome do paciente na fila do dia (ADR-007) --------------------------------
+
+
+def test_rotulo_do_paciente_usa_o_nome_quando_existe():
+    """A coluna "Paciente" mostrava o hash sha256 de 64 caracteres -- inútil
+    para quem atende no balcão e precisa chamar a pessoa pelo nome."""
+    assert _item(nome_completo="Ana Souza Costa").rotulo_paciente == "Ana Souza Costa"
+
+
+def test_rotulo_do_paciente_sem_nome_nao_inventa_uma_pessoa():
+    """Cadastro anterior à migration do nome: não há nome a recuperar (ele
+    nunca foi gravado). Mostrar o início do hash, rotulado, é honesto; um
+    placeholder com cara de nome enganaria quem opera a fila."""
+    rotulo = _item(id_externo="9f86d081884c7d65" + "0" * 48).rotulo_paciente
+
+    assert rotulo == "(cadastro sem nome) 9f86d081"
+    assert "9f86d081884c7d65" not in rotulo, "o hash inteiro não precisa ir para a tela"
+
+
+@pytest.mark.parametrize(
+    "nome,esperado",
+    [
+        ("Ana Souza", True),
+        ("Yi", True),  # nome curto é nome
+        ("Ana D'Ávila Menezes-Filho", True),  # apóstrofo e hífen são comuns
+        ("", False),
+        ("   ", False),  # espaço em branco não é nome
+        ("A", False),
+        ("x" * 121, False),  # bate com o check da migration
+    ],
+)
+def test_nome_valido_barra_so_preenchimento_claramente_errado(nome, esperado):
+    """Não existe "validar nome": nomes brasileiros têm partícula, acento,
+    apóstrofo e hífen, e um único termo é possível. O que se barra é campo
+    vazio, espaço em branco e texto longo demais para a coluna."""
+    assert logic.nome_valido(nome) is esperado
+
+
+def test_cadastro_recusa_nome_invalido_antes_de_tocar_o_banco(monkeypatch):
+    def _nao_deveria_ser_chamado(**kwargs):
+        raise AssertionError("cadastro chegou ao banco com nome inválido")
+
+    monkeypatch.setattr(logic.repositories, "inserir_paciente", _nao_deveria_ser_chamado)
+
+    with pytest.raises(logic.ErroValidacaoCadastro, match="Nome inválido"):
+        logic.cadastrar_paciente_e_agendamento(
+            cpf="529.982.247-25",
+            telefone="(11) 98765-4321",
+            data_nascimento=date(1990, 1, 1),
+            sexo="F",
+            especialidade="cardiologia",
+            distancia_km=5.5,
+            data_consulta=date(2026, 9, 30),
+            hora_consulta=time(10, 0),
+            nome_completo=" ",
+        )
+
+
+def test_cadastro_repassa_o_nome_ao_repositorio(monkeypatch):
+    capturado = {}
+
+    def _inserir_paciente(**kwargs):
+        capturado.update(kwargs)
+        return {"id": "p1"}
+
+    monkeypatch.setattr(logic.repositories, "inserir_paciente", _inserir_paciente)
+    monkeypatch.setattr(logic.repositories, "contar_no_shows_anteriores", lambda _id: 0)
+    monkeypatch.setattr(logic.repositories, "inserir_agendamento", lambda **kw: {"id": "a1"})
+
+    logic.cadastrar_paciente_e_agendamento(
+        cpf="529.982.247-25",
+        telefone="(11) 98765-4321",
+        data_nascimento=date(1990, 1, 1),
+        sexo="F",
+        especialidade="cardiologia",
+        distancia_km=5.5,
+        data_consulta=date(2026, 9, 30),
+        hora_consulta=time(10, 0),
+        nome_completo="Ana Souza",
+    )
+
+    assert capturado["nome_completo"] == "Ana Souza"
+    # O CPF continua não sendo persistido: o que vai é o hash dele.
+    assert "cpf" not in capturado
+    assert capturado["id_paciente_externo"] == logic._id_paciente_externo_de_cpf("52998224725")
+
+
+def test_fila_do_dia_nao_pede_telefone_ao_banco():
+    """`buscar_fila_do_dia` deixou o `select("*")` para trás (ADR-007): numa
+    tabela que guarda PII por exceção, a lista de colunas é a fronteira, e o
+    curinga fazia toda coluna nova de `pacientes` fluir para a UI sem ninguém
+    decidir isso. O funcionário precisa chamar o paciente pelo nome, não discar
+    para ele -- quem envia mensagem é o job D-2, por outro select."""
+    colunas = repositories._COLUNAS_FILA_DO_DIA
+
+    assert "nome_completo" in colunas
+    assert "telefone" not in colunas
+    assert "*" not in colunas
 
 
 def test_dias_ate_consulta_deriva_da_data_escolhida():

@@ -8,7 +8,7 @@ o job (e os testes do job) não dependerem da integração real existir, e uma
 implementação real atrás da mesma assinatura, trocada só por
 `MESSAGING_PROVIDER`.
 
-Nota de PII: `pacientes` não guarda nome/CPF/email (minimização por design,
+Nota de PII: `pacientes` não guarda CPF/email (minimização por design,
 ver architecture.md §4.1) -- mas guarda `telefone` desde a migration
 `20260920020000_telefone_paciente.sql`: é a exceção deliberada, porque sem um
 contato de envio o produto (lembrete pago para reduzir no-show) não tem para
