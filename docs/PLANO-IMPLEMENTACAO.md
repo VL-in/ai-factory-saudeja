@@ -1,6 +1,6 @@
 # Plano de Implementação — SaudeJá: do pipeline de treino ao produto deployável
 
-> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
+> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação; em 2026-09-29 com a revisão do Passo 10 contra o repositório e a documentação do GitHub Actions). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
 
 ## Contexto
 
@@ -14,7 +14,7 @@ Este plano constrói essa camada em **fatias verticais testáveis**: cada passo 
 - LLM/TrueFoundry é **opcional**, só depois do núcleo (predição+fila+mensageria+deploy) estar funcional e testado.
 - SHAP (Passo 2) já nasce com um **plug inativo** para um dia ser traduzido em texto por LLM (ativado no Passo 13).
 - A interface Streamlit (Passo 4) inclui uma aba de desenvolvedor para **disparar o pipeline de inferência manualmente** e acompanhar o pipeline sem depender de CLI/cron separados.
-- CI/CD usa a GitHub Action oficial **`huggingface/huggingface-sync-action`** para sincronizar `main` → Hugging Face Space (Passo 10/11), não um script de sync caseiro.
+- CI/CD usa a GitHub Action oficial **`huggingface/huggingface-sync-action`** para sincronizar `main` → Hugging Face Space (Passo 10/11), não um script de sync caseiro. *(2026-09-29: a action foi renomeada para `huggingface/hub-sync` e sobe arquivos por HTTP, não por git — o que muda o que vai ao Space. Ver a revisão do Passo 10.)*
 - Observabilidade de **aplicação** (distinta da observabilidade de **ML**, que é o MLflow do ADR-004): três camadas gratuitas — Supabase como fonte de verdade, sonda externa de uptime e dead-man's-switch para os jobs agendados. Langfuse fica fora do núcleo, reservado ao Passo 13; OpenTelemetry e Grafana Cloud descartados. Ver [ADR-006](adr/adr-006-observabilidade.md) e o Passo 8.5.
 
 **Risco a não decidir agora, só monitorar**: recall atual da classe positiva é 0.522 (ADR-003), abaixo do alvo do SLO (≥0.75). Não é bug — é limite do dataset sintético pequeno (380 linhas). O plano cria os checkpoints certos para revisitar isso (Passo 6, com dados fluindo pelo job, e Passo 12, fechamento para o pitch) em vez de decidir threshold às cegas agora.
@@ -266,6 +266,7 @@ Sem isto o resto do passo é cerimonial: com `data/consultas-historicas.csv` fix
 - `dvc[azure]` precisa entrar em `requirements/dev.txt` (usado pelo CI): hoje o `dvc` **não está declarado em nenhum requirements** do repo, só no ambiente local da autora.
 - **Região Brazil South**, pelo mesmo argumento que sustentou `sa-east-1` no [ADR-005](adr/adr-005-integracoes-implicitas.md) e o hash de CPF na v1.4: depois de 9.0, o dataset versionado no remote deixa de ser sintético puro e passa a conter dados de saúde de pacientes reais, ainda que pseudonimizados. Registrar como emenda ao ADR-005 ao implementar.
 - **Como o modelo chega ao Space**: o `deploy.yml` (Passo 10) roda `dvc pull data/model.pkl` antes do sync e força a inclusão do arquivo no espelho enviado ao Space (`git add -f`; são 225 KB, não precisa de LFS). A exceção ao `.gitignore` vale só para o branch espelhado — `main` continua sem binário. A alternativa (o Space baixar do Azure no build) foi descartada: exigiria credencial Azure como secret do Space e contraria a decisão do Passo 4/11 de que o modelo viaja *dentro* da imagem.
+  - **Emendado em 2026-09-29 (revisão do Passo 10, achado 1)**: não existe "branch espelhado" nem `git add -f` — a action de sync sobe o diretório por `hf upload` (HTTP), sem git. O `model.pkl` chega ao Space por estar num diretório de *staging* montado pelo `deploy.yml` com lista fechada de arquivos. Continua valendo o essencial desta decisão: `dvc pull` só de `data/model.pkl` no deploy, modelo dentro da imagem, nenhuma credencial Azure no Space.
 
 **3. Tolerâncias por métrica, registradas no SLO §3.** A tolerância única de 0.02 herdada do SLO era menor que a granularidade do fold: com ~76 linhas de teste e ~21 positivos, o menor passo possível em `recall_1` é 1/21 ≈ 0.048 — um único paciente. O gate bloquearia ou promoveria por ruído de amostragem, fenômeno que o próprio README já documenta na nota do GridSearch (CV `f1_1`≈0.40 vs. holdout 0.372 vs. 0.419). Valores adotados: `recall_1` 0.05, `f1_1` 0.05, `roc_auc` 0.02 (mantido — é contínua, não sofre do problema de contagem). **O SLO §3 registra a regra, não só o número**: a tolerância das métricas de contagem é ≈ 1/(positivos no fold de teste), a ser revisada a cada crescimento relevante do dataset vindo de 9.0 — quando o fold tiver ≥50 positivos, ela cai para 0.02 e o gate passa a detectar regressões que hoje são invisíveis.
 
@@ -301,6 +302,8 @@ A ressalva vale registrar porque não generaliza: `dvc commit` é uma afirmaçã
 
 ## Passo 10 — CI/CD (GitHub Actions + sync para Hugging Face Hub)
 
+> **Revisão do passo contra o repositório real e a documentação do GitHub Actions (2026-09-29)**: antes de implementar, o texto abaixo foi confrontado com o repositório, com a [documentação do GitHub Actions](https://docs.github.com/pt/actions), com os templates que o GitHub sugere para este repo e com o código da action de sync do Hugging Face. Seis premissas não se sustentam — a mais grave é que o sync, como descrito, enviaria o dataset de treino e a URL do remote do DVC para o Space. Os achados, a forma resultante dos workflows e a única decisão ainda em aberto (onde roda o job D-2) estão em **"Revisão de 2026-09-29"** no fim deste passo, depois do 10.1, e **substituem** o corpo abaixo onde divergem.
+
 **Decisão de mecanismo de deploy** (define como o Passo 9 e o Passo 11 se conectam): usar a GitHub Action oficial de sync para o Hugging Face Hub (`huggingface/huggingface-sync-action`, conforme [docs do Hub sobre GitHub Actions](https://huggingface.co/docs/hub/repositories-github-actions) e a action do [GitHub Marketplace](https://github.com/marketplace/actions/sync-github-to-hugging-face-hub)) — a cada push em `main` (incluindo o merge do PR automático de re-treino do Passo 9), o GitHub Actions espelha o repo para o HF Space, que rebuilda sozinho. Isso substitui qualquer script manual de "git remote"/sync caseiro.
 
 - `.github/workflows/ci.yml`: lint (formalizar `ruff` em `requirements.txt`/config, já há `.ruff_cache/` local), `pytest` (respeita `pytest.ini`, só testes rápidos por padrão), job opcional com serviço Postgres/Supabase local do GitHub Actions para os testes `integracao`. Dispara em PR (não faz deploy).
@@ -326,15 +329,18 @@ Isso não é hipótese. Aconteceu em 2026-09-28, ao ligar `pacientes.nome_comple
 
 ```yaml
 # esboço, dentro do job de deploy, antes do passo de sync
-- uses: supabase/setup-cli@v1
-  with:
-    version: latest
-- run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
-- run: supabase db push
-  env:
-    SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-    SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-    SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+# env no nivel do JOB, nao so' do `db push`: o `supabase link` tambem precisa
+# do token, do ref e da senha (corrigido na revisao de 2026-09-29, achado 8)
+env:
+  SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+  SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+  SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+steps:
+  - uses: supabase/setup-cli@v1
+    with:
+      version: <versao fixa>   # nao `latest`: o CLI muda o comportamento do db push entre versoes
+  - run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+  - run: supabase db push
 ```
 
 Três secrets novos: `SUPABASE_ACCESS_TOKEN` (token pessoal do CLI, **não** a chave do projeto), `SUPABASE_DB_PASSWORD` e `SUPABASE_PROJECT_REF`. O ref entra como secret, não como valor versionado, pela mesma razão que a URL do remote do DVC ficou fora de `.dvc/config` (Passo 9.1): identificador de infraestrutura em repositório é reconhecimento de graça. Documentar em `.env.example` como variável, nunca com valor.
@@ -351,6 +357,136 @@ Ou seja: o passo de workflow resolve o **esquecimento**, não a **incompatibilid
 **Alternativas consideradas.** (a) Guarda no `ci.yml` que falha o PR quando há migration nova sem registro de aplicação: impede o merge silencioso, mas não aplica nada — continua exigindo passo manual, e o modo de falha vira "PR travado" em vez de "produção quebrada", o que é melhor mas não resolve. (b) Só documentar como checklist de release do Passo 11: é exatamente o que existe hoje, e foi o que falhou. Ficam as duas como reforço opcional, não como substituto.
 
 **Verificação**: abrir PR com uma migration aditiva de brincadeira (ex. coluna `_teste_deploy` nullable), mergear e confirmar que (i) `supabase db push` roda antes do sync, (ii) a coluna existe no projeto remoto ao fim do workflow, (iii) o Space rebuilda depois disso e não antes. Depois, `supabase db push` de uma migration que a remove, para não deixar resíduo. Conferir também o caminho de falha: apontar `SUPABASE_DB_PASSWORD` para um valor errado e confirmar que o deploy **falha antes do sync**, em vez de sincronizar código contra schema não migrado.
+
+### Revisão de 2026-09-29 (antes de implementar) — achados e decisões
+
+**Como foi feita.** Quatro fontes, nesta ordem: (1) o repositório (`tests/`, `requirements/`, `infra/deploy/dockerfile`, `.github/workflows/retrain.yml`); (2) a [documentação do GitHub Actions](https://docs.github.com/pt/actions), em especial eventos, `GITHUB_TOKEN`, workflows reutilizáveis, simultaneidade, ambientes e segredos; (3) os templates que a página *Actions → New workflow* oferece a este repo — lidos direto de [`actions/starter-workflows`](https://github.com/actions/starter-workflows), de onde a página os tira, já que ela exige login; (4) o `action.yml` da action de sync e o código do `huggingface_hub` que ela chama. Nada aqui está implementado ainda.
+
+**Estado do repositório no GitHub em 2026-09-29** — o ponto de partida real, não o que o texto do passo presume:
+
+- Repositório **público**. Três consequências que atravessam os achados abaixo: log de Actions é visível a qualquer pessoa; PR vindo de fork (existe o `upstream`) e PR do Dependabot **não recebem secrets**; CodeQL e dependency review são gratuitos.
+- `retrain.yml` já está em `main` e **ativo**, mas o repositório tem **zero secrets**, `main` sem proteção e nenhum *environment*. O cron dispara em **2026-10-01 06:00 UTC** e vai falhar no `dvc remote add` com `DVC_REMOTE_URL` vazio — sem Healthchecks configurado, o único aviso é o e-mail de falha do GitHub. **Ação antes dessa data**: configurar os secrets do Passo 9.1 ou `gh workflow disable retrain.yml` até o Passo 11.
+
+#### Achados críticos (mudam o desenho)
+
+**1. O sync, como descrito, enviaria o dataset de treino e a URL do remote para o Space.** A action foi renomeada — `huggingface/huggingface-sync-action` virou **`huggingface/hub-sync`** (v0.3.0) — e não faz `git push`: roda `hf upload` do diretório do runner, por HTTP. Três consequências:
+- **O `git add -f` "no branch espelhado" da decisão 2 do Passo 9 não existe** — não há git no caminho (emendado lá).
+- **O `.gitignore` não protege nada.** A action só exclui `.git*` da raiz e `.git/`/`.github/` aninhados. O Hub aplicaria um `.gitignore` *da raiz* presente no commit ou já hospedado no Space — e a action exclui justamente esse arquivo do commit. E mesmo que ele valesse, os arquivos sensíveis estão em `.gitignore` **aninhados** (`.dvc/.gitignore`, `data/.gitignore`), que o Hub não lê; o da raiz, se valesse, derrubaria o `model.pkl` (`*.pkl`) e o build quebraria no `COPY`.
+- **O que subiria**: se o `deploy.yml` fizer `dvc remote add --local` e `dvc pull` no checkout, sobem `.dvc/config.local` (a URL do remote — contra a decisão 6 do Passo 9.1), `.dvc/cache/` e, com `dvc pull` sem alvo, `data/consultas-treino.csv` — desfechos reais pseudonimizados — para um Space que o Passo 11 prevê **público** e hospedado fora do Brasil. Seria uma porta de saída nova, não prevista no [`LGPD.md`](LGPD.md) §2.1. Além disso, `docs/`, `tests/`, `supabase/` e `scripts/` iriam junto sem nenhum papel no runtime.
+
+**Decisão**: o `deploy.yml` monta um **diretório de staging com lista fechada** e passa só ele à action (`subdirectory:`). O `dvc pull` é sempre `dvc pull data/model.pkl`, nunca sem alvo. Lista fechada, e não lista de exclusão, pelo mesmo motivo da allowlist de `eventos_app` (Passo 8.5): arquivo novo no repositório não vai para produção sem alguém decidir que vai.
+
+**2. O Space buildaria a imagem errada, ou nenhuma.** O SDK Docker do Space procura `Dockerfile` na raiz e lê o front-matter do `README.md` (`sdk: docker`, `app_port: 7860`). Na raiz do repositório está `dockerfile`, a imagem de **treino**; a de deploy é `infra/deploy/dockerfile`, e o README do projeto não tem front-matter. O staging do achado 1 resolve os dois: copia `infra/deploy/dockerfile` como `Dockerfile` e gera um `README.md` próprio do Space — sem acrescentar ao README do GitHub um bloco YAML que ele renderizaria como tabela. Conteúdo do staging, derivado dos `COPY` da imagem: `Dockerfile`, `README.md`, `requirements/`, `src/`, `params.yaml`, `infra/deploy/entrypoint.sh`, `data/model.pkl`.
+
+**3. Os gatilhos de CI e deploy se contradizem.** O `ci.yml` "dispara em PR"; o `deploy.yml` "só roda depois do `ci.yml` passar". Um push em `main` não dispara o `ci.yml`, então um `workflow_run` esperando por ele nunca acordaria. E `workflow_run` traz armadilhas próprias: dispara também quando o CI falha (exige `if: conclusion == 'success'`), faz checkout do HEAD de `main` e não do SHA que foi testado (duas fusões seguidas deployam código não testado), e só existe a partir do arquivo no branch padrão.
+
+**Decisão**: `ci.yml` declara `workflow_call` e o `deploy.yml` o chama como primeiro job, com o deploy em `needs:`. Mesmo SHA testado e deployado, falha do CI bloqueia por construção, e o CI não roda duas vezes no push. Assim a ordem do 10.1 fica explícita num único workflow: CI → `supabase db push` → sync.
+
+**4. O `pytest` padrão falha no CI sem o `model.pkl`.** `test_api.py`, `test_inference.py`, `test_explain.py` e `test_ui_logic.py` carregam o `data/model.pkl` real e **não** são `integracao`. O modelo não está no git, então o CI precisa de `dvc pull data/model.pkl` — e, com ele, de credencial do Azure — antes do `pytest`. O texto do passo não previa nada disso. Dois desdobramentos:
+- **Menor privilégio no Azure**: a `AZURE_STORAGE_CONNECTION_STRING` do Passo 9.1 carrega a *account key*, que dá escrita na conta inteira, e o CI roda código de PR. CI, deploy e job D-2 recebem uma **SAS só de leitura**; a credencial de escrita fica só no `retrain.yml`, o único que faz `dvc push`.
+- **PR sem secrets** (fork, Dependabot): o `dvc pull` falha. Aceito conscientemente — o projeto tem uma autora e o Dependabot pode ter secrets próprios (*Dependabot secrets*). A alternativa (pular esses testes sem modelo) esconderia exatamente o teste de paridade UI × API.
+
+**5. O `job_d2.yml` não diz onde o job roda — decisão pendente da autora.** O [ADR-005](adr/adr-005-integracoes-implicitas.md) (a) e o `architecture.md` §3.2.2 dizem que o workflow "chama o endpoint/job" do Space. Isso não se sustenta: não existe endpoint de job (a API tem só `/health` e `/predict`), a API nem terá porta pública (porta única do Space, Passo 11), o Space hiberna — o motivo de o ADR-005 ter tirado o agendador de dentro dele — e um endpoint público que dispara SMS pago exigiria autenticação própria.
+
+- **(a) Rodar `python src/jobs/inferencia_diaria.py` no runner — recomendada.** O job já é em processo (ADR-005 b), então roda igual fora do Space. Consequências a aceitar:
+  - Secrets do Supabase e da Infobip passam a existir também no Actions, além do Space.
+  - **Log público**: o log do Actions deste repositório é visível a qualquer pessoa. O Passo 8 já mitiga — filtro de redação em todo handler do processo, resumo como uma linha JSON, `ErroEnvioInfobip` sem o corpo da resposta —, mas aqui o filtro deixa de ser defesa em profundidade e vira a **última barreira**. Vale registrar como risco residual no `LGPD.md` §9.
+  - Dado de paciente (data de nascimento, sexo, especialidade, telefone para o envio) processado num runner fora do Brasil. É a mesma classe de transferência que o Space já implica, mas é um operador a mais (GitHub) — emenda no ADR-005 e no `LGPD.md` §2.1.
+  - **Modelo**: baixar o `model.pkl` do próprio Space (`hf download`, token de leitura) em vez de `dvc pull`. Garante que o job usa exatamente o modelo em produção, não o de `main`, que pode estar à frente de um deploy que falhou. E dispensa credencial do Azure no job.
+  - **`concurrency` obrigatório**: `buscar_agendamentos_d2_pendentes` só é idempotente em sequência (filtra quem já tem predição). Cron e `workflow_dispatch` simultâneos veriam a mesma fila e mandariam SMS em dobro.
+- **(b) Endpoint de disparo no Space** — descartável pelos motivos acima, a menos que surja outro consumidor para ele.
+
+Decidida a opção, emendar o ADR-005 (a) e o `architecture.md` §3.2.2, que hoje descrevem a chamada ao Space.
+
+**6. O PR de promoção do re-treino não teria CI — e travaria se `main` exigir o check.** O `retrain.yml` já registra a ressalva (PR aberto com `GITHUB_TOKEN` não dispara outros workflows), mas a consequência vai além de "o CI não roda": com proteção de branch exigindo o `ci.yml`, o PR fica pendente para sempre. A documentação abre uma exceção à regra do `GITHUB_TOKEN` para `workflow_dispatch`. **Decisão**: o `ci.yml` também aceita `workflow_dispatch`, e o `retrain.yml` roda `gh workflow run ci.yml --ref "$branch"` depois de abrir o PR (permissão `actions: write`). O check roda no mesmo commit e satisfaz a proteção, sem PAT.
+
+#### Achados médios
+
+7. **O gate pode ser contornado pelo deploy.** Qualquer merge que altere o `dvc.lock` — um `dvc repro` manual commitado — deploya um modelo que nunca passou pelo gate do Passo 9.1. **Guarda no `deploy.yml`**, depois do `dvc pull` e antes do sync: os 12 primeiros hex do sha256 do `model.pkl` têm de bater com `champion_metrics.json` → `model_version`; se não baterem, o deploy falha. É a mesma regra do 9.1 ("só o campeão vai para produção") aplicada no único ponto por onde produção muda.
+8. **O esboço do 10.1 não rodaria.** Os secrets estavam só no step do `db push`, e o `supabase link` do step anterior também precisa do token, do ref e da senha. Corrigido no esboço acima: `env` no nível do job e versão do CLI fixa em vez de `latest`.
+9. **Um "serviço Postgres" não serve para os testes `integracao`.** Eles leem `supabase status -o json` e falam com o PostgREST via `supabase-py` — precisam do stack do Supabase, não de um Postgres cru. O job opcional usa `supabase/setup-cli` + `supabase start` (Docker existe no `ubuntu-latest`), e também precisa do `model.pkl` (`test_job_inferencia.py`, `test_observabilidade.py`). Roda em push para `main` e por `workflow_dispatch`, sem bloquear PR: é lento, e o CI rápido já cobre a lógica.
+10. **Texto desatualizado no corpo do passo.** "Formalizar `ruff` em `requirements.txt`" já está feito (`ruff.toml` + `requirements/dev.txt`), e não existe `requirements.txt`. O `deploy.yml` não lista `workflow_dispatch`, mas o Passo 11 depende dele para o primeiro deploy.
+11. **Branches de PR.** O trabalho acontece em `dev` e em branches de feature; o `ci.yml` roda em PR para `dev` **e** para `main`, não só `main`.
+
+#### Achados baixos
+
+12. **Cron no minuto zero.** A documentação avisa que eventos agendados atrasam — e podem ser descartados — no início de cada hora. O `retrain.yml` usa `"0 6 1 * *"`; ele e o `job_d2.yml` passam a usar um minuto "quebrado" (ex. `17`). Workflow agendado só roda a partir do branch padrão.
+13. **Versões das actions.** `actions/checkout@v4`, `setup-python@v5` e `upload-artifact@v4` rodam em Node 20, que o GitHub está descontinuando; os templates atuais já usam `checkout@v6`/`v7`. Um `.github/dependabot.yml` (ecossistemas `github-actions` e `pip`) mantém isso em dia sem esforço.
+14. **Cadeia de confiança do deploy.** O `hub-sync` recebe o `HF_TOKEN` e instala o `hf` CLI na versão mais recente: fixar a action por SHA e o CLI por `hf_version`. `HF_TOKEN` *fine-grained*, com escrita só neste Space, guardado num *environment* `production`, que ainda dá o histórico de deploys na aba do GitHub — evidência útil ao pitch.
+15. **Rebuild por mudança só de documentação.** Cada sync rebuilda o Space (cold start, SLO §2). `paths-ignore` para `docs/**` — sem ignorar `dvc.lock` nem `data/champion_metrics.json`, que são justamente o merge do PR de promoção.
+16. **`HEALTHCHECKS_JOB_D2_URL`** falta no `.env.example`, que hoje só documenta o do re-treino.
+
+#### Templates sugeridos pelo GitHub, avaliados
+
+| Template | Uso | Por quê |
+|---|---|---|
+| Python application | ✅ base do `ci.yml` | Adaptado: `ruff` no lugar de `flake8`, `requirements/dev.txt`, `setup-python` atual com cache, `dvc pull data/model.pkl` |
+| Dependency review | ✅ novo, em PR | Gratuito em repo público; bloqueia PR que traz dependência vulnerável |
+| CodeQL | ✅ via *default setup* (Settings), sem arquivo | Gratuito em repo público; Python não precisa de build |
+| Bandit | ❌ | Coberto pelas regras `S` (flake8-bandit) do `ruff`, sem workflow a mais |
+| Python package (matriz), Pylint, Publish Python Package | ❌ | As imagens fixam 3.10; `ruff` já cobre o lint; o projeto não é biblioteca |
+| Docker image / Docker publish | ❌ | Quem builda é o Space; não há registry |
+| Stale, Greetings, Labeler, deploys Azure/AWS | ❌ | Projeto de uma autora; o deploy é no Hugging Face |
+
+#### Forma resultante
+
+| Arquivo | Gatilhos | O que faz |
+|---|---|---|
+| `ci.yml` | PR para `dev`/`main`, `workflow_dispatch`, `workflow_call` | `ruff check src tests scripts` → `dvc pull data/model.pkl` (SAS de leitura) → `pytest`. Job `integracao` separado (achado 9) |
+| `deploy.yml` | push em `main` (com `paths-ignore`), `workflow_dispatch` | `ci` (reutilizado) → `supabase db push` (10.1) → `dvc pull data/model.pkl` → guarda do campeão → staging → `hub-sync`. `environment: production`, `concurrency` sem cancelamento |
+| `job_d2.yml` | cron diário, `workflow_dispatch` | Conforme a decisão do achado 5; `concurrency` obrigatório; ping do Healthchecks em sucesso e `/fail` em falha |
+| `dependency-review.yml` | PR | Template do GitHub, sem adaptação |
+| `retrain.yml` (existente) | — | Ajustes: `gh workflow run ci.yml` no PR de promoção (achado 6), minuto do cron (12), versões (13) |
+| `.github/dependabot.yml` | — | `github-actions` + `pip` |
+
+```yaml
+# esboço do núcleo do deploy.yml (achados 1-3 e 7)
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+  deploy:
+    needs: ci
+    environment: production
+    concurrency: { group: deploy-space, cancel-in-progress: false }
+    steps:
+      - uses: actions/checkout@<sha>
+      # ... supabase db push (10.1) ...
+      - run: dvc remote add --local azure "$DVC_REMOTE_URL" && dvc pull data/model.pkl
+      - name: Só o campeão vai para produção
+        run: |
+          esperado=$(jq -r .model_version data/champion_metrics.json)
+          obtido=$(sha256sum data/model.pkl | cut -c1-12)
+          test "$esperado" = "$obtido" || { echo "::error::model.pkl ($obtido) não é o campeão ($esperado)"; exit 1; }
+      - name: Staging com lista fechada
+        run: |
+          mkdir -p build/space/data build/space/infra/deploy
+          cp infra/deploy/dockerfile build/space/Dockerfile
+          cp -r requirements src params.yaml build/space/
+          cp infra/deploy/entrypoint.sh build/space/infra/deploy/
+          cp data/model.pkl build/space/data/
+          # README.md do Space (front-matter: sdk: docker, app_port: 7860) gerado aqui
+      - uses: huggingface/hub-sync@<sha>
+        with:
+          github_repo_id: ${{ github.repository }}
+          huggingface_repo_id: ${{ vars.HF_SPACE_ID }}
+          hf_token: ${{ secrets.HF_TOKEN }}
+          space_sdk: docker
+          subdirectory: build/space
+          hf_version: <versao fixa>
+```
+
+**Verificação acrescida** (soma-se à do corpo do passo e à do 10.1):
+- Depois do primeiro sync, listar os arquivos do Space e confirmar que são **exatamente** os do staging — nenhum `.dvc/`, nenhum `data/*.csv`, nenhum `docs/`. Controle negativo: criar um arquivo fora da lista e confirmar que ele não sobe.
+- Commitar um `dvc.lock` cujo `model.pkl` difere do campeão e confirmar que o deploy **falha na guarda, antes do sync**.
+- Rodar o `retrain.yml` por `workflow_dispatch` e confirmar que o PR de promoção recebe o check do `ci.yml`.
+- Disparar o `job_d2.yml` duas vezes seguidas e confirmar que a segunda espera a primeira e nenhum paciente recebe SMS em dobro.
+- Quebrar um teste de propósito e confirmar que o job `deploy` aparece como **pulado** — não "não disparado", já que agora é o mesmo workflow.
+
+**Pendências** (não bloqueiam o início do passo):
+- Decisão da autora sobre o achado 5 e, com ela, as emendas no ADR-005 (a), no `architecture.md` §3.2.2 e no `LGPD.md` §2.1/§9.
+- `architecture.md` §6, o Passo 9.1 ("Fecha o loop até produção") e o Passo 11 ainda citam `huggingface/huggingface-sync-action` pelo nome antigo — atualizar junto da implementação.
+- Secrets do `retrain.yml` ou desativação dele **antes de 2026-10-01** (ver o estado do repositório acima).
 
 ---
 
