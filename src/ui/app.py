@@ -14,6 +14,10 @@ Rodar localmente, da raiz do repositório:
     streamlit run src/ui/app.py
 Variáveis: APP_ENV=dev|prod (aba de dev), PREDICT_BACKEND=processo|api,
 API_BASE_URL (só no backend 'api').
+
+A visão do funcionário exige login (e-mail e senha no Supabase Auth, ADR-008);
+a do paciente continua aberta, porque é o autoagendamento. Conta de
+funcionário se cria com `python scripts/criar_funcionario.py`.
 """
 import os
 import sys
@@ -47,6 +51,13 @@ ABA_DEV = "Dev: disparo manual"
 
 CHAVE_RESULTADO = "ultimo_resultado"
 CHAVE_PAYLOAD = "ultimo_payload"
+CHAVE_FUNCIONARIO = "funcionario"
+CHAVE_AVISO_LOGIN = "aviso_login"
+
+# Tudo que pertence a quem está logado sai junto com a sessão: sem isso, a
+# última predição (com a explicação dela) ficaria na aba "Explicabilidade" para
+# o próximo que entrasse no mesmo navegador.
+CHAVES_DA_SESSAO_DO_FUNCIONARIO = (CHAVE_FUNCIONARIO, CHAVE_RESULTADO, CHAVE_PAYLOAD)
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -582,6 +593,74 @@ def _visao_paciente():
     )
 
 
+def _encerrar_sessao(aviso: str | None = None):
+    for chave in CHAVES_DA_SESSAO_DO_FUNCIONARIO:
+        st.session_state.pop(chave, None)
+    if aviso:
+        st.session_state[CHAVE_AVISO_LOGIN] = aviso
+
+
+def _funcionario_logado():
+    """Sessão do funcionário, já expirada por inatividade se for o caso. Cada
+    rerun do Streamlit é uma interação de alguém com a tela, então é aqui que
+    o relógio de inatividade zera."""
+    sessao = st.session_state.get(CHAVE_FUNCIONARIO)
+    if sessao is None:
+        return None
+    if not logic.sessao_ativa(sessao):
+        minutos = int(logic.INATIVIDADE_MAXIMA.total_seconds() // 60)
+        _encerrar_sessao(f"Sessão encerrada após {minutos} minutos sem uso. Entre novamente.")
+        return None
+    sessao = logic.registrar_uso(sessao)
+    st.session_state[CHAVE_FUNCIONARIO] = sessao
+    return sessao
+
+
+def _tela_login():
+    _, centro, _ = st.columns([1, 1.4, 1])
+    with centro:
+        st.subheader("Acesso da equipe")
+        # Diz por que a porta existe: a fila do dia mostra nome de paciente
+        # (ADR-007), e a justificativa para isso é saber quem está vendo.
+        st.caption(
+            "Área restrita aos funcionários da clínica -- a fila do dia mostra "
+            "dados de pacientes. Não há cadastro aberto: a conta é criada pelo "
+            "administrador do sistema."
+        )
+
+        aviso = st.session_state.pop(CHAVE_AVISO_LOGIN, None)
+        if aviso:
+            st.info(aviso)
+
+        with st.form("form_login"):
+            email = st.text_input("E-mail", autocomplete="username")
+            senha = st.text_input("Senha", type="password", autocomplete="current-password")
+            enviado = st.form_submit_button("Entrar", type="primary", width="stretch")
+
+        if not enviado:
+            return
+
+        try:
+            sessao = logic.autenticar_funcionario(email, senha)
+        except logic.ErroCredenciais as exc:
+            st.warning(str(exc))
+            return
+        except logic.ErroAutenticacaoIndisponivel as exc:
+            st.error(f"Não foi possível entrar: {exc}")
+            return
+
+        st.session_state[CHAVE_FUNCIONARIO] = sessao
+        st.rerun()
+
+
+def _sidebar_sessao(sessao):
+    st.sidebar.divider()
+    st.sidebar.caption(f"Conectado como **{sessao.email}**")
+    if st.sidebar.button("Sair", icon=":material/logout:"):
+        _encerrar_sessao()
+        st.rerun()
+
+
 def main():
     st.set_page_config(page_title="SaúdeJá — no-show", page_icon="🩺", layout="wide")
     st.title("SaúdeJá — predição de no-show")
@@ -590,6 +669,11 @@ def main():
     perfil = st.sidebar.radio(
         "Quem está usando", options=["Funcionário da clínica", "Paciente"], index=0
     )
+    sessao = _funcionario_logado()
+    if sessao is not None:
+        _sidebar_sessao(sessao)
+
+    st.sidebar.divider()
     st.sidebar.caption(f"APP_ENV: `{APP_ENV}` · backend: `{logic.backend_ativo()}`")
 
     banco = _status_banco()
@@ -602,6 +686,8 @@ def main():
 
     if perfil == "Paciente":
         _visao_paciente()
+    elif sessao is None:
+        _tela_login()
     else:
         _visao_funcionario()
 

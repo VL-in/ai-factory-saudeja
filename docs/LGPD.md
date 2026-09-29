@@ -42,6 +42,7 @@ O produto foi desenhado com minimização de PII desde o schema (`architecture.m
 | Canal e status de envio do lembrete | `mensagens_disparadas` | Pessoal (auditoria de comunicação, SLA §6) |
 | Latência, contadores, nome de classe de exceção | `eventos_app` | **Não pessoal** — sem nenhuma coluna de PII por construção ([ADR-006](adr/adr-006-observabilidade.md)) |
 | Dataset de treino (`data/consultas-treino.csv`) e `model.pkl` | Azure Blob Storage, via DVC | Pessoal pseudonimizado — ver §4 |
+| E-mail de login e hash da senha **do funcionário** | `auth.users` (schema do Supabase Auth, mesmo projeto e região) | Pessoal, **de funcionário, não de paciente** ([ADR-008](adr/adr-008-login-da-equipe.md)). Existe para verificar quem acessa a fila do dia. A regra "e-mail nunca tem coluna" continua valendo para as tabelas de paciente em `public`. A senha é guardada pelo Supabase como hash, nunca por nós |
 
 ### 2.1 As duas exceções à minimização, e o que as justifica
 
@@ -153,6 +154,7 @@ O que já está implementado e verificado, não o que se pretende fazer:
 | Pseudonimização | `src/ui/logic.py::_id_paciente_externo_de_cpf` | CPF vira hash sha256 antes de chegar ao banco |
 | Idade nunca persistida | `src/features.py::calcular_idade` | Guarda-se `data_nascimento`; a idade é calculada na hora da predição |
 | RLS em todas as tabelas, sem policies | migrations | URL do projeto vazada não dá acesso: só a chave secreta do backend enxerga algo |
+| Login da equipe (identidade, não autorização) | `src/ui/logic.py::autenticar_funcionario`, [ADR-008](adr/adr-008-login-da-equipe.md) | Visão do funcionário só depois de e-mail e senha no Supabase Auth. Sem cadastro aberto. Sessão expira depois de 30 min sem uso. A mensagem de erro não revela se o e-mail existe. `test_ui_smoke.py` trava que nenhuma aba é renderizada sem login; `test_db.py` trava, contra o Supabase real, que o login não troca a identidade das consultas do backend |
 | Segredos fora do git | `.env.example` documenta variáveis, nunca valores | Inclui a **URL** do remote do DVC, não só a credencial (o nome do container é informação de reconhecimento) |
 | TLS em trânsito | HTTPS do Space, `supabase-py` → Postgres gerenciado | — |
 | Criptografia em repouso | Responsabilidade do Supabase gerenciado e do Azure Blob Storage | Herdada do provedor, não implementada por nós |
@@ -187,7 +189,12 @@ Nada aqui é surpresa oculta — cada item é para constar do slide de risco do 
 3. **A tela da recepção fica visível para a sala de espera.** A "Fila do dia" mostra a fila inteira com nome, e quem espera pode ler o monitor — exposição a terceiros que não assinaram confidencialidade nenhuma. Mitigado por aviso na própria tela, **não por mecanismo**: onde posicionar o monitor é decisão da clínica. A alternativa (nome abreviado na tabela, completo só na linha selecionada) foi avaliada e recusada por custo de operação (ADR-007).
 4. **Eliminação de titular é operação manual.** O `on delete cascade` existe e funciona, mas não há interface nem script para o pedido do Art. 18, VI. Enquanto o volume é o de um protótipo, é aceitável; não é aceitável em operação real.
 5. **Dataset versionado não tem purga.** O DVC guarda histórico por construção — é o que dá rastreabilidade de qual dado gerou qual modelo (SLO §5). Um pedido de eliminação de titular não alcança as versões antigas do dataset sem reescrever o histórico. Tensão real entre rastreabilidade de ML e Art. 18, VI, sem solução implementada.
-6. **Sem autenticação nem RBAC.** Os dois perfis da interface (Paciente/Funcionário) não têm autenticação forte desenhada (`architecture.md` §9). Qualquer um com a URL do Space vê a fila do dia da clínica. **É o risco mais grave desta lista** e o mais barato de ser mal interpretado como "falta de tempo": é falta de controle de acesso sobre dado sensível. **Piorou com o ADR-007**: a justificativa para exibir o nome é que quem vê assinou termo de confidencialidade — e hoje nada no sistema verifica que quem está vendo é essa pessoa. Fechar autenticação deixou de ser dívida de roadmap e passou a ser **pré-requisito da própria decisão do ADR-007** em operação real.
+6. **Autenticação sem autorização** ([ADR-008](adr/adr-008-login-da-equipe.md), 2026-09-28). Até esta data, qualquer pessoa com a URL do Space via a fila do dia. Hoje a visão do funcionário exige e-mail e senha, e só o administrador cria contas. Isso fecha a parte técnica da justificativa do ADR-007: quem vê o nome tem uma conta individual. A outra parte (a conta só é criada para quem assinou o termo de confidencialidade) é processo da clínica. **O que continua aberto:**
+   - **Não há RBAC nem autorização no banco.** Toda conta vê tudo, os dados são lidos com a chave secreta e o RLS não contém um bug da UI.
+   - **O login da equipe inteira pode ser travado de fora.** O limite de tentativas do Supabase Auth é por IP, e todo login chega pelo IP do servidor. Quem tentar senhas em massa pela tela bloqueia o login de todos por alguns minutos.
+   - **A tela aberta não se fecha sozinha.** A sessão expira depois de 30 minutos sem uso, mas o Streamlit só reage a interação: a fila continua visível no monitor até alguém tocar na tela, e aí aparece o login. O risco 3 continua mitigado por aviso, não por mecanismo.
+   - **A API FastAPI não tem autenticação.** `/predict` não lê o banco nem devolve dado de paciente, mas é uma porta aberta.
+   - **O cadastro fechado do projeto remoto é configuração manual** no Dashboard do Supabase (checklist do Passo 11), não versionada.
 7. **Criptografia em repouso é herdada do provedor**, não verificada por nós.
 8. **Este documento não tem validação jurídica** (ver cabeçalho).
 9. **`especialidade` é o campo que carrega a sensibilidade** (§2). Se o produto crescer para aceitar motivo da consulta, diagnóstico ou medicação, esta análise precisa ser refeita do zero — não é um "mais um campo".
@@ -213,4 +220,4 @@ O que existe de capacidade de investigação hoje: `eventos_app` (90 dias, sobre
 
 ## Revisão
 
-Revisar sempre que: (a) uma coluna nova entrar em `supabase/migrations/`, (b) a região de qualquer armazenamento mudar, (c) uma integração externa nova passar a receber dado de paciente — o LLM do Passo 13 é o próximo candidato —, ou (d) o [SLO.md](SLO.md)/[SLA.md](SLA.md)/[architecture.md](architecture.md) mudarem. Última geração: 2026-09-27 (Passo 8); revisado em 2026-09-28 (§2/§2.1/§6/§7/§9 — nome do paciente gravado e visível à equipe, ADR-007).
+Revisar sempre que: (a) uma coluna nova entrar em `supabase/migrations/`, (b) a região de qualquer armazenamento mudar, (c) uma integração externa nova passar a receber dado de paciente — o LLM do Passo 13 é o próximo candidato —, ou (d) o [SLO.md](SLO.md)/[SLA.md](SLA.md)/[architecture.md](architecture.md) mudarem. Última geração: 2026-09-27 (Passo 8); revisado em 2026-09-28 (§2/§2.1/§6/§7/§9 — nome do paciente gravado e visível à equipe, ADR-007); revisado de novo em 2026-09-28 (§2/§7/§9 — login da equipe, ADR-008).

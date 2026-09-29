@@ -8,11 +8,13 @@ usa um TestClient do próprio app FastAPI como transporte -- a API de verdade,
 sem subir servidor nem forjar a resposta. Só os caminhos de FALHA de rede são
 simulados, porque não dá para desligar um servidor que não existe.
 """
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from supabase_auth.errors import AuthApiError, AuthRetryableError
 
 import db.repositories as repositories
 import inference
@@ -545,3 +547,167 @@ def test_horarios_disponiveis_delega_para_agenda_clinica():
 def test_proxima_data_disponivel_nunca_cai_num_domingo():
     domingo = date(2026, 1, 11)
     assert logic.proxima_data_disponivel(domingo).weekday() != 6
+
+
+# --- autenticação do funcionário (ADR-008) -------------------------------------
+# O Supabase Auth de verdade é exercitado em tests/test_db.py (integracao,
+# contra o Supabase CLI local); aqui só o transporte é trocado, para cobrir a
+# tradução de cada resposta de erro sem depender de rede.
+
+
+ID_FUNCIONARIO = "00000000-0000-0000-0000-000000000001"
+
+
+class _AuthFalso:
+    def __init__(self, erro=None, erro_no_sign_out=None):
+        self.erro = erro
+        self.erro_no_sign_out = erro_no_sign_out
+        self.credenciais = []
+        self.sign_outs = []
+
+    def sign_in_with_password(self, credenciais):
+        self.credenciais.append(credenciais)
+        if self.erro:
+            raise self.erro
+        usuario = SimpleNamespace(id=ID_FUNCIONARIO, email=credenciais["email"])
+        return SimpleNamespace(user=usuario)
+
+    def sign_out(self, opcoes=None):
+        self.sign_outs.append(opcoes)
+        if self.erro_no_sign_out:
+            raise self.erro_no_sign_out
+
+
+def _fabrica(auth):
+    return lambda: SimpleNamespace(auth=auth)
+
+
+def _autenticar_com_erro(erro, senha="senha"):
+    return logic.autenticar_funcionario(
+        "a@clinica.test", senha, criar_client=_fabrica(_AuthFalso(erro))
+    )
+
+
+def test_autenticar_funcionario_devolve_sessao_com_email_normalizado():
+    auth = _AuthFalso()
+    agora = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
+
+    sessao = logic.autenticar_funcionario(
+        "  Recepcao@Clinica.TEST ", "senha-correta", criar_client=_fabrica(auth), agora=agora
+    )
+
+    assert auth.credenciais == [{"email": "recepcao@clinica.test", "password": "senha-correta"}]
+    assert sessao.email == "recepcao@clinica.test"
+    assert sessao.id_usuario == ID_FUNCIONARIO
+    assert sessao.ultimo_uso == agora
+
+
+def test_autenticar_funcionario_revoga_so_a_propria_sessao_do_supabase():
+    """O token do Supabase não é usado pela UI -- revogar na hora, mas com
+    escopo local: `global` derrubaria o mesmo funcionário em outro navegador."""
+    auth = _AuthFalso()
+
+    logic.autenticar_funcionario("a@clinica.test", "senha", criar_client=_fabrica(auth))
+
+    assert auth.sign_outs == [{"scope": "local"}]
+
+
+def test_falha_ao_revogar_token_nao_impede_o_login():
+    auth = _AuthFalso(erro_no_sign_out=httpx.ConnectError("caiu"))
+
+    sessao = logic.autenticar_funcionario("a@clinica.test", "senha", criar_client=_fabrica(auth))
+
+    assert sessao.email == "a@clinica.test"
+
+
+@pytest.mark.parametrize("email,senha", [("", "senha"), ("a@clinica.test", ""), ("   ", "x")])
+def test_autenticar_funcionario_recusa_campo_vazio_sem_chamar_o_supabase(email, senha):
+    auth = _AuthFalso()
+
+    with pytest.raises(logic.ErroCredenciais, match="Informe e-mail e senha"):
+        logic.autenticar_funcionario(email, senha, criar_client=_fabrica(auth))
+
+    assert auth.credenciais == []
+
+
+def test_senha_errada_e_email_inexistente_dao_a_mesma_mensagem():
+    """Distinguir os dois casos diria a quem tenta adivinhar quais e-mails são
+    da equipe -- o Supabase já responde igual, e a tradução não pode separar."""
+    erro = AuthApiError("Invalid login credentials", 400, "invalid_credentials")
+
+    with pytest.raises(logic.ErroCredenciais) as exc:
+        _autenticar_com_erro(erro, senha="errada")
+
+    assert str(exc.value) == logic.MENSAGEM_CREDENCIAIS_INVALIDAS
+
+
+def test_conta_banida_explica_que_o_acesso_foi_desativado():
+    erro = AuthApiError("User is banned", 400, "user_banned")
+
+    with pytest.raises(logic.ErroCredenciais, match="desativado"):
+        _autenticar_com_erro(erro)
+
+
+@pytest.mark.parametrize(
+    "erro",
+    [
+        AuthApiError("Rate limit", 429, "over_request_rate_limit"),
+        AuthApiError("boom", 500, "unexpected_failure"),
+        AuthRetryableError("gateway", 503),
+        httpx.ConnectError("sem rede"),
+    ],
+    ids=["limite-de-tentativas", "erro-500", "gateway", "sem-rede"],
+)
+def test_falha_do_servico_de_auth_nao_culpa_quem_digitou(erro):
+    with pytest.raises(logic.ErroAutenticacaoIndisponivel):
+        _autenticar_com_erro(erro)
+
+
+def test_autenticar_sem_supabase_configurado_e_indisponibilidade(monkeypatch):
+    # Vazio, não delenv -- mesmo motivo de tests/test_ui_smoke.py::_rodar.
+    monkeypatch.setenv("SUPABASE_URL", "")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "")
+
+    with pytest.raises(logic.ErroAutenticacaoIndisponivel, match="SUPABASE_URL"):
+        logic.autenticar_funcionario("a@clinica.test", "senha")
+
+
+def test_login_usa_client_descartavel_nunca_o_singleton_do_backend(monkeypatch):
+    """Regressão de desenho (ADR-008): o supabase-py troca o Authorization do
+    client pelo JWT do usuário depois do sign-in. No singleton, o backend
+    passaria a consultar como `authenticated` (RLS sem policies -> tabela
+    vazia) para TODOS os navegadores conectados ao mesmo processo."""
+    import db.client as client_module
+
+    monkeypatch.setenv("SUPABASE_URL", "http://127.0.0.1:54321")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_teste")
+    monkeypatch.setattr(client_module, "_cliente", None)
+
+    singleton = client_module.obter_client()
+    primeiro = client_module.criar_client_autenticacao()
+    segundo = client_module.criar_client_autenticacao()
+
+    assert primeiro is not singleton
+    assert primeiro is not segundo
+    assert primeiro.auth is not singleton.auth
+
+
+def test_sessao_expira_so_depois_da_inatividade_maxima():
+    inicio = datetime(2026, 9, 28, 8, 0, tzinfo=timezone.utc)
+    sessao = logic.SessaoFuncionario("id", "a@clinica.test", ultimo_uso=inicio)
+
+    assert logic.sessao_ativa(sessao, agora=inicio + logic.INATIVIDADE_MAXIMA)
+    assert not logic.sessao_ativa(
+        sessao, agora=inicio + logic.INATIVIDADE_MAXIMA + timedelta(seconds=1)
+    )
+
+
+def test_registrar_uso_zera_o_relogio_de_inatividade():
+    inicio = datetime(2026, 9, 28, 8, 0, tzinfo=timezone.utc)
+    sessao = logic.SessaoFuncionario("id", "a@clinica.test", ultimo_uso=inicio)
+    depois = inicio + logic.INATIVIDADE_MAXIMA - timedelta(minutes=1)
+
+    renovada = logic.registrar_uso(sessao, agora=depois)
+
+    assert logic.sessao_ativa(renovada, agora=depois + logic.INATIVIDADE_MAXIMA)
+    assert renovada.email == sessao.email

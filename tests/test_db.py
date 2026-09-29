@@ -401,3 +401,55 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
     assert agendamento["dias_entre_agendamento_consulta"] == (
         data_consulta - hoje_na_clinica()
     ).days
+
+
+# --- login do funcionário contra o Supabase Auth local (ADR-008) --------------
+
+SENHA_DE_TESTE = "senha-de-teste-123"
+
+
+@pytest.fixture
+def funcionario(db):
+    """Conta criada pela API de admin -- o mesmo caminho de
+    scripts/criar_funcionario.py, já que o cadastro aberto fica desligado."""
+    from uuid import uuid4
+
+    email = f"funcionario-{uuid4().hex[:8]}@clinica.test"
+    criado = db.auth.admin.create_user(
+        {"email": email, "password": SENHA_DE_TESTE, "email_confirm": True}
+    )
+    yield email
+    db.auth.admin.delete_user(criado.user.id)
+
+
+@pytest.mark.integracao
+def test_login_real_nao_troca_a_identidade_das_consultas_do_backend(db, funcionario):
+    """Regressão de desenho (ADR-008) contra o Supabase de verdade: depois do
+    login, o backend continua enxergando as tabelas. Se o sign-in acontecesse
+    no singleton, o supabase-py trocaria o Authorization pelo JWT do usuário e
+    o RLS sem policies devolveria vazio -- para todos os navegadores."""
+    import db.repositories as repositories
+    from ui import logic
+
+    _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-LOGIN")
+
+    sessao = logic.autenticar_funcionario(funcionario, SENHA_DE_TESTE)
+
+    assert sessao.email == funcionario
+    visiveis = (
+        db.table("pacientes").select("id").eq("id_paciente_externo", "EXT-LOGIN").execute().data
+    )
+    assert len(visiveis) == 1
+
+
+@pytest.mark.integracao
+def test_senha_errada_e_email_inexistente_sao_indistinguiveis_no_supabase_real(db, funcionario):
+    from ui import logic
+
+    mensagens = []
+    for email, senha in ((funcionario, "senha-errada"), ("ninguem@clinica.test", SENHA_DE_TESTE)):
+        with pytest.raises(logic.ErroCredenciais) as exc:
+            logic.autenticar_funcionario(email, senha)
+        mensagens.append(str(exc.value))
+
+    assert mensagens == [logic.MENSAGEM_CREDENCIAIS_INVALIDAS] * 2

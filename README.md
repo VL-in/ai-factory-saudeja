@@ -154,7 +154,7 @@ docker run --rm -p 8000:8000 -v "%cd%/data:/app/data" saudeja-api
 
 ## Interface (Streamlit)
 
-`src/ui/app.py` é a interface da clínica: visão **Funcionário** em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (Passo 5: agendamentos do dia ordenados por risco, com resumo de quantos são alto risco/sem predição e a explicação SHAP gravada de cada paciente ao selecionar a linha), "Observabilidade" (Passo 8.5: p95 de latência, erros, cobertura de explicação e última execução do job, lidos de `eventos_app`) e "Dev: disparo manual" (Passo 6: dispara `src/jobs/inferencia_diaria.py::processar_dia()` e mostra agendamentos/predições/mensagens, visível só com `APP_ENV=dev`) — e visão **Paciente** (Passo 5: cadastro + agendamento persistidos no Supabase). A sidebar mostra o estado da conexão com o Supabase ao lado do backend de predição. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
+`src/ui/app.py` é a interface da clínica: visão **Funcionário** (atrás de login, ver abaixo) em abas — "Testar predição" (formulário manual), "Explicabilidade" (contribuições SHAP da última predição), "Fila do dia" (Passo 5: agendamentos do dia ordenados por risco, com resumo de quantos são alto risco/sem predição e a explicação SHAP gravada de cada paciente ao selecionar a linha), "Observabilidade" (Passo 8.5: p95 de latência, erros, cobertura de explicação e última execução do job, lidos de `eventos_app`) e "Dev: disparo manual" (Passo 6: dispara `src/jobs/inferencia_diaria.py::processar_dia()` e mostra agendamentos/predições/mensagens, visível só com `APP_ENV=dev`) — e visão **Paciente** (Passo 5: cadastro + agendamento persistidos no Supabase). A sidebar mostra o estado da conexão com o Supabase ao lado do backend de predição. Toda a lógica fica em `src/ui/logic.py`, que não importa `streamlit` e por isso é testável sem o runtime dele.
 
 **Datas sempre no fuso da clínica** (`TIMEZONE_CLINICA`, default `America/Sao_Paulo`): "fila do dia 19/09" são as consultas de 19/09 em São Paulo, e o cadastro grava `data_hora_agendada` com o fuso explícito. O container roda em UTC — sem isso, depois das 21h a fila do dia e o job D-2 trabalhariam com a data errada, e os horários apareceriam 3h deslocados. `dias_entre_agendamento_consulta` não é perguntado no cadastro: é derivado da data escolhida (`logic.dias_ate_consulta`), porque é feature do modelo e um valor digitado poderia contradizer a própria data da consulta.
 
@@ -163,6 +163,37 @@ docker run --rm -p 8000:8000 -v "%cd%/data:/app/data" saudeja-api
 ```powershell
 streamlit run src/ui/app.py
 ```
+
+### Login da equipe
+
+A visão **Funcionário** pede e-mail e senha, verificados pelo **Supabase Auth** do mesmo projeto do banco ([ADR-008](docs/adr/adr-008-login-da-equipe.md)). A visão **Paciente** continua aberta, porque é o autoagendamento. A sessão fica na memória do servidor, sem cookie: recarregar a página pede login de novo, e 30 minutos sem interação encerram a sessão. "Sair" (na barra lateral) apaga também a última predição da aba "Explicabilidade".
+
+Não há cadastro aberto. A conta de cada funcionário é criada pelo administrador, com a senha digitada no terminal sem eco:
+
+```powershell
+python scripts/criar_funcionario.py recepcao@clinica.com.br
+```
+
+O script usa `SUPABASE_URL`/`SUPABASE_SECRET_KEY` do `.env`, ou seja, cria a conta no projeto para onde o `.env` aponta. Para **desativar** alguém: Supabase Dashboard → Authentication → Users → apagar ou banir o usuário.
+
+O login só **prova identidade**. Os dados continuam sendo lidos com a chave secreta do backend, e o RLS não muda. A tentativa de login usa um client descartável e nunca o singleton de `src/db/client.py`: depois do sign-in, o `supabase-py` troca o `Authorization` do client pelo JWT do usuário, e no singleton isso deixaria o backend inteiro sem enxergar as tabelas (RLS sem policies) para todos os navegadores conectados.
+
+> **No projeto Supabase remoto, dois ajustes são manuais.** O `supabase/config.toml` (`enable_signup = false`, `minimum_password_length = 8`) vale só para o Supabase local. No remoto:
+>
+> - desligue o cadastro aberto ("Allow new users to sign up");
+> - suba o tamanho mínimo de senha de 6 para **8** ("Minimum password length").
+>
+> Os dois ficam no Dashboard, em Authentication → Sign In / Providers → Email. O mínimo só vale para senhas criadas ou trocadas depois do ajuste. Os dois também podem ser aplicados pela Management API, com o `SUPABASE_ACCESS_TOKEN` e o `SUPABASE_PROJECT_REF` do `.env` (Passo 10.1):
+>
+> ```powershell
+> $uri = "https://api.supabase.com/v1/projects/$env:SUPABASE_PROJECT_REF/config/auth"
+> $headers = @{ Authorization = "Bearer $env:SUPABASE_ACCESS_TOKEN" }
+> Invoke-RestMethod -Method Patch -Uri $uri -Headers $headers -ContentType "application/json" `
+>   -Body '{"password_min_length": 8, "disable_signup": true}'
+> Invoke-RestMethod -Uri $uri -Headers $headers | Select-Object password_min_length, disable_signup
+> ```
+>
+> **Não use `supabase config push` para isso.** Ele envia a seção `[auth]` inteira do `config.toml`, com valores de ambiente local como `site_url = "http://127.0.0.1:3000"`, e sobrescreveria a configuração de produção.
 
 ### Como a interface obtém a predição
 
@@ -182,7 +213,7 @@ python -m uvicorn api.main:app --app-dir src            # terminal 1
 $env:PREDICT_BACKEND="api"; streamlit run src/ui/app.py # terminal 2
 ```
 
-Variáveis relevantes (documentadas em `.env.example`): `APP_ENV` (`dev` expõe a aba de disparo manual; use `prod` no deploy), `PREDICT_BACKEND`, `API_BASE_URL`, `MODEL_PATH`, `SUPABASE_URL`/`SUPABASE_SECRET_KEY` (fila do dia e cadastro), `TIMEZONE_CLINICA`.
+Variáveis relevantes (documentadas em `.env.example`): `APP_ENV` (`dev` expõe a aba de disparo manual; use `prod` no deploy), `PREDICT_BACKEND`, `API_BASE_URL`, `MODEL_PATH`, `SUPABASE_URL`/`SUPABASE_SECRET_KEY` (fila do dia, cadastro e login da equipe), `TIMEZONE_CLINICA`.
 
 Para rodar interface e API juntas em container, do jeito que vão para produção, veja a seção seguinte.
 

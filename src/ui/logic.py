@@ -20,12 +20,13 @@ então não há lógica de predição duplicada -- só a forma de invocá-la. O 
 de paridade em tests/test_ui_logic.py trava isso: mesmo payload, mesma
 probabilidade nos dois backends.
 """
+import contextlib
 import hashlib
 import os
 import re
 import sys
-from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parents[1]
@@ -33,8 +34,10 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import httpx  # noqa: E402
+from supabase_auth.errors import AuthApiError  # noqa: E402
 
 import agenda_clinica  # noqa: E402
+import db.client as db_client  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
 import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
@@ -661,3 +664,122 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
         ),
         "truncado": len(eventos) >= LIMITE_EVENTOS_OBSERVABILIDADE,
     }
+
+
+# --- Autenticação do funcionário (ADR-008) -----------------------------------
+
+# 30 min sem nenhuma interação encerra a sessão. A tela da recepção fica ligada
+# o dia todo com nome de paciente (ADR-007); sem limite, quem sentasse no
+# balcão depois do turno herdaria a sessão de quem saiu. Mais curto que isso
+# obrigaria a equipe a relogar no meio do atendimento.
+INATIVIDADE_MAXIMA = timedelta(minutes=30)
+
+MENSAGEM_CREDENCIAIS_INVALIDAS = "E-mail ou senha incorretos."
+
+
+class ErroAutenticacao(Exception):
+    """Base das falhas de login que a UI sabe exibir como mensagem."""
+
+
+class ErroCredenciais(ErroAutenticacao):
+    """Login recusado por causa de quem está tentando entrar (senha errada,
+    conta desativada) -- culpa do preenchimento, não do sistema."""
+
+
+class ErroAutenticacaoIndisponivel(ErroAutenticacao):
+    """Supabase Auth fora do ar, mal configurado ou limitando tentativas --
+    culpa do sistema, não de quem digitou."""
+
+
+@dataclass(frozen=True)
+class SessaoFuncionario:
+    """O que a UI guarda de quem está logado, em `st.session_state` (memória do
+    servidor, nunca cookie). Sem o token do Supabase de propósito: ele só
+    serviu para provar a senha -- os dados continuam sendo lidos com a chave
+    secreta do backend (ADR-008) --, então guardá-lo só criaria um segredo a
+    mais para vazar."""
+
+    id_usuario: str
+    email: str
+    ultimo_uso: datetime
+
+
+def _agora() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
+    """Nenhuma mensagem distingue "e-mail não existe" de "senha errada": dizer
+    qual dos dois falhou ensina a quem tenta adivinhar quais e-mails são da
+    equipe."""
+    if exc.status == 429 or exc.code == "over_request_rate_limit":
+        # O limite do Supabase Auth é por IP, e todos os funcionários chegam
+        # pelo mesmo IP (o do servidor do Streamlit) -- quem aparece aqui pode
+        # nem ter errado a própria senha. Ver ADR-008, riscos.
+        return ErroAutenticacaoIndisponivel(
+            "muitas tentativas de login em pouco tempo. Aguarde alguns minutos e tente de novo."
+        )
+    if exc.code == "user_banned":
+        return ErroCredenciais("Acesso desativado. Procure o administrador do sistema.")
+    if exc.code == "email_not_confirmed":
+        return ErroCredenciais(
+            "Conta ainda não confirmada. Procure o administrador do sistema."
+        )
+    if exc.status is not None and exc.status >= 500:
+        return ErroAutenticacaoIndisponivel(f"serviço de autenticação respondeu {exc.status}.")
+    return ErroCredenciais(MENSAGEM_CREDENCIAIS_INVALIDAS)
+
+
+def autenticar_funcionario(
+    email: str, senha: str, criar_client=None, agora: datetime | None = None
+) -> SessaoFuncionario:
+    """E-mail e senha contra o Supabase Auth do mesmo projeto do banco.
+
+    Funcionário é qualquer usuário existente no Supabase Auth: o cadastro
+    aberto fica desligado no projeto e as contas são criadas pelo
+    administrador (`scripts/criar_funcionario.py`). Não há RBAC -- toda a
+    equipe vê as mesmas abas.
+
+    `criar_client` existe para os testes trocarem o transporte; o default é um
+    client descartável, nunca o singleton do backend (ver
+    `db.client.criar_client_autenticacao`)."""
+    email = (email or "").strip().lower()
+    if not email or not senha:
+        raise ErroCredenciais("Informe e-mail e senha.")
+
+    try:
+        cliente = (criar_client or db_client.criar_client_autenticacao)()
+        resposta = cliente.auth.sign_in_with_password({"email": email, "password": senha})
+    except ConfiguracaoSupabaseAusente as exc:
+        raise ErroAutenticacaoIndisponivel(str(exc)) from exc
+    except AuthApiError as exc:
+        raise _traduzir_erro_de_auth(exc) from exc
+    except Exception as exc:  # rede, timeout, AuthRetryableError
+        raise ErroAutenticacaoIndisponivel(
+            f"serviço de autenticação inacessível ({exc.__class__.__name__})."
+        ) from exc
+
+    usuario = resposta.user
+    # Revoga já o refresh token desta sessão do Supabase: a UI não o usa (ver
+    # SessaoFuncionario), e um token válido que ninguém guarda é só superfície.
+    # `local` e não o default `global`, que derrubaria as sessões do mesmo
+    # funcionário em outros navegadores. Falhar aqui não impede o login: é
+    # higiene, não requisito -- o token expira sozinho.
+    with contextlib.suppress(Exception):
+        cliente.auth.sign_out({"scope": "local"})
+
+    return SessaoFuncionario(
+        id_usuario=str(usuario.id),
+        email=usuario.email or email,
+        ultimo_uso=agora or _agora(),
+    )
+
+
+def sessao_ativa(sessao: SessaoFuncionario, agora: datetime | None = None) -> bool:
+    return (agora or _agora()) - sessao.ultimo_uso <= INATIVIDADE_MAXIMA
+
+
+def registrar_uso(sessao: SessaoFuncionario, agora: datetime | None = None) -> SessaoFuncionario:
+    """Nova sessão com o relógio de inatividade zerado -- chamada a cada rerun
+    do Streamlit, que só acontece quando alguém interage com a tela."""
+    return replace(sessao, ultimo_uso=agora or _agora())

@@ -8,6 +8,23 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
+## [v1.11] (Vanessa + Claude) - 2026-09-28
+
+### Adicionado
+- **Tela de login para a equipe da clínica.** A visão "Funcionário da clínica" passa a pedir e-mail e senha, verificados pelo Supabase Auth do mesmo projeto do banco. Antes do login nenhuma aba é exibida: nem a fila do dia, nem a predição manual, nem a observabilidade. A visão "Paciente" continua aberta ([ADR-008](../adr/adr-008-login-da-equipe.md)).
+- A barra lateral mostra com qual e-mail a pessoa está conectada e tem o botão **Sair**.
+- `scripts/criar_funcionario.py` cria a conta de um funcionário. A senha é digitada no terminal, sem eco, e a conta nasce com o e-mail confirmado. Para desativar alguém, apague ou bana o usuário no Dashboard do Supabase.
+
+### Modificado
+- A sessão do funcionário é encerrada depois de **30 minutos sem interação**. Recarregar a página ou abrir outra aba também pede login de novo, porque a sessão fica na memória do servidor e não em cookie.
+- "Sair" e o encerramento por inatividade apagam também a última predição mostrada na aba "Explicabilidade", para que quem entrar depois no mesmo navegador não a herde.
+
+### Segurança
+- Fecha a parte técnica do risco que o `LGPD.md` classificava como o mais grave: qualquer pessoa com a URL via a fila do dia, que mostra o nome do paciente. Os riscos que continuam abertos estão listados no `LGPD.md` §9: não há controle por perfil de acesso, a API não tem autenticação e o login da equipe inteira pode ser travado por tentativas em massa vindas de fora.
+- Não há cadastro aberto: só o administrador cria contas. **No projeto Supabase remoto é preciso desligar "Allow new users to sign up" no Dashboard**, porque a configuração do repositório vale só para o ambiente local.
+- A mensagem de login recusado é a mesma para e-mail inexistente e para senha errada, para não revelar quais e-mails pertencem à equipe.
+- O token do Supabase Auth é revogado logo depois de conferir a senha e nunca é guardado. Os dados continuam sendo lidos com a chave do backend, sem alteração nas permissões do banco.
+
 ## [v1.10] (Vanessa + Claude) - 2026-09-28
 
 ### Adicionado

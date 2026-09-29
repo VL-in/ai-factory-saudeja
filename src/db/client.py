@@ -15,7 +15,7 @@ enxergaria nada). Nunca versionar a chave: só via `.env`/secret do ambiente.
 """
 import os
 
-from supabase import Client, create_client
+from supabase import Client, ClientOptions, create_client
 
 import config_projeto  # noqa: F401 -- side effect: carrega .env em os.environ
 
@@ -33,6 +33,31 @@ def obter_client() -> Client:
     if _cliente is None:
         _cliente = create_client(_url_supabase(), _key_supabase())
     return _cliente
+
+
+def criar_client_autenticacao() -> Client:
+    """Client DESCARTÁVEL, um por tentativa de login (ADR-008) -- nunca o
+    singleton de `obter_client`.
+
+    O `supabase-py` escuta os próprios eventos de auth: depois de um
+    `sign_in_with_password` bem-sucedido, ele troca o header `Authorization`
+    do client pelo JWT do usuário logado. No singleton isso faria duas coisas
+    erradas ao mesmo tempo: (1) todas as consultas seguintes do backend
+    passariam a rodar como `authenticated` em vez da chave secreta, e o RLS
+    sem policies devolveria tabela vazia; (2) como o processo do Streamlit é
+    um só para todos os navegadores conectados, o login de um funcionário
+    mudaria a identidade das consultas de todos os outros.
+
+    `persist_session`/`auto_refresh_token` desligados: a sessão do Supabase
+    Auth só serve para provar a senha, não para acessar dado -- a UI não
+    guarda o token, então não há o que persistir nem thread de refresh para
+    deixar rodando.
+    """
+    return create_client(
+        _url_supabase(),
+        _key_supabase(),
+        options=ClientOptions(auto_refresh_token=False, persist_session=False),
+    )
 
 
 def _url_supabase() -> str:
