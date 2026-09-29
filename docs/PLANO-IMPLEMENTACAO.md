@@ -381,6 +381,8 @@ Ou seja: o passo de workflow resolve o **esquecimento**, não a **incompatibilid
 
 ## Passo 13 (opcional, pós-núcleo) — LLM/TrueFoundry
 
+> **Revisão do passo antes de implementar (2026-09-29)**: o escopo foi ampliado — o funcionário passa a buscar paciente individual ou a fila de uma data e a pedir a interpretação do SHAP numa aba de chat — e, ao confrontar essa ampliação com o repositório, três pedidos colidiam com decisões vigentes (CPF nunca persistido, LLM como fronteira sem PII do [ADR-007](adr/adr-007-nome-do-paciente.md), `telefone` fora da fila). As decisões estão em **"Decisões de 2026-09-29"** no fim deste passo e **substituem** o corpo abaixo onde divergem. A ordem do plano foi mantida: o passo só começa depois do commit do Passo 12.
+
 Só depois do Passo 12 (núcleo funcional, testado e deployado). Consulta de paciente específico pelo funcionário (item do README, não exigido por SLA/SLO).
 
 - `src/llm/client.py`: mesmo padrão interface+stub do Passo 7 (`StubLLMClient` para dev/test, `TrueFoundryClient` real atrás de env flag). Prompt montado só com dados já pseudonimizados do banco (Passo 5), nunca PII.
@@ -389,6 +391,39 @@ Só depois do Passo 12 (núcleo funcional, testado e deployado). Consulta de pac
 - **É aqui — e só aqui — que o Langfuse volta à mesa** (ADR-004, [ADR-006](adr/adr-006-observabilidade.md)): tracing de prompt/completion, tokens e custo por chamada é exatamente o que ele foi feito para fazer, e passa a existir um LLM para observar. Avaliar self-host vs. cloud considerando que o prompt trafega dados já pseudonimizados (nunca PII) mas ainda assim sairia do Brasil — decisão a registrar quando o passo for executado.
 
 **Verificação**: `tests/test_llm.py` com o stub, garantindo que o contexto montado nunca contém campos proibidos (reusa helper do Passo 8); teste de contrato stub/real. Teste específico de `explicar_em_texto()`: dado um conjunto fixo de contribuições SHAP sintéticas, o texto gerado (via stub determinístico, não chamando o TrueFoundry real em CI) menciona a feature de maior `abs(contribuicao)` — prova que a explicação em texto é fiel ao SHAP, não uma alucinação desconectada dos números.
+
+### Decisões de 2026-09-29 (tomadas com a autora, antes de implementar)
+
+**Escopo pedido**: uma aba "Assistente" na visão do funcionário (atrás do login do [ADR-008](adr/adr-008-login-da-equipe.md)) que (a) busca paciente individual ou a fila de uma data, (b) traz os dados do paciente para o chat com nome abreviado e CPF/telefone parcialmente ocultos e (c) interpreta o SHAP do paciente quando pedido.
+
+**1. Ordem: o deploy fecha primeiro.** Passos 10 → 10.1 → 11 → 12 antes deste. O Passo 13 não depende tecnicamente de nenhum deles, mas compete pelo mesmo tempo até o pitch da Semana 16, e o que tem SLA é o núcleo. Fica registrado aqui para a ampliação de escopo não se perder até lá.
+
+**2. O LLM decide o que buscar; a aplicação busca e exibe.** É a decisão que organiza as outras. Se o LLM redigisse a resposta com nome/CPF/telefone, esses dados trafegariam no prompt e na completion até o TrueFoundry e o provedor por trás dele — a porta nº 7 do ADR-007 aberta pelo lado de dentro. Por isso:
+- As buscas são **ferramentas da aplicação** chamadas pelo LLM (`buscar_fila(data)`, `buscar_por_cpf(ref)`, `explicar(ref_paciente)`), executadas localmente contra `src/db/repositories.py`.
+- O LLM só recebe **referências opacas** ("paciente #3") e dado já pseudonimizado (especialidade, idade, probabilidade, contribuições SHAP). A UI resolve a referência e desenha o card do paciente com os campos exibíveis; o identificador nunca passa pelo modelo.
+- **Dois históricos por sessão**: o de exibição (com PII, em `st.session_state`, apagado no "Sair" e na expiração, como `_encerrar_sessao` já faz com a última predição) e o enviado ao LLM (só referências).
+- **Um único ponto de saída** monta todas as mensagens enviadas ao provedor. `contexto_sem_pii` filtra por *chave* de dicionário e não alcança texto livre — o chat precisa de guarda própria, travada por teste.
+
+**3. CPF: continua nunca persistido, e nada de coluna nova.** Não há CPF no banco para mascarar. Gravar a máscara usual (`***.456.789-**`) ao lado do hash seria pior que não ter hash: ela revela 6 dos 9 dígitos que determinam o CPF, restam 1.000 candidatos e o sha256 se reverte em milissegundos — a pseudonimização viraria cosmética (hoje o custo é ~10⁹ tentativas, [`LGPD.md` §2](LGPD.md)). O que se faz em vez disso:
+- **Busca por CPF**: o CPF digitado é interceptado **localmente** antes de qualquer envio (tem forma reconhecível, mesmas regras de `logging_config.REGRAS_DE_PII`), convertido pelo hash de `logic._id_paciente_externo_de_cpf` e trocado por referência opaca na mensagem que segue ao LLM.
+- A tela pode ecoar **mascarado só o CPF que o funcionário acabou de digitar** (vem do input, não do banco).
+- Na fila de uma data, o desambiguador continua sendo o início do hash, já exibido no painel de detalhe (ADR-007).
+
+**4. Telefone: fora da aba, por ora.** `buscar_fila_do_dia` deixa `telefone` de fora de propósito ("o funcionário precisa chamar o paciente pelo nome, não discar para ele"), e nenhuma finalidade para exibi-lo foi definida. As ferramentas do chat usam selects explícitos sem a coluna. Reabrir exige finalidade declarada, pelo mesmo critério de necessidade que abriu as exceções do Passo 7 e do ADR-007.
+
+**5. Nome: busca fora do chat; exibição abreviada montada localmente.** Nome digitado em texto livre iria para o LLM, e nome não tem forma reconhecível ([`LGPD.md` §8](LGPD.md)) — não há regex que o intercepte com segurança. A busca por nome fica num **campo próprio da aba** (ou restrita aos nomes da fila da data selecionada), resolvida por filtro determinístico, sem LLM. O nome abreviado ("Ana S. C.") é produzido no card pela UI a partir de `nome_completo`; o modelo nunca o vê. Vale anotar a honestidade do desenho: a busca não precisa de LLM — onde ele agrega valor de fato é na interpretação do SHAP.
+
+**6. Interpretação do SHAP sob demanda, não em lote no job D-2.** Substitui o item "passa a preencher `explicacao_texto` em `predicoes`" do corpo acima, que implicitamente mandaria 100% da fila ao provedor todo dia. Sob demanda, só sai o paciente que o funcionário pediu — minimização (Art. 6º, III). O texto gerado pode ser gravado em `predicoes.explicacao_texto` como cache, via `ExplicadorLLM.explicar_em_texto` (fronteira do ADR-007 mantida). O prompt enquadra o texto como "o que o modelo considerou", não como causa da falta: SHAP não é causal, e com `recall_1` 0.429 uma frase fluente projetaria mais confiança do que o modelo tem.
+
+**7. Observabilidade sem Langfuse.** Evento próprio em `eventos_app` (`origem`/`tipo` de LLM: latência, tokens, nome de classe de exceção), com a allowlist de `src/observabilidade.py` estendida. Langfuse segue fora: guardaria prompt/completion, o que é mais uma transferência internacional. A latência do LLM fica **fora** do p95 do SLO §2 (que é de predição) e medida à parte; LLM indisponível degrada só a aba, nunca a fila.
+
+**Pendências para quando o passo for executado** (não bloqueiam nada agora):
+- **ADR-009** registrando a decisão 2 e as alternativas recusadas (LLM redigindo a resposta com PII; CPF parcial persistido; busca por nome dentro do chat).
+- **Transferência internacional e operador novo**: mesmo sem identificador, o que vai ao LLM inclui `especialidade` e probabilidade de falta — dado derivado de dado de saúde ([`LGPD.md` §2](LGPD.md)). Verificar região e DPA do TrueFoundry e do provedor por trás dele (Art. 33/39) e revisar `LGPD.md` §2.1 (o chat é uma porta de saída nova), §4 e §9. Deixa de valer, para esta porta, o "nenhum destinatário novo" do ADR-007.
+- **Alcance de acesso**: busca por CPF alcança o histórico inteiro do paciente, além da fila de uma data. Sem RBAC (ADR-008), avaliar uma trilha de "quem consultou qual paciente".
+- Secrets novos (chave/URL do TrueFoundry) em `.env.example` e nos secrets do Space.
+
+**Verificação acrescida**: cliente LLM espião recebendo todas as mensagens de uma conversa que busca por CPF, por nome (campo) e pela fila de uma data — nenhuma mensagem contém nome conhecido do banco, CPF ou telefone, com controle negativo (injetar o nome no ponto de saída faz o teste falhar); "Sair" e expiração apagam os dois históricos; LLM fora do ar mantém as demais abas funcionando (`test_ui_smoke.py`).
 
 ---
 
