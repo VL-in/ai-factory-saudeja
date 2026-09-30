@@ -488,6 +488,107 @@ jobs:
 - `architecture.md` §6, o Passo 9.1 ("Fecha o loop até produção") e o Passo 11 ainda citam `huggingface/huggingface-sync-action` pelo nome antigo — atualizar junto da implementação.
 - Secrets do `retrain.yml` ou desativação dele **antes de 2026-10-01** (ver o estado do repositório acima).
 
+### Revisão de 2026-09-29 (2ª) — inferência só em batch e gates por camada
+
+**Premissa da autora**: a solução é de **inferência em batch**. Não faz sentido inferir em tempo real: o produto só precisa (a) do job diário, (b) do registro do desfecho real pela atendente no dia da consulta e (c) do re-treino mensal com os dados coletados no banco. Por isso, a pipeline de pré-processamento precisa transformar o dado cru do banco em feature com a tipagem correta, e o CI/CD precisa de gates em quatro camadas: script, dados, features e modelo.
+
+**Confronto com o repositório — o que apareceu:**
+
+1. **Bug de fuso (crítico, corrigido no 10.2).** O Postgres devolve `timestamptz` em UTC. A fila do dia já convertia o valor ([`test_db.py`](../tests/test_db.py), regressão da fila), mas o job D-2 e o export não. Medido com o `model.pkl` real, para uma consulta das 18h em SP: o modelo via `horario=21`, que o treino nunca viu, e a probabilidade caía de 0,482 para 0,241. O export gravava a hora UTC no dataset de treino, e o SMS dizia "21:00" ao paciente. O `test_job_inferencia.py` não pegava o bug porque só comparava a ordem entre dois pacientes, e os dois deslocavam juntos.
+2. **Janela de um dia só.** O job olhava exatamente D+2. Se o cron falhasse num dia, aqueles pacientes nunca eram preditos. Um agendamento feito com menos de dois dias de antecedência nunca entrava em janela nenhuma.
+3. **Uma linha ruim abortava a fila.** Só `KeyError`/`EspecialidadeDesconhecidaError` eram capturadas.
+4. **Nenhuma validação entre o dado cru e a feature.** `construir_features` prediz sem erro sobre idade −5 ou 150, sexo `'X'` (vira NaN), distância 450 km (o modelo trata como 50), 400 dias de antecedência (o modelo trata como 90) e data nula. As proteções existentes estão espalhadas: Pydantic só na API, checks `>= 0` no banco, widgets da UI.
+5. **Rótulo.** Dava para marcar no-show em consulta futura. O SMS é uma intervenção que muda o desfecho, e nada registrava quem o recebeu — risco de feedback loop no re-treino.
+6. **O gate do modelo promoveria um modelo que marca a fila inteira.** Com 21 positivos em 76 linhas, marcar todos dá `recall_1` 1,0 e `f1_1` 0,433, acima dos 0,419 do campeão, e um deslocamento das probabilidades que preserva a ordem mantém o `roc_auc`. Há também o efeito catraca: cada promoção pode regredir até a tolerância em relação ao campeão da vez. E o threshold escapa do gate: o job lê `params.yaml`, e a guarda do achado 7 cobre só o sha do modelo.
+7. **O plano afirma que o Bandit está coberto pelas regras `S` do ruff**, mas o `ruff.toml` não as seleciona.
+
+**Decisões da autora:**
+
+| # | Tema | Decisão |
+|---|---|---|
+| 1 | API `/predict` | **Mantida**, para cumprir o item 1 do BRIEFING. A interpretação registrada aqui: o código, os testes e o `infra/api/` continuam no repositório, mas a API sai do caminho crítico e dos SLOs de produção, que passam a medir o batch. *Se a API também deve continuar publicada no Space, isso reabre o dilema da porta única do Passo 11.* |
+| 2 | Horário do job D-2 | Job único às **08h de SP**. O custo do Actions não depende da hora, e na madrugada o SMS chegaria às 3h. Com isso, fica adotada a opção (a) do achado 5: o job roda no runner. O re-treino continua às 03:00 de SP. |
+| 3 | Paciente não predito | **Recebe o lembrete mesmo assim, como exceção** (`status_envio = enviado_sem_predicao`). Janela do job: **de amanhã até D+2**, sem predição e sem lembrete. |
+| 4 | Números | Fora do domínio do treino: **só marcar, nunca rejeitar** (distância > 50 km, dias > 90 etc.). **180 dias** é a antecedência máxima de agendamento. **Taxa de disparo sem teto**: só notificação. **Piso absoluto de `roc_auc` = 0,60** no gate. |
+| 5 | Escopo | Tudo **dentro do Passo 10**, fatiado nos sub-passos abaixo. |
+| 6 | Rótulo | Desfecho **só para consulta de hoje ou anterior**. Consulta sem desfecho continua fora do export. Contra o feedback loop, **`agendamentos.lembrete_enviado`** é gravado em todo envio e exportado. |
+
+#### 10.2 — Correções do batch D-2 e do rótulo — **implementado em 2026-09-29**
+
+- `config_projeto.para_horario_da_clinica` converte qualquer data/hora para o fuso da clínica; valor sem fuso é tratado como já local. É aplicado no job (payload e texto do SMS), no export e em `features.extrair_features_temporais` — nesta última, como defesa para qualquer timestamp com fuso que chegue ao modelo, inclusive pela API.
+- `buscar_agendamentos_d2_pendentes`: janela [amanhã, D+2], `status = agendado`, sem predição e `lembrete_enviado = false`. O nome da função foi mantido para não espalhar a mudança pelos chamadores.
+- Job: **quarentena por linha**, que captura qualquer exceção ao predizer, registra o evento e o log só com a classe da exceção, e envia o lembrete como `enviado_sem_predicao`. Se o próprio agendamento estiver malformado, o SMS cai numa mensagem genérica. Falha de envio não marca `lembrete_enviado`, para a execução do dia seguinte tentar de novo. Contador `lembretes_sem_predicao` no resultado, no log e na allowlist de `eventos_app`.
+- Migration **aditiva** `20260929000000_lembrete_enviado.sql` (`boolean not null default false`). Pode ir no mesmo deploy do código, aplicada antes do sync (regra do 10.1). O export ganhou a coluna `lembrete_enviado`, que **não é feature** — é o dado que permite tratar o efeito do SMS depois; na semente fica vazia (desconhecido).
+- Desfecho: `logic.pode_registrar_desfecho` (data no fuso da clínica). A UI troca os botões por um aviso em datas futuras, e `repositories.atualizar_status_agendamento` filtra por data no próprio `UPDATE` e levanta `DesfechoForaDePrazo` quando nenhuma linha é afetada.
+- Regra de 180 dias: `agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS`, com `min_value`/`max_value` no `date_input` do cadastro e validação em `cadastrar_paciente_e_agendamento`, que passa a recusar consulta no passado. **O check no banco fica para um deploy separado** (migration restritiva, regra do 10.1), e vai no 10.3.
+- `dvc.lock` reconciliado com `dvc commit`, não com `dvc repro`, pelo mesmo raciocínio da decisão 5 do Passo 9: `features.py`/`config_projeto.py` são deps do `preprocess`, mas o dataset versionado não tem fuso, então as saídas não mudam — conferido comparando `train_raw.pkl`/`test.pkl`/`mapa_especialidade.json` gerados de novo com os versionados. `model.pkl` e `model_version` intactos.
+
+**Verificado**: `ruff` limpo; **275 testes** rápidos (eram 255); 19 de integração contra o Supabase local, com a migration aplicada por `supabase migration up`. Os testes novos são:
+- `tests/test_skew_features.py`: a mesma linha no formato do PostgREST pelos caminhos do job e do export → `preprocessar` tem de dar o mesmo vetor, com `horario=18`. Controle negativo conferido: sem a conversão, 4 dos 5 testes selecionados falham.
+- `tests/test_job_d2_unitario.py`: quarentena sem abortar a fila, lembrete sem predição, marcação de `lembrete_enviado`, falha de envio sem marcação.
+- Testes de prazo em `test_ui_logic.py`.
+- `test_db.py`: janela [amanhã, D+2], desfecho futuro recusado pelo banco.
+- `test_job_inferencia.py`: passa a comparar a probabilidade **gravada** com a do payload local, não só a ordem.
+
+**Pendências operacionais**: `supabase db push` da migration nova no projeto remoto **antes** de subir o código. As predições já gravadas no remoto foram feitas com o horário deslocado.
+
+#### 10.3 — Contrato de features e gate de dados — a implementar
+
+- Módulo único de contrato (ex. `src/contrato_features.py`, pandera ou pydantic) aplicado no export, no `preprocess` e no job, com coerção explícita de tipo. Duas faixas por campo:
+
+  | Campo | Regra de negócio (fora → quarentena) | Domínio do treino (fora → prediz e marca `fora_do_dominio`) |
+  |---|---|---|
+  | idade | inteiro, 0–120 | 0–85 |
+  | sexo / especialidade | {F, M} / mapa do modelo | — |
+  | distancia_km | ≥ 0 | até 50 |
+  | dias | inteiro, 0–180 | 1–90 |
+  | historico_noshow | inteiro ≥ 0 | até 10 |
+  | data_hora_agendada | com fuso, dentro da grade da clínica | seg–sáb, 8h–18h |
+
+  A flag `fora_do_dominio` é gravada em `predicoes` (migration aditiva) e aparece na fila.
+- Check no banco `dias_entre_agendamento_consulta <= 180`, em deploy **posterior** ao do código do 10.2.
+- Stage `validate_data` no `dvc.yaml`, antes do `preprocess`, para que o `dvc repro` do re-treino falhe antes de treinar. Checa:
+  - schema: colunas, dtypes, nulos e `id_consulta` único;
+  - domínio: as regras do contrato;
+  - distribuição: taxa de positivos entre 10% e 50%, mínimo de positivos no fold de teste, especialidade nova, horários dentro da grade;
+  - completude de rótulo: consultas passadas ainda `agendado`.
+  
+  PSI por feature (produção × semente) entra só como alerta no resumo do run.
+- Export com o `historico_noshow` **gravado no cadastro** (o que o modelo viu em produção), em vez de recalculado.
+- Lista de especialidades do cadastro vinda de configuração, com teste de que ela está contida no mapa do modelo.
+- Na carga do modelo, conferir nomes, ordem e categóricas contra `booster_.feature_name()`.
+
+#### 10.4 — Gates do modelo — a implementar
+
+- **Piso absoluto** de `roc_auc` = 0,60 (`params.yaml`, `gate.piso`), além da comparação relativa.
+- **Taxa de disparo projetada** no fold de teste: reportada no resumo e no PR de promoção, com notificação (sem bloqueio) acima de 30%, que é o "cortar 70%" do BRIEFING. O campeão atual marca 22 de 76 (29%).
+- **Suíte de sanidade e casos limítrofes** rodada pelo `retrain_gate.py` sobre o **desafiante**, antes de reescrever o campeão (bloqueia a promoção), e pelo CI contra o `model.pkl` de `main`:
+  - saída em [0, 1], sem NaN, determinística e não constante;
+  - aditividade do SHAP;
+  - a política do contrato para idade negativa/150/float, antecedência acima de 180 dias, distância acima de 450 km e NaN.
+  
+  Expectativas direcionais (mais `historico_noshow` não reduz o risco) entram só como aviso.
+- **Threshold amarrado ao campeão**: o job exige `decision.threshold` igual a `champion_metrics.decision_threshold`.
+
+#### 10.5 — Workflows — a implementar
+
+A forma resultante da 1ª revisão continua valendo, com estes acréscimos:
+- **`ci.yml`**:
+  - regras `S` no `ruff`;
+  - testes de skew e do validador de dados;
+  - suíte do modelo;
+  - `docker build` da imagem de deploy com smoke (`/_stcore/health`);
+  - integração obrigatória em PR que toque `src/jobs`, `src/db`, `src/export_treino.py` ou `supabase/`.
+- **`job_d2.yml`**:
+  - cron `17 11 * * *` (08h17 de SP, minuto "quebrado" do achado 12);
+  - `dvc pull data/model.pkl` com SAS só de leitura;
+  - pré-checagem: sha do modelo e threshold batem com o campeão, e o banco está alcançável;
+  - pós-checagem: predições = pendentes − quarentena, e aviso se a taxa de disparo ou de quarentena sair da faixa — uma quarentena de 100% indica defeito sistêmico e mandaria SMS à fila inteira;
+  - `/fail` no Healthchecks.
+- **`retrain.yml`**: `validate_data` e o gate completo passam a bloquear antes do PR.
+- **SLO §1/§2**: reescritos como SLOs do batch — fila [amanhã, D+2] 100% processada até as 09h, uma execução por dia. A latência de `/predict` sai do compromisso de produção (decisão 1).
+- Emendar o ADR-005 (a) e o `architecture.md` §3.2.2/§6 com a execução no runner.
+
 ---
 
 ## Passo 11 — Deploy no Hugging Face Space

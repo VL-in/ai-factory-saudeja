@@ -312,6 +312,9 @@ def test_cadastro_repassa_o_nome_ao_repositorio(monkeypatch):
     monkeypatch.setattr(logic.repositories, "inserir_paciente", _inserir_paciente)
     monkeypatch.setattr(logic.repositories, "contar_no_shows_anteriores", lambda _id: 0)
     monkeypatch.setattr(logic.repositories, "inserir_agendamento", lambda **kw: {"id": "a1"})
+    # Data fixa da consulta exige "hoje" fixo: desde a revisão do Passo 10 o
+    # cadastro recusa consulta no passado.
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
 
     logic.cadastrar_paciente_e_agendamento(
         cpf="529.982.247-25",
@@ -711,3 +714,80 @@ def test_registrar_uso_zera_o_relogio_de_inatividade():
 
     assert logic.sessao_ativa(renovada, agora=depois + logic.INATIVIDADE_MAXIMA)
     assert renovada.email == sessao.email
+
+
+# --- revisão do Passo 10 (2026-09-29): prazo do agendamento e do desfecho -----
+
+
+def _cadastrar(data_consulta):
+    logic.cadastrar_paciente_e_agendamento(
+        cpf="529.982.247-25",
+        telefone="(11) 98765-4321",
+        data_nascimento=date(1990, 1, 1),
+        sexo="F",
+        especialidade="cardiologia",
+        distancia_km=5.5,
+        data_consulta=data_consulta,
+        hora_consulta=time(10, 0),
+        nome_completo="Ana Souza",
+    )
+
+
+@pytest.mark.parametrize(
+    "data_consulta",
+    [date(2026, 9, 28), date(2026, 9, 29) + timedelta(days=181)],
+    ids=["passado", "alem-de-180-dias"],
+)
+def test_cadastro_recusa_consulta_no_passado_ou_alem_de_180_dias(monkeypatch, data_consulta):
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
+
+    def _nao_deveria_ser_chamado(**kwargs):
+        raise AssertionError("cadastro chegou ao banco com data inválida")
+
+    monkeypatch.setattr(logic.repositories, "inserir_paciente", _nao_deveria_ser_chamado)
+
+    with pytest.raises(logic.ErroValidacaoCadastro, match="Data da consulta"):
+        _cadastrar(data_consulta)
+
+
+def test_data_maxima_de_consulta_e_180_dias_a_frente():
+    assert logic.data_maxima_de_consulta(date(2026, 9, 29)) == date(2027, 3, 28)
+
+
+@pytest.mark.parametrize(
+    "consulta_utc, esperado",
+    [
+        ("2026-09-29T21:00:00+00:00", True),  # hoje 18h em SP
+        ("2026-09-28T13:00:00+00:00", True),  # ontem
+        # 30/09 00h30 UTC ainda é 29/09 21h30 em SP -- a data vale no fuso da
+        # clínica, não em UTC.
+        ("2026-09-30T00:30:00+00:00", True),
+        ("2026-09-30T13:00:00+00:00", False),  # amanhã
+    ],
+)
+def test_desfecho_so_para_consulta_de_hoje_ou_anterior(consulta_utc, esperado):
+    data_hora = datetime.fromisoformat(consulta_utc)
+    assert logic.pode_registrar_desfecho(data_hora, hoje=date(2026, 9, 29)) is esperado
+
+
+def test_desfecho_de_consulta_futura_nao_chega_ao_banco(monkeypatch):
+    def _nao_deveria_ser_chamado(id_agendamento, status):
+        raise AssertionError("desfecho de consulta futura chegou ao banco")
+
+    monkeypatch.setattr(
+        logic.repositories, "atualizar_status_agendamento", _nao_deveria_ser_chamado
+    )
+    amanha = datetime.now(timezone.utc) + timedelta(days=2)
+
+    with pytest.raises(logic.ErroDesfechoForaDePrazo):
+        logic.atualizar_status_agendamento("a1", logic.STATUS_NO_SHOW, data_hora_agendada=amanha)
+
+
+def test_recusa_do_repositorio_por_prazo_vira_erro_de_prazo_e_nao_de_persistencia(monkeypatch):
+    def _recusa(id_agendamento, status):
+        raise repositories.DesfechoForaDePrazo("fora do prazo")
+
+    monkeypatch.setattr(logic.repositories, "atualizar_status_agendamento", _recusa)
+
+    with pytest.raises(logic.ErroDesfechoForaDePrazo):
+        logic.atualizar_status_agendamento("a1", logic.STATUS_NO_SHOW)

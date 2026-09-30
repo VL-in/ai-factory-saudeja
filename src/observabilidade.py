@@ -60,6 +60,7 @@ CHAVES_DETALHE_PERMITIDAS = frozenset(
         "agendamentos_encontrados",
         "predicoes_gravadas",
         "mensagens_disparadas",
+        "lembretes_sem_predicao",
         "erros",
         "eventos_purgados",
     }

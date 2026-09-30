@@ -1,8 +1,9 @@
 """
 SaúdeJá — job de inferência diária D-2 (Passo 6 do plano de implementação).
 
-Busca no Supabase os agendamentos marcados para dois dias à frente (via
-`db.repositories.buscar_agendamentos_d2_pendentes`), roda a predição+
+Busca no Supabase os agendamentos de amanhã até D+2 ainda sem predição (via
+`db.repositories.buscar_agendamentos_d2_pendentes` -- a janela de três dias
+recupera sozinha um dia em que o cron não rodou), roda a predição+
 explicação reaproveitando `src/inference.py`/`src/explain.py` -- os mesmos
 módulos que a API (Passo 3) usa, sem lógica de predição duplicada --, grava
 o resultado em `predicoes` e decide o disparo de lembrete pago conforme o
@@ -21,7 +22,7 @@ import logging
 import os
 import sys
 import time
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parents[1]
@@ -34,6 +35,7 @@ import observabilidade  # noqa: E402
 from config_projeto import (  # noqa: E402
     caminho_de_env,
     hoje_na_clinica,
+    para_horario_da_clinica,
     retencao_dados_derivados_dias,
 )
 from explain import construir_explicador, explicar  # noqa: E402
@@ -42,6 +44,13 @@ from logging_config import configurar_logging  # noqa: E402
 from messaging.client import ErroEnvioInfobip, InfobipClient, StubMessagingClient  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# Lembrete enviado a um paciente que NÃO pôde ser predito (dado inválido,
+# falha do modelo). Decisão da autora na revisão do Passo 10: a falta custa
+# R$ 180 e o SMS custa centavos, então na dúvida o paciente é lembrado -- mas
+# como exceção rastreável, com status próprio em `mensagens_disparadas`, e não
+# confundida com o disparo normal por risco.
+STATUS_ENVIADO_SEM_PREDICAO = "enviado_sem_predicao"
 
 
 class ProvedorMensageriaDesconhecido(Exception):
@@ -70,7 +79,10 @@ def _payload_de_agendamento(agendamento: dict) -> dict:
     da predição, calculada em relação à data da própria consulta -- mesmo
     conceito que `idade` já representa no dataset histórico de treino."""
     paciente = agendamento["pacientes"]
-    data_hora_agendada = datetime.fromisoformat(agendamento["data_hora_agendada"])
+    # Hora da clínica, não a UTC que o Postgres devolve (revisão do Passo 10):
+    # sem isto o modelo via `horario` 3h adiantado e o SMS dizia 21:00 para
+    # uma consulta das 18:00.
+    data_hora_agendada = para_horario_da_clinica(agendamento["data_hora_agendada"])
     data_nascimento = date.fromisoformat(paciente["data_nascimento"])
     return {
         "idade": calcular_idade(data_nascimento, data_hora_agendada.date()),
@@ -109,6 +121,7 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
         "agendamentos_encontrados": len(pendentes),
         "predicoes_gravadas": 0,
         "mensagens_disparadas": 0,
+        "lembretes_sem_predicao": 0,
         "erros": [],
     }
     observado["detalhe"]["agendamentos_encontrados"] = len(pendentes)
@@ -128,37 +141,21 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
         try:
             payload = _payload_de_agendamento(agendamento)
             X = inference.construir_features(payload, mapa_especialidade)
-        except (KeyError, inference.EspecialidadeDesconhecidaError) as exc:
-            # Agendamento malformado (especialidade fora do mapa, paciente
-            # sem data_nascimento/sexo): registra e segue para o próximo --
-            # não é motivo para deixar a fila inteira sem predição.
-            resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
-            # Só a CLASSE da exceção vai para `eventos_app`: `str(exc)` traz o
-            # dado do agendamento junto, e a tabela de observabilidade não
-            # guarda dado de paciente (ADR-006).
-            observabilidade.registrar_evento(
-                tipo=observabilidade.TIPO_ERRO,
-                status=observabilidade.STATUS_ERRO,
-                origem=observabilidade.ORIGEM_JOB,
-                model_version=model_version,
-                detalhe={"excecao": exc.__class__.__name__},
-            )
-            # `id_agendamento` no log de propósito (Passo 8): é uuid interno,
-            # não PII, e sem ele o diagnóstico de "por que este paciente não
-            # recebeu lembrete" não sai do lugar. `str(exc)` fica de fora --
-            # ele carrega o dado do agendamento que causou a falha.
-            logger.warning(
-                "agendamento sem predição",
-                extra={
-                    "id_agendamento": agendamento["id"],
-                    "excecao": exc.__class__.__name__,
-                },
+            probabilidade = float(inference.predizer(model, X)[0])
+            contribuicoes = explicar(explainer, X)
+        except Exception as exc:
+            # Quarentena: QUALQUER falha ao predizer uma linha (especialidade
+            # fora do mapa, nulo inesperado, tipo errado vindo do banco) fica
+            # restrita àquela linha. Antes só KeyError/Especialidade eram
+            # capturadas, e um TypeError abortava o resto da fila -- que, com a
+            # janela de um dia só, ficava sem predição para sempre.
+            _registrar_quarentena(agendamento, exc, model_version, resultado)
+            _enviar_lembrete(
+                agendamento, cliente_mensageria, resultado, STATUS_ENVIADO_SEM_PREDICAO
             )
             continue
 
-        probabilidade = float(inference.predizer(model, X)[0])
         classe_prevista = int(probabilidade >= threshold)
-        contribuicoes = explicar(explainer, X)
         # Mede só o trecho de modelo (features + predição + SHAP), o mesmo que
         # a rota /predict executa, para o p95 do SLO §2 comparar caminhos
         # equivalentes -- a gravação no banco e o envio de SMS que vêm a seguir
@@ -180,55 +177,98 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
         )
         resultado["predicoes_gravadas"] += 1
 
-        canal = cliente_mensageria.canal
         if classe_prevista:
-            telefone = agendamento["pacientes"]["telefone"]
-            try:
-                cliente_mensageria.enviar_lembrete(
-                    telefone=telefone,
-                    mensagem=(
-                        f"Olá! Confirmamos sua consulta de {agendamento['especialidade']} em "
-                        f"{payload['data_hora_agendada']:%d/%m/%Y às %H:%M}. Poderá comparecer?"
-                    ),
-                )
-            except ErroEnvioInfobip as exc:
-                # Falha de envio de UM paciente (número inválido, sandbox
-                # recusou, Infobip fora do ar) não pode travar a fila do dia
-                # inteira -- registra e segue, mesma filosofia do agendamento
-                # malformado acima.
-                resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
-                # `str(exc)` é seguro aqui desde o Passo 8: `ErroEnvioInfobip`
-                # deixou de embutir o corpo da resposta, que ecoava o telefone
-                # do destinatário -- sobrou (status HTTP, messageId).
-                logger.warning(
-                    "falha ao enviar lembrete",
-                    extra={
-                        "id_agendamento": agendamento["id"],
-                        "canal": canal,
-                        "motivo": str(exc),
-                    },
-                )
-                repositories.registrar_mensagem(
-                    id_agendamento=agendamento["id"], canal=canal, status_envio="falha_envio"
-                )
-                continue
-            repositories.registrar_mensagem(
-                id_agendamento=agendamento["id"], canal=canal, status_envio="enviado"
-            )
-            resultado["mensagens_disparadas"] += 1
+            _enviar_lembrete(agendamento, cliente_mensageria, resultado, "enviado")
         else:
             repositories.registrar_mensagem(
-                id_agendamento=agendamento["id"], canal=canal, status_envio="nao_enviado"
+                id_agendamento=agendamento["id"],
+                canal=cliente_mensageria.canal,
+                status_envio="nao_enviado",
             )
 
     observado["detalhe"].update(
         {
             "predicoes_gravadas": resultado["predicoes_gravadas"],
             "mensagens_disparadas": resultado["mensagens_disparadas"],
+            "lembretes_sem_predicao": resultado["lembretes_sem_predicao"],
             "erros": len(resultado["erros"]),
         }
     )
     return resultado
+
+
+def _registrar_quarentena(agendamento: dict, exc: Exception, model_version, resultado) -> None:
+    """Agendamento que não pôde ser predito: registra e deixa o job seguir."""
+    resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
+    # Só a CLASSE da exceção vai para `eventos_app`: `str(exc)` traz o dado do
+    # agendamento junto, e a tabela de observabilidade não guarda dado de
+    # paciente (ADR-006).
+    observabilidade.registrar_evento(
+        tipo=observabilidade.TIPO_ERRO,
+        status=observabilidade.STATUS_ERRO,
+        origem=observabilidade.ORIGEM_JOB,
+        model_version=model_version,
+        detalhe={"excecao": exc.__class__.__name__},
+    )
+    # `id_agendamento` no log de propósito (Passo 8): é uuid interno, não PII,
+    # e sem ele o diagnóstico de "por que este paciente não tem predição" não
+    # sai do lugar. `str(exc)` fica de fora -- carrega o dado do agendamento.
+    logger.warning(
+        "agendamento sem predição",
+        extra={"id_agendamento": agendamento["id"], "excecao": exc.__class__.__name__},
+    )
+
+
+def _mensagem_de_lembrete(agendamento: dict) -> str:
+    """Texto do SMS, com data e hora no fuso da clínica. Se o próprio
+    agendamento estiver malformado (é o caso da quarentena), cai numa mensagem
+    genérica em vez de deixar de lembrar o paciente."""
+    try:
+        quando = para_horario_da_clinica(agendamento["data_hora_agendada"])
+        return (
+            f"Olá! Confirmamos sua consulta de {agendamento['especialidade']} em "
+            f"{quando:%d/%m/%Y às %H:%M}. Poderá comparecer?"
+        )
+    except Exception:
+        return "Olá! Lembramos da sua consulta agendada nos próximos dias. Poderá comparecer?"
+
+
+def _enviar_lembrete(agendamento: dict, cliente_mensageria, resultado: dict, status: str) -> None:
+    """Envia o lembrete, registra a auditoria (SLA §6) e marca
+    `agendamentos.lembrete_enviado` -- o registro que o re-treino usa para não
+    confundir "compareceu" com "compareceu porque foi lembrado", e que impede
+    reenvio na janela de três dias do job."""
+    canal = cliente_mensageria.canal
+    try:
+        telefone = agendamento["pacientes"]["telefone"]
+        cliente_mensageria.enviar_lembrete(
+            telefone=telefone, mensagem=_mensagem_de_lembrete(agendamento)
+        )
+    except (ErroEnvioInfobip, KeyError, TypeError) as exc:
+        # Falha de envio de UM paciente (número inválido, sandbox recusou,
+        # Infobip fora do ar, paciente sem telefone no embed) não pode travar
+        # a fila inteira -- registra e segue. Sem `lembrete_enviado`: a
+        # execução do dia seguinte tenta de novo, se ainda estiver na janela.
+        resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
+        # `str(exc)` só para `ErroEnvioInfobip`, seguro desde o Passo 8 (a
+        # mensagem deixou de embutir o corpo da resposta, que ecoava o
+        # telefone). Das demais, só a classe.
+        motivo = str(exc) if isinstance(exc, ErroEnvioInfobip) else exc.__class__.__name__
+        logger.warning(
+            "falha ao enviar lembrete",
+            extra={"id_agendamento": agendamento["id"], "canal": canal, "motivo": motivo},
+        )
+        repositories.registrar_mensagem(
+            id_agendamento=agendamento["id"], canal=canal, status_envio="falha_envio"
+        )
+        return
+    repositories.registrar_mensagem(
+        id_agendamento=agendamento["id"], canal=canal, status_envio=status
+    )
+    repositories.marcar_lembrete_enviado(agendamento["id"])
+    resultado["mensagens_disparadas"] += 1
+    if status == STATUS_ENVIADO_SEM_PREDICAO:
+        resultado["lembretes_sem_predicao"] += 1
 
 
 def purgar_eventos_antigos() -> int:
@@ -290,6 +330,7 @@ def main() -> dict:
             "agendamentos_encontrados": resultado["agendamentos_encontrados"],
             "predicoes_gravadas": resultado["predicoes_gravadas"],
             "mensagens_disparadas": resultado["mensagens_disparadas"],
+            "lembretes_sem_predicao": resultado["lembretes_sem_predicao"],
             "erros": len(resultado["erros"]),
             "eventos_purgados": purgados,
             "derivados_purgados": derivados_purgados,

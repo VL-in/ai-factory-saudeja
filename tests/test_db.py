@@ -252,15 +252,20 @@ def test_inserir_agendamento_aparece_na_fila_do_dia(db):
 
 
 @pytest.mark.integracao
-def test_buscar_agendamentos_d2_pendentes_filtra_por_data_e_predicao_existente(db):
+def test_buscar_agendamentos_d2_pendentes_cobre_de_amanha_ate_d2(db):
+    """Janela [amanhã, D+2] (revisão do Passo 10): um dia em que o cron não
+    rodou é recuperado na execução seguinte, e agendamento feito com um dia de
+    antecedência também é predito. Hoje e D+3 ficam de fora."""
     import db.repositories as repositories
 
     hoje = hoje_na_clinica()
+    _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-3-HOJE")
+    _, agendamento_d1 = _criar_paciente_e_agendamento(repositories, dias=1, id_externo="EXT-3-D1")
     _, agendamento_d2 = _criar_paciente_e_agendamento(repositories, dias=2, id_externo="EXT-3")
     _criar_paciente_e_agendamento(repositories, dias=3, id_externo="EXT-4")
 
     pendentes = repositories.buscar_agendamentos_d2_pendentes(hoje)
-    assert [a["id"] for a in pendentes] == [agendamento_d2["id"]]
+    assert [a["id"] for a in pendentes] == [agendamento_d1["id"], agendamento_d2["id"]]
 
     repositories.gravar_predicao(
         id_agendamento=agendamento_d2["id"],
@@ -270,9 +275,26 @@ def test_buscar_agendamentos_d2_pendentes_filtra_por_data_e_predicao_existente(d
         explicacao_shap=[{"feature": "historico_noshow", "contribuicao": 0.4}],
         model_version="abc123",
     )
+    # Quem já recebeu lembrete sem predição (quarentena) também não volta.
+    repositories.marcar_lembrete_enviado(agendamento_d1["id"])
 
-    pendentes_apos_predicao = repositories.buscar_agendamentos_d2_pendentes(hoje)
-    assert pendentes_apos_predicao == []
+    assert repositories.buscar_agendamentos_d2_pendentes(hoje) == []
+
+
+@pytest.mark.integracao
+def test_desfecho_so_e_gravado_para_consulta_de_hoje_ou_anterior(db):
+    import db.repositories as repositories
+
+    _, de_hoje = _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-DESF-0")
+    _, de_amanha = _criar_paciente_e_agendamento(repositories, dias=1, id_externo="EXT-DESF-1")
+
+    gravado = repositories.atualizar_status_agendamento(de_hoje["id"], "no_show")
+    assert gravado["status"] == "no_show"
+    with pytest.raises(repositories.DesfechoForaDePrazo):
+        repositories.atualizar_status_agendamento(de_amanha["id"], "no_show")
+
+    linha = db.table("agendamentos").select("status").eq("id", de_amanha["id"]).execute().data
+    assert linha[0]["status"] == "agendado"
 
 
 @pytest.mark.integracao

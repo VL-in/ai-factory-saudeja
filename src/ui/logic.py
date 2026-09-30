@@ -386,11 +386,37 @@ STATUS_NO_SHOW = "no_show"
 STATUS_CANCELADO = "cancelado"
 
 
-def atualizar_status_agendamento(id_agendamento: str, status: str) -> None:
+class ErroDesfechoForaDePrazo(Exception):
+    """Desfecho pedido para consulta que ainda não aconteceu."""
+
+
+def pode_registrar_desfecho(data_hora_agendada: datetime, hoje: date | None = None) -> bool:
+    """Desfecho só para consulta de hoje ou anterior (revisão do Passo 10):
+    no-show marcado numa consulta futura é rótulo que não aconteceu -- entra
+    no re-treino e infla o `historico_noshow` dos próximos cadastros. A data é
+    a da clínica, não a UTC do banco."""
+    return data_hora_agendada.astimezone(fuso_da_clinica()).date() <= (
+        hoje or hoje_na_clinica()
+    )
+
+
+def atualizar_status_agendamento(
+    id_agendamento: str, status: str, data_hora_agendada: datetime | None = None
+) -> None:
     """Registra o desfecho real de um agendamento, acionado pela aba "Fila
-    do dia" (Passo 9.0)."""
+    do dia" (Passo 9.0). A regra do prazo vale nos dois lados: aqui, quando a
+    tela informa a data, e no próprio UPDATE do repositório, que filtra por
+    data e não depende de quem chama."""
+    if data_hora_agendada is not None and not pode_registrar_desfecho(data_hora_agendada):
+        raise ErroDesfechoForaDePrazo(
+            "O desfecho só pode ser registrado no dia da consulta ou depois."
+        )
     try:
         repositories.atualizar_status_agendamento(id_agendamento, status)
+    except repositories.DesfechoForaDePrazo as exc:
+        raise ErroDesfechoForaDePrazo(
+            "O desfecho só pode ser registrado no dia da consulta ou depois."
+        ) from exc
     except Exception as exc:
         _relatar_falha_persistencia(exc, "Falha ao registrar desfecho do agendamento")
 
@@ -476,6 +502,12 @@ def proxima_data_disponivel(a_partir_de: date | None = None) -> date:
     return agenda_clinica.proximo_dia_valido(a_partir_de or hoje_na_clinica())
 
 
+def data_maxima_de_consulta(hoje: date | None = None) -> date:
+    """Último dia que o cadastro oferece (`agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS`)."""
+    prazo = timedelta(days=agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS)
+    return (hoje or hoje_na_clinica()) + prazo
+
+
 def dias_ate_consulta(data_consulta: date, hoje: date | None = None) -> int:
     """`dias_entre_agendamento_consulta` do ponto de vista do cadastro: o
     agendamento está sendo feito AGORA, então o valor é derivado da data
@@ -558,6 +590,11 @@ def cadastrar_paciente_e_agendamento(
     if not telefone_valido(telefone):
         raise ErroValidacaoCadastro(
             "Telefone inválido -- informe DDD + número (ex. (11) 98765-4321)."
+        )
+    if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje_na_clinica()):
+        raise ErroValidacaoCadastro(
+            "Data da consulta inválida -- escolha entre hoje e "
+            f"{agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS} dias à frente."
         )
     if not agenda_clinica.horario_valido(data_consulta, hora_consulta):
         raise ErroValidacaoCadastro(

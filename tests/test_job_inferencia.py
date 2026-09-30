@@ -159,6 +159,17 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
 
     predicoes = db.table("predicoes").select("*").execute().data
     por_agendamento = {p["id_agendamento"]: p for p in predicoes}
+    # A probabilidade GRAVADA tem de ser a do payload local. Comparar só a
+    # ordem entre os dois pacientes (como este teste fazia) deixava passar o
+    # bug de fuso da revisão do Passo 10: lido do banco em UTC, o `horario`
+    # dos dois deslocava 3h junto, e a ordem se mantinha com a probabilidade
+    # errada.
+    assert float(por_agendamento[agendamento_alto["id"]]["probabilidade"]) == pytest.approx(
+        max(prob_a, prob_b)
+    )
+    assert float(por_agendamento[agendamento_baixo["id"]]["probabilidade"]) == pytest.approx(
+        min(prob_a, prob_b)
+    )
     assert por_agendamento[agendamento_alto["id"]]["classe_prevista"] == 1
     assert por_agendamento[agendamento_baixo["id"]]["classe_prevista"] == 0
     assert por_agendamento[agendamento_alto["id"]]["explicacao_shap"]
@@ -168,6 +179,12 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
     status_por_agendamento = {m["id_agendamento"]: m["status_envio"] for m in mensagens}
     assert status_por_agendamento[agendamento_alto["id"]] == "enviado"
     assert status_por_agendamento[agendamento_baixo["id"]] == "nao_enviado"
+
+    lembrete = {
+        a["id"]: a["lembrete_enviado"]
+        for a in db.table("agendamentos").select("id, lembrete_enviado").execute().data
+    }
+    assert lembrete == {agendamento_alto["id"]: True, agendamento_baixo["id"]: False}
 
 
 @pytest.mark.integracao
@@ -203,6 +220,7 @@ def test_job_sem_agendamentos_d2_nao_toca_mensageria(db):
         "agendamentos_encontrados": 0,
         "predicoes_gravadas": 0,
         "mensagens_disparadas": 0,
+        "lembretes_sem_predicao": 0,
         "erros": [],
     }
     assert espiao.chamadas == []

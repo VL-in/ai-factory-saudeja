@@ -8,6 +8,8 @@ from datetime import date
 
 import pandas as pd
 
+from config_projeto import fuso_da_clinica
+
 COLUNA_TIMESTAMP = "data_hora_agendada"
 
 
@@ -31,6 +33,11 @@ def extrair_features_temporais(df):
     # mutariam o df cru que receberam de fora.
     df = df.copy()
     timestamp = pd.to_datetime(df[COLUNA_TIMESTAMP])
+    # Timestamp com fuso (vindo do banco, em UTC) vira hora da clínica antes de
+    # extrair dia/hora -- o treino aprendeu a grade local (8h-18h). Sem fuso,
+    # já é local (dataset histórico). Ver config_projeto.para_horario_da_clinica.
+    if timestamp.dt.tz is not None:
+        timestamp = timestamp.dt.tz_convert(fuso_da_clinica())
     df["dia_de_semana"] = timestamp.dt.dayofweek  # 0=segunda ... 6=domingo
     df["horario"] = timestamp.dt.hour             # 0-23 (minutos descartados de proposito)
     return df

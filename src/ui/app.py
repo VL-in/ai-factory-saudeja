@@ -223,6 +223,10 @@ def _registrar_desfecho(item):
     st.write(f"**Registrar desfecho de {item.rotulo_paciente}**")
     st.caption(f"Status atual: `{item.status}`")
 
+    if not logic.pode_registrar_desfecho(item.data_hora_agendada):
+        st.info("O desfecho só pode ser registrado no dia da consulta ou depois.")
+        return
+
     col1, col2, col3 = st.columns(3)
     acoes = (
         (col1, "Consulta realizada", logic.STATUS_CONCLUIDO),
@@ -238,8 +242,10 @@ def _registrar_desfecho(item):
             disabled=item.status == status,
         ):
             try:
-                logic.atualizar_status_agendamento(item.id_agendamento, status)
-            except logic.ErroPersistencia as exc:
+                logic.atualizar_status_agendamento(
+                    item.id_agendamento, status, data_hora_agendada=item.data_hora_agendada
+                )
+            except (logic.ErroPersistencia, logic.ErroDesfechoForaDePrazo) as exc:
                 st.error(f"Não foi possível registrar o desfecho: {exc}")
             else:
                 st.success(f"Desfecho registrado: {rotulo.lower()}.")
@@ -506,7 +512,13 @@ def _visao_paciente():
     # oferecer só os horários que a clínica atende naquele dia (seg-sex,
     # sábado de manhã, nunca domingo) -- dentro de um form isso só
     # atualizaria no submit, um passo tarde demais.
-    data_consulta = st.date_input("Data da consulta", value=logic.proxima_data_disponivel())
+    hoje = logic.hoje_na_clinica()
+    data_consulta = st.date_input(
+        "Data da consulta",
+        value=logic.proxima_data_disponivel(),
+        min_value=hoje,
+        max_value=logic.data_maxima_de_consulta(hoje),
+    )
     horarios = logic.horarios_disponiveis(data_consulta)
     if not horarios:
         st.warning("A clínica não atende aos domingos -- escolha outra data.")

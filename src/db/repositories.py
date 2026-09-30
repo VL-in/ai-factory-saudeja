@@ -136,19 +136,29 @@ _COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
 
 
 def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
-    """Agendamentos de `data_referencia + 2 dias` (D-2, ver
-    architecture.md/glossário) ainda sem predição gravada -- o job (Passo 6)
-    roda uma vez ao dia e não deve reprocessar quem já tem `predicoes`.
+    """Agendamentos ainda `agendado`, **de amanhã até D+2**, sem predição
+    gravada e sem lembrete já enviado -- a fila do job diário (Passo 6).
 
-    Seleciona só as colunas que o job de inferência (`construir_features`)
-    de fato consome -- de `agendamentos` e do `pacientes` embutido
-    (data_nascimento, sexo) -- em vez de `select("*, pacientes(*)")`: evita trafegar/desserializar
-    colunas sem uso (ex. `criado_em`, `status`) numa consulta que roda sobre a
-    fila inteira do dia. O embed depende do índice em `agendamentos.id_paciente`
-    (ver migration `20260920000000_idx_agendamentos_id_paciente.sql`) para o
-    join não fazer full scan de `pacientes`."""
+    A janela era exatamente D+2 até a revisão do Passo 10 (2026-09-29), e isso
+    tinha dois buracos: (a) se o cron falhasse ou fosse descartado num dia, os
+    pacientes daquele dia nunca eram preditos -- no dia seguinte já estavam em
+    D+1, fora da janela; (b) um agendamento feito com menos de dois dias de
+    antecedência nunca entrava em janela nenhuma. Com [amanhã, D+2], um dia
+    perdido é recuperado sozinho na execução seguinte. Hoje fica de fora: o
+    lembrete no próprio dia da consulta chegaria tarde demais para servir.
+
+    O filtro é idempotente em sequência: quem já tem `predicoes` ou já recebeu
+    lembrete (`lembrete_enviado`, inclusive o enviado sem predição por dado
+    inválido) não volta. Um agendamento em quarentena cujo envio falhou volta
+    no dia seguinte, e é o que se quer -- é uma nova tentativa de envio.
+
+    Seleciona só as colunas que o job consome, em vez de
+    `select("*, pacientes(*)")`. O embed depende do índice em
+    `agendamentos.id_paciente` (migration
+    `20260920000000_idx_agendamentos_id_paciente.sql`)."""
     client = obter_client()
-    inicio, fim = _intervalo_do_dia(data_referencia + timedelta(days=2))
+    inicio, _ = _intervalo_do_dia(data_referencia + timedelta(days=1))
+    _, fim = _intervalo_do_dia(data_referencia + timedelta(days=2))
 
     agendamentos = (
         client.table("agendamentos")
@@ -156,6 +166,8 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
         .gte("data_hora_agendada", inicio)
         .lt("data_hora_agendada", fim)
         .eq("status", "agendado")
+        .eq("lembrete_enviado", False)
+        .order("data_hora_agendada")
         .execute()
         .data
     )
@@ -168,6 +180,18 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
     )
     ids_com_predicao = {p["id_agendamento"] for p in predicoes_existentes}
     return [a for a in agendamentos if a["id"] not in ids_com_predicao]
+
+
+def marcar_lembrete_enviado(id_agendamento: str) -> None:
+    """Grava no próprio agendamento que o paciente recebeu lembrete (revisão
+    do Passo 10). Em `agendamentos`, e não só em `mensagens_disparadas`, por
+    dois motivos: `mensagens_disparadas` é purgada em 365 dias (LGPD §5), e o
+    re-treino precisa do dado enquanto o agendamento existir -- o SMS é uma
+    intervenção que muda o desfecho (feedback loop); e é o filtro que impede
+    reenvio na janela de três dias do job."""
+    obter_client().table("agendamentos").update({"lembrete_enviado": True}).eq(
+        "id", id_agendamento
+    ).execute()
 
 
 def gravar_predicao(
@@ -216,33 +240,45 @@ def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> di
 STATUSES_DESFECHO = ("concluido", "no_show", "cancelado")
 
 
-def atualizar_status_agendamento(id_agendamento: str, status: str) -> dict:
-    """Registra o desfecho real de um agendamento (Passo 9.0), acionado pela
-    aba "Fila do dia". Sem isto, `agendamentos.status` nunca sai de
-    'agendado': a coluna aceita 'no_show' desde a migration
-    `20260920010000_cadastro_pacientes.sql` e `contar_no_shows_anteriores` já
-    lê dela, mas nada no produto jamais escreveu esse valor -- o
-    `historico_noshow` automático do cadastro só passa a funcionar de
-    verdade a partir daqui. Também é a fonte, via `export_treino.py`, do
-    dataset real que alimenta o gate de re-treino mensal (Passo 9.1): sem
-    desfecho registrado, o re-treino reproduziria sempre a mesma métrica.
+class DesfechoForaDePrazo(Exception):
+    """Tentativa de registrar desfecho de consulta que ainda não aconteceu."""
 
-    Não revalida `status` contra `STATUSES_DESFECHO` aqui -- o check
-    constraint do Postgres já rejeita valor fora do domínio (mesmo critério
-    já usado para `sexo`/`historico_noshow` no schema)."""
+
+def atualizar_status_agendamento(
+    id_agendamento: str, status: str, hoje: date | None = None
+) -> dict:
+    """Registra o desfecho real de um agendamento (Passo 9.0), acionado pela
+    aba "Fila do dia". É a fonte do `historico_noshow` automático do cadastro
+    e, via `export_treino.py`, do dataset real do re-treino mensal (Passo 9.1).
+
+    **Só para consulta de hoje ou anterior** (revisão do Passo 10): marcar
+    no-show numa consulta futura gravaria um rótulo que não aconteceu no
+    dataset de treino e ainda inflaria o `historico_noshow` dos próximos
+    cadastros do paciente. A UI já desabilita os botões; aqui é a defesa em
+    profundidade -- o filtro de data vai no próprio UPDATE, então não há
+    janela entre checar e gravar. Nenhuma linha afetada vira erro explícito.
+
+    Não revalida `status` contra `STATUSES_DESFECHO` -- o check constraint do
+    Postgres já rejeita valor fora do domínio."""
     client = obter_client()
+    _, fim_de_hoje = _intervalo_do_dia(hoje or hoje_na_clinica())
     resposta = (
         client.table("agendamentos")
         .update({"status": status})
         .eq("id", id_agendamento)
+        .lt("data_hora_agendada", fim_de_hoje)
         .execute()
     )
+    if not resposta.data:
+        raise DesfechoForaDePrazo(
+            "desfecho só pode ser registrado para consulta de hoje ou anterior"
+        )
     return resposta.data[0]
 
 
 _COLUNAS_AGENDAMENTO_PARA_EXPORT = (
     "id, especialidade, distancia_km, data_hora_agendada, "
-    "dias_entre_agendamento_consulta, status, "
+    "dias_entre_agendamento_consulta, status, lembrete_enviado, "
     "pacientes(id_paciente_externo, data_nascimento, sexo)"
 )
 

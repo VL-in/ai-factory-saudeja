@@ -34,8 +34,8 @@ stages:
       size: 236
     - path: src/config_projeto.py
       hash: md5
-      md5: 7ea1d495f0e3d32694af476372ec01f9
-      size: 2913
+      md5: 00458f2cf3374cff97a4ede1b2b274db
+      size: 5024
     - path: src/preprocess.py
       hash: md5
       md5: 707efc2644c66857f83109d1549dcede
@@ -90,12 +90,12 @@ stages:
       size: 236
     - path: src/config_projeto.py
       hash: md5
-      md5: 7ea1d495f0e3d32694af476372ec01f9
-      size: 2913
+      md5: 00458f2cf3374cff97a4ede1b2b274db
+      size: 5024
     - path: src/features.py
       hash: md5
-      md5: c031a16c040eabb8357daa7045d8262f
-      size: 1592
+      md5: 5e13bac0465855ef394dbf7251de6bb2
+      size: 1986
     - path: src/preprocess.py
       hash: md5
       md5: 707efc2644c66857f83109d1549dcede
@@ -153,8 +153,8 @@ stages:
       size: 236
     - path: src/config_projeto.py
       hash: md5
-      md5: 7ea1d495f0e3d32694af476372ec01f9
-      size: 2913
+      md5: 00458f2cf3374cff97a4ede1b2b274db
+      size: 5024
     - path: src/validate.py
       hash: md5
       md5: 30610c0fd328faed4357bf4eb5626e02

@@ -8,6 +8,23 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
+## [v1.12] (Vanessa + Claude) - 2026-09-29
+
+### Corrigido
+- **O lembrete por SMS informava o horário da consulta 3 horas adiantado** (ex.: "às 21:00" para uma consulta das 18:00). O banco devolve data e hora em UTC, e o job diário não as convertia para o horário da clínica.
+- **A predição do job diário usava esse mesmo horário deslocado.** Uma consulta das 18h era avaliada como se fosse às 21h, horário que o modelo nunca viu no treino: para o mesmo paciente, a probabilidade de falta caía de 0,48 para 0,24. As predições gravadas antes desta versão carregam esse erro.
+- **O dataset de re-treino recebia as consultas reais com o horário em UTC.** A exportação passa a gravar o horário da clínica, o mesmo formato do dataset histórico.
+- **Um agendamento com dado inválido não interrompe mais a fila do dia.** Antes, alguns tipos de erro abortavam o job e os pacientes seguintes ficavam sem predição.
+
+### Modificado
+- O job diário passa a considerar as consultas **de amanhã até daqui a dois dias** que ainda não têm predição, em vez de só as de daqui a dois dias. Um dia em que o job não rodou é recuperado na execução seguinte, e agendamentos feitos com um dia de antecedência também recebem predição.
+- **Paciente que não pôde ser predito recebe o lembrete mesmo assim**, como exceção. O envio fica registrado com o status `enviado_sem_predicao`, separado do envio por risco alto.
+- O cadastro só aceita consulta **entre hoje e 180 dias à frente**. Antes não havia limite, e dava para agendar no passado.
+- O desfecho ("realizada", "faltou", "cancelado") só pode ser registrado **no dia da consulta ou depois**. Na fila de uma data futura, a tela explica isso no lugar dos botões.
+
+### Adicionado
+- Coluna `agendamentos.lembrete_enviado` (migration `20260929000000_lembrete_enviado.sql`), que registra se o paciente recebeu lembrete. O re-treino precisa dessa informação para distinguir "compareceu" de "compareceu porque foi lembrado". A coluna também entra no dataset de re-treino, mas ainda não é usada como feature. **Aplicar no projeto remoto com `supabase db push` antes de subir o código.**
+
 ## [v1.11] (Vanessa + Claude) - 2026-09-28
 
 ### Adicionado

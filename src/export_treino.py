@@ -25,7 +25,7 @@ guardado automaticamente por
 """
 import pandas as pd
 
-from config_projeto import caminho_de_env
+from config_projeto import caminho_de_env, para_horario_da_clinica
 from db import repositories
 from features import calcular_idade
 
@@ -45,6 +45,12 @@ COLUNAS_SAIDA = [
     "historico_noshow",
     "no_show",
     "data_hora_agendada",
+    # Se o paciente recebeu lembrete antes da consulta (revisão do Passo 10):
+    # o SMS é uma intervenção, e sem este registro o re-treino aprenderia que
+    # o perfil de alto risco "comparece" justamente porque foi lembrado
+    # (feedback loop). Não é feature -- `preprocess.py` não o seleciona --, é o
+    # dado que permite tratar o efeito depois. Vazio na semente (desconhecido).
+    "lembrete_enviado",
 ]
 
 
@@ -90,7 +96,13 @@ def montar_dataset_producao(agendamentos: list[dict] | None = None) -> pd.DataFr
                 "dias_entre_agendamento_consulta": a["dias_entre_agendamento_consulta"],
                 "status": a["status"],
                 "no_show": int(a["status"] == "no_show"),
-                "data_hora_agendada": pd.Timestamp(a["data_hora_agendada"]),
+                # Hora da CLÍNICA, não a UTC que o Postgres devolve: a semente
+                # guarda hora local, e misturar as duas ensinaria ao modelo
+                # horários (11h-21h) que a clínica não atende.
+                "data_hora_agendada": pd.Timestamp(
+                    para_horario_da_clinica(a["data_hora_agendada"])
+                ),
+                "lembrete_enviado": int(bool(a.get("lembrete_enviado"))),
             }
         )
 

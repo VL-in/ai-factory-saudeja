@@ -50,6 +50,24 @@ def hoje_na_clinica() -> date:
     return datetime.now(tz=fuso_da_clinica()).date()
 
 
+def para_horario_da_clinica(valor) -> datetime:
+    """Data/hora de consulta no fuso da clínica, venha de onde vier.
+
+    O Postgres devolve `timestamptz` normalizado em UTC ("...T21:00:00+00:00"
+    para uma consulta das 18h em São Paulo). Lido sem conversão, o `horario`
+    que o modelo vê fica 3h adiantado (21, que o treino nunca viu), o export
+    grava a hora UTC no dataset de treino e o SMS informa o horário errado ao
+    paciente (revisão do Passo 10, 2026-09-29). Valor **sem** fuso é tratado
+    como já local: é o formato do dataset histórico e dos testes."""
+    if isinstance(valor, str):
+        valor = datetime.fromisoformat(valor)
+    elif hasattr(valor, "to_pydatetime"):  # pd.Timestamp
+        valor = valor.to_pydatetime()
+    if valor.tzinfo is None:
+        return valor.replace(tzinfo=fuso_da_clinica())
+    return valor.astimezone(fuso_da_clinica())
+
+
 RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS = 365
 
 
