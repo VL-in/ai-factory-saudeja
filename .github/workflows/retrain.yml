@@ -7,14 +7,18 @@
 # exigem credencial (remote do DVC, git, Healthchecks) e que por isso nao
 # entram no modulo Python.
 #
-# Tres desfechos, lidos do codigo de saida do gate:
-#   0 -> promovido:  dvc push + branch + PR automatico (revisao humana leve)
-#   1 -> bloqueado:  nada e' publicado, o job FALHA (notificacao nativa do
-#                    GitHub) e o comparativo fica no summary + artifact
+# Quatro desfechos, lidos do codigo de saida do gate:
+#   0 -> promovido:  dvc push + branch + PR automatico (revisao humana leve),
+#                    com o CI disparado no PR por workflow_dispatch
+#   1 -> bloqueado:  regressao, piso absoluto de roc_auc ou suite de sanidade
+#                    (Passo 10.4). Nada e' publicado, o job FALHA (notificacao
+#                    nativa do GitHub) e o comparativo fica no summary + artifact
 #   2 -> sem dado novo: dataset com o mesmo hash, nada foi re-treinado. Tambem
 #                    FALHA, por decisao da autora (2026-09-21): um mes sem
 #                    desfecho registrado e' um problema de operacao da clinica
 #                    que precisa aparecer, nao uma nao-noticia.
+#   3 -> pipeline falhou: em geral o stage validate_data (Passo 10.3) barrou o
+#                    dataset ANTES de treinar -- o motivo vai para o summary.
 #
 # Por que o job nao termina no passo do gate: os codigos 1 e 2 precisam de
 # tratamento diferente (summary, ping, artifact) ANTES de o job falhar. O
@@ -23,16 +27,19 @@ name: Re-treino mensal (gate de promocao)
 
 on:
   schedule:
-    # Dia 1 de cada mes, 06:00 UTC = 03:00 America/Sao_Paulo (SLO 5: 100% dos
-    # meses). Workflow agendado e' desativado pelo GitHub depois de 60 dias
-    # sem atividade no repositorio -- e' exatamente isso que o ping do
-    # Healthchecks no fim protege (ADR-006).
-    - cron: "0 6 1 * *"
+    # Dia 1 de cada mes, 06:17 UTC = 03:17 America/Sao_Paulo (SLO 5: 100% dos
+    # meses). Minuto "quebrado" de proposito: o GitHub atrasa e pode descartar
+    # eventos agendados no inicio da hora (achado 12 da revisao do Passo 10).
+    # Workflow agendado e' desativado pelo GitHub depois de 60 dias sem
+    # atividade no repositorio -- e' isso que o ping do Healthchecks no fim
+    # protege (ADR-006).
+    - cron: "17 6 1 * *"
   workflow_dispatch:
 
 permissions:
   contents: write        # branch de promocao
   pull-requests: write   # PR automatico
+  actions: write         # `gh workflow run ci.yml` no PR de promocao (achado 6)
 
 concurrency:
   # Dois re-treinos simultaneos disputariam o mesmo champion_metrics.json.
@@ -58,9 +65,9 @@ jobs:
       OBSERVABILIDADE_ATIVA: "false"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.10"   # mesma minor da imagem de treino (dockerfile)
           cache: pip
@@ -83,7 +90,10 @@ jobs:
 
       - name: Exportar desfechos reais registrados pela clinica (Passo 9.0)
         # Remonta data/consultas-treino.csv = semente intocada + producao real,
-        # com historico_noshow point-in-time e sem telefone.
+        # sem telefone, com o historico_noshow gravado no cadastro (o que o
+        # modelo viu em producao) e sem as linhas fora do contrato de features
+        # (Passo 10.3). Mede tambem a completude de rotulo -- consultas
+        # passadas sem desfecho -- e a publica no summary.
         run: python src/export_treino.py
 
       - name: Versionar o dataset remontado
@@ -95,7 +105,9 @@ jobs:
         id: gate
         # O `dvc repro` daqui builda a imagem de treino e sobe o mlflow-server
         # via docker compose -- sem cache de layer entre runs, sao alguns
-        # minutos por ciclo. Aceitavel para algo mensal.
+        # minutos por ciclo. Aceitavel para algo mensal. O primeiro stage e' o
+        # validate_data (Passo 10.3): dataset quebrado para aqui, antes de
+        # treinar, e o gate sai com codigo 3 e o motivo no summary.
         run: |
           set +e
           python src/retrain_gate.py --relatorio-json "$RUNNER_TEMP/gate-report.json"
@@ -109,7 +121,7 @@ jobs:
         # destruido junto com o runner (ADR-006 -- o coletor nao pode morar
         # dentro daquilo que ele mede).
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gate-report
           path: ${{ runner.temp }}/gate-report.json
@@ -132,10 +144,12 @@ jobs:
         # do DVC, coberto por *.pkl no .gitignore, e chega ao Space pelo
         # `dvc pull` do deploy.yml.
         #
-        # Ressalva conhecida: PR aberto com o GITHUB_TOKEN nao dispara outros
-        # workflows, entao o ci.yml (Passo 10) nao roda sozinho neste PR. O
-        # merge, sim, dispara o deploy.yml (evento de push feito por humano).
-        # Se rodar o CI no proprio PR passar a importar, troque por um PAT.
+        # PR aberto com o GITHUB_TOKEN nao dispara outros workflows -- o ci.yml
+        # nao rodaria sozinho neste PR, e com `main` protegida exigindo o check
+        # o PR ficaria pendente para sempre. A excecao que a documentacao abre
+        # para esse token e' o workflow_dispatch: o ultimo comando abaixo
+        # dispara o CI no mesmo commit, o que satisfaz a protecao sem PAT
+        # (achado 6). O merge, feito por humano, dispara o deploy.yml.
         run: |
           set -euo pipefail
           branch="retrain/$(date -u +%Y-%m)-${GITHUB_RUN_NUMBER}"
@@ -156,6 +170,11 @@ jobs:
             echo '|---|---:|---:|---:|---:|'
             jq -r '.comparacoes[] | "| `\(.metrica)` | \(.campeao) | \(.desafiante) | \(.delta) | \(.tolerancia) |"' "$relatorio"
             echo
+            # Passo 10.4: o numero que liga o modelo ao custo de mensageria.
+            echo "**Taxa de disparo projetada no fold de teste:** $(jq -r 'if .taxa_disparo_projetada == null then "n/d" else "\(.taxa_disparo_projetada * 100 | floor)%" end' "$relatorio")"
+            echo
+            jq -r '.avisos[] | "> **Aviso:** \(.)"' "$relatorio"
+            echo
             echo "Comparativo completo e avisos: [run #${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
             echo
             echo "O merge deste PR em \`main\` dispara o \`deploy.yml\` (Passo 10), que faz \`dvc pull\` do modelo promovido e sincroniza o HF Space."
@@ -166,6 +185,8 @@ jobs:
             --body-file "$RUNNER_TEMP/pr-body.md" \
             --base "${GITHUB_REF_NAME}" \
             --head "$branch"
+
+          gh workflow run ci.yml --ref "$branch"
 
       - name: Ping do dead-man's-switch (sucesso)
         if: steps.gate.outputs.codigo == '0' && env.HEALTHCHECKS_RETRAIN_URL != ''
@@ -184,5 +205,5 @@ jobs:
         # o registro ja' ter sido publicado.
         if: steps.gate.outputs.codigo != '0'
         run: |
-          echo "::error::gate de re-treino terminou com codigo ${{ steps.gate.outputs.codigo }} (1=regressao, 2=nenhum re-treino efetivo) -- ver o resumo do run"
+          echo "::error::gate de re-treino terminou com codigo ${{ steps.gate.outputs.codigo }} (1=bloqueado: regressao, piso ou sanidade; 2=nenhum re-treino efetivo; 3=pipeline falhou, ex. validate_data) -- ver o resumo do run"
           exit 1

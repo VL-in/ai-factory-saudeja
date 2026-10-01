@@ -27,12 +27,20 @@ RUN chmod +x ./entrypoint.sh
 # de proposito -- melhor que subir um container sem modelo.
 COPY data/model.pkl /app/data/model.pkl
 
+# STREAMLIT_BROWSER_SERVER_ADDRESS (Passo 10.5): sem ele, o Streamlit em modo
+# headless consulta um servico externo para descobrir o IP publico da maquina
+# e o imprime no log ("External URL: http://<ip>:7860") -- uma requisicao de
+# saida que o produto nao precisa, e um IP num log que o CI varre com
+# scripts/auditoria_lgpd.py e que, no Actions, e' publico. O valor so' muda a
+# URL impressa e o CORS de upload de arquivo, que a UI nao usa; conexoes da
+# propria origem (o Space) continuam permitidas.
 ENV MODEL_PATH=/app/data/model.pkl \
     APP_ENV=prod \
     PREDICT_BACKEND=processo \
     API_PORT=8000 \
     UI_PORT=7860 \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    STREAMLIT_BROWSER_SERVER_ADDRESS=localhost
 
 # 7860 e a porta que o HF Space publica por padrao (SDK Docker) -- a UI fica
 # nela. 8000 e a API; ver a ressalva sobre porta unica no Space em

@@ -6,6 +6,7 @@ Não testam lógica de negócio -- servem para pegar "drift" de configuração
 ausente).
 """
 import ast
+import re
 import subprocess
 from pathlib import Path
 
@@ -60,6 +61,11 @@ def test_dvc_yaml_deps_e_outs_existem_no_repo():
     for nome_stage, stage in stages.items():
         for dep in stage.get("deps", []):
             if dep in outs_de_outros_stages:
+                continue
+            # Dataset versionado por DVC (`<arquivo>.dvc` no git, conteúdo no
+            # remote): no CI só o model.pkl é baixado (Passo 10.5), e o que
+            # garante a existência do dado é o próprio `.dvc`.
+            if (REPO_ROOT / f"{dep}.dvc").exists():
                 continue
             caminho = REPO_ROOT / dep
             assert caminho.exists(), (
@@ -389,4 +395,82 @@ def test_architecture_md_sem_placeholder_generico():
     texto = (REPO_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
     assert "[e.g.," not in texto, (
         "docs/architecture.md ainda contém placeholder(s) '[e.g., ...]' não preenchido(s)"
+    )
+
+
+# --- workflows do GitHub Actions (Passo 10.5) ----------------------------------
+
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+
+
+def _passos(workflow: str) -> list[dict]:
+    conteudo = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
+    return [passo for job in conteudo["jobs"].values() for passo in job.get("steps", [])]
+
+
+def test_actions_de_terceiros_fixadas_por_sha():
+    """Achado 14: a action de deploy recebe o HF_TOKEN; uma tag pode ser
+    movida para outro código, um SHA não. O Dependabot atualiza os SHAs."""
+    soltas = [
+        f"{arquivo.name}: {passo['uses']}"
+        for arquivo in WORKFLOWS.glob("*.yml")
+        for passo in _passos(arquivo.name)
+        if "uses" in passo
+        and not passo["uses"].startswith("./")
+        and not re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", passo["uses"])
+    ]
+    assert soltas == [], f"actions sem SHA fixo: {soltas}"
+
+
+def test_dvc_pull_sempre_com_alvo_fora_do_re_treino():
+    """Achado 1: `dvc pull` sem alvo traria o dataset de treino -- e, no
+    deploy, ele iria para o Space junto. Só o re-treino precisa do dado."""
+    sem_alvo = [
+        f"{arquivo.name}: {linha.strip()}"
+        for arquivo in WORKFLOWS.glob("*.yml")
+        if arquivo.name != "retrain.yml"
+        for linha in arquivo.read_text(encoding="utf-8").splitlines()
+        if re.search(r"\bdvc pull\s*$", linha)
+    ]
+    assert sem_alvo == [], f"dvc pull sem alvo: {sem_alvo}"
+
+
+def test_deploy_sobe_o_staging_e_nao_o_checkout():
+    sync = [p for p in _passos("deploy.yml") if "hub-sync" in p.get("uses", "")]
+    assert len(sync) == 1
+    assert sync[0]["with"]["subdirectory"] == "build/space"
+
+
+def test_deploy_migra_o_banco_antes_do_sync_e_depois_da_guarda_do_campeao():
+    """Passo 10.1: migration antes do sync (o Space rebuilda ao receber os
+    arquivos). Guarda do campeão antes da migration: deploy que não vai
+    acontecer não deixa o banco migrado."""
+    nomes = [p.get("name", p.get("uses", "")) for p in _passos("deploy.yml")]
+    guarda = next(i for i, n in enumerate(nomes) if "campeao" in n)
+    migracao = next(i for i, n in enumerate(nomes) if "Migrations" in n)
+    sync = next(i for i, n in enumerate(nomes) if "hub-sync" in n or "Sync" in n)
+    assert guarda < migracao < sync
+
+
+def test_dependencias_do_dvc_estao_em_lf_no_checkout():
+    """O DVC 3 hasheia os BYTES das dependências dos stages. Com CRLF no
+    checkout de Windows e LF no runner Linux, o md5 do dvc.lock nunca batia
+    no GitHub Actions -- o re-treino reexecutava tudo mesmo sem dado novo e o
+    código 2 do gate não disparava (achado ao implementar o Passo 10.5). O
+    `.gitattributes` força LF no checkout; este teste pega o arquivo novo que
+    um editor de Windows tenha gravado com CRLF antes de ele virar commit."""
+    dvc_yaml = yaml.safe_load((REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8"))
+    com_crlf = sorted(
+        {
+            dep
+            for stage in dvc_yaml["stages"].values()
+            for dep in stage.get("deps", [])
+            if (REPO_ROOT / dep).is_file()
+            and not (REPO_ROOT / f"{dep}.dvc").exists()
+            and b"\r\n" in (REPO_ROOT / dep).read_bytes()
+        }
+    )
+    assert com_crlf == [], (
+        f"dependências do dvc.yaml com CRLF: {com_crlf} -- converta para LF "
+        "(o .gitattributes já faz isso no checkout)"
     )

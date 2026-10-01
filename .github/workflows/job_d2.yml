@@ -1,0 +1,102 @@
+# Job de inferencia diaria D-2 (Passos 6 e 10.5 do PLANO-IMPLEMENTACAO.md).
+#
+# Roda NO RUNNER, nao no Space (decisao 2 da 2a revisao do Passo 10, emenda
+# no ADR-005 a): o job ja' e' em processo (ADR-005 b), entao roda igual fora
+# do Space; o Space hiberna, nao tem endpoint de job e so' publica uma porta;
+# e um endpoint publico que dispara SMS pago exigiria autenticacao propria.
+#
+# Consequencias aceitas, registradas no LGPD.md (2.1/9):
+#   - dado de paciente (data de nascimento, sexo, especialidade, telefone para
+#     o envio) processado num runner fora do Brasil -- operador a mais (GitHub);
+#   - o log do Actions deste repositorio e' PUBLICO: o filtro de redacao de
+#     src/logging_config.py deixa de ser defesa em profundidade e vira a ultima
+#     barreira. O job loga so' contadores e identificadores internos.
+name: Job D-2 (inferencia diaria)
+
+on:
+  schedule:
+    # 11:17 UTC = 08:17 em Sao Paulo (decisao 2: job unico de manha -- de
+    # madrugada o SMS chegaria as 3h). Minuto "quebrado" de proposito: o GitHub
+    # atrasa e pode descartar eventos agendados no inicio da hora (achado 12).
+    # Workflow agendado so' roda a partir do branch padrao.
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # OBRIGATORIO: buscar_agendamentos_d2_pendentes so' e' idempotente em
+  # sequencia (filtra quem ja' tem predicao/lembrete). Cron e dispatch
+  # simultaneos veriam a mesma fila e mandariam SMS em dobro.
+  group: job-d2
+  cancel-in-progress: false
+
+jobs:
+  job-d2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Modelo: o mesmo remote do deploy, com SAS so' de leitura.
+      DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      # Variavel, nao secret, e sem default aqui: ver o passo de checagem.
+      MESSAGING_PROVIDER: ${{ vars.MESSAGING_PROVIDER }}
+      INFOBIP_BASE_URL: ${{ secrets.INFOBIP_BASE_URL }}
+      INFOBIP_CHAVE_API: ${{ secrets.INFOBIP_CHAVE_API }}
+      INFOBIP_REMETENTE: ${{ vars.INFOBIP_REMETENTE }}
+      HEALTHCHECKS_JOB_D2_URL: ${{ secrets.HEALTHCHECKS_JOB_D2_URL }}
+      APP_ENV: prod
+    steps:
+      - name: Provedor de mensageria declarado
+        # O stub NAO e' um default inofensivo em producao: ele "envia", e o job
+        # marca agendamentos.lembrete_enviado -- que o re-treino le como "foi
+        # lembrado" (feedback loop). Rodar com stub tem de ser decisao
+        # explicita (vars.MESSAGING_PROVIDER=stub), nunca esquecimento.
+        run: |
+          case "$MESSAGING_PROVIDER" in
+            infobip|stub) echo "MESSAGING_PROVIDER=$MESSAGING_PROVIDER" ;;
+            *) echo "::error::defina a variavel MESSAGING_PROVIDER (infobip ou stub)"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Instalar dependencias
+        # api.txt (shap) + ui.txt (supabase-py) + DVC: o que o job importa, sem
+        # o ferramental de desenvolvimento.
+        run: pip install -r requirements/api.txt -r requirements/ui.txt -r requirements/dvc.txt
+
+      - name: Baixar o modelo (so' ele)
+        run: |
+          dvc remote add --local -f azure "$DVC_REMOTE_URL"
+          dvc pull data/model.pkl
+
+      - name: Rodar o job D-2
+        # main() faz, nesta ordem: pre-checagem (model.pkl e threshold sao os do
+        # campeao, banco alcancavel) ANTES de qualquer SMS; a fila [amanha, D+2];
+        # as purgas de retencao; e a pos-checagem (contabilidade da fila,
+        # quarentena sistemica) -- que define o codigo de saida. Resumo com
+        # contadores no $GITHUB_STEP_SUMMARY.
+        run: python src/jobs/inferencia_diaria.py
+
+      - name: Ping do dead-man's-switch (sucesso)
+        if: success() && env.HEALTHCHECKS_JOB_D2_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_JOB_D2_URL"
+
+      - name: Ping do dead-man's-switch (falha)
+        # O check deixa de receber o sucesso e recebe /fail, que dispara o
+        # e-mail. Se o cron nem rodar (repo inativo desativa workflow agendado),
+        # e' a AUSENCIA do ping que alerta -- e' para isso que o Healthchecks
+        # existe aqui (ADR-006).
+        if: failure() && env.HEALTHCHECKS_JOB_D2_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_JOB_D2_URL/fail" || true

@@ -1,0 +1,152 @@
+# Deploy no Hugging Face Space (Passos 10, 10.1 e 10.5 do PLANO-IMPLEMENTACAO.md).
+#
+# Ordem, num workflow so':
+#
+#   ci (reutilizado) -> dvc pull do modelo -> guarda do campeao -> staging
+#     -> supabase db push -> sync do staging para o Space
+#
+# - O CI e' o primeiro job (workflow_call): o SHA testado e' o deployado, e
+#   falha no CI deixa o deploy PULADO por construcao (achado 3).
+# - A guarda do campeao e o staging vem ANTES da migration: sao checagens sem
+#   efeito colateral, e um deploy que nao vai acontecer nao deve deixar o banco
+#   migrado.
+# - A migration vem ANTES do sync (Passo 10.1): o Space rebuilda sozinho ao
+#   receber os arquivos, entao nao ha janela depois do sync em que migrar seja
+#   seguro. Migration restritiva (drop, set not null, check mais estreito)
+#   nunca vai no mesmo deploy do codigo que a exige -- isso e' disciplina de
+#   quem escreve a migration, nao algo que este YAML consiga impedir.
+# - O sync sobe um diretorio de STAGING com lista fechada, nunca o checkout
+#   (achado 1): a action faz `hf upload` por HTTP, sem git, e nao respeita os
+#   .gitignore aninhados -- subiria .dvc/config.local (URL do remote), o cache
+#   do DVC e o dataset de treino para um Space publico fora do Brasil.
+name: Deploy (HF Space)
+
+on:
+  push:
+    branches: [main]
+    # Mudanca so' de documentacao nao rebuilda o Space (cold start, SLO §2).
+    # dvc.lock e data/champion_metrics.json NAO entram aqui: sao justamente o
+    # merge do PR de promocao do re-treino (Passo 9.1).
+    paths-ignore:
+      - "docs/**"
+  # Primeiro deploy (Passo 11) e reenvio manual.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Historico de deploys na aba Environments do GitHub (evidencia para o
+    # pitch) e o HF_TOKEN guardado so' aqui, nao no repositorio inteiro.
+    environment: production
+    concurrency:
+      group: deploy-space
+      cancel-in-progress: false # um deploy pela metade e' pior que um atrasado
+    env:
+      DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
+      # Nivel do JOB, nao so' do `db push`: o `supabase link` tambem precisa do
+      # token, do ref e da senha (achado 8). O ref e' secret pelo mesmo motivo
+      # da URL do remote do DVC: identificador de infraestrutura fora do git.
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements/dvc.txt
+
+      - name: Instalar DVC (e o PyYAML que a guarda usa para ler o threshold)
+        # O pin do PyYAML vem de requirements/base.txt -- um lugar so'.
+        run: pip install -r requirements/dvc.txt "$(grep -i '^pyyaml==' requirements/base.txt)"
+
+      - name: Baixar o modelo (so' ele)
+        run: |
+          dvc remote add --local -f azure "$DVC_REMOTE_URL"
+          dvc pull data/model.pkl
+
+      - name: So' o campeao vai para producao
+        # sha do model.pkl e decision.threshold contra data/champion_metrics.json
+        # (achado 7 e Passo 10.4): um `dvc repro` manual commitado mudaria o
+        # dvc.lock e levaria ao Space um modelo que nunca passou pelo gate.
+        run: python src/campeao.py
+
+      - name: Staging com lista fechada
+        # Derivada dos COPY de infra/deploy/dockerfile. Arquivo novo no
+        # repositorio nao vai para producao sem alguem acrescenta-lo aqui --
+        # mesmo principio da allowlist de `eventos_app` (Passo 8.5).
+        run: |
+          set -euo pipefail
+          rm -rf build/space
+          mkdir -p build/space/requirements build/space/infra/deploy build/space/data
+          cp infra/deploy/dockerfile build/space/Dockerfile
+          cp requirements/base.txt requirements/api.txt requirements/ui.txt build/space/requirements/
+          cp -r src build/space/src
+          find build/space/src -name '__pycache__' -prune -exec rm -rf {} +
+          cp params.yaml build/space/
+          cp infra/deploy/entrypoint.sh build/space/infra/deploy/
+          cp data/model.pkl build/space/data/
+          # README proprio do Space: o SDK Docker le o front-matter dele. Nao
+          # vai no README do GitHub, que renderizaria o bloco YAML como tabela.
+          cat > build/space/README.md <<'README'
+          ---
+          title: SaudeJa
+          sdk: docker
+          app_port: 7860
+          pinned: false
+          ---
+
+          Classificador de no-show do SaudeJa -- espelho de deploy gerado pelo
+          `.github/workflows/deploy.yml`. Nao edite aqui: o proximo deploy
+          sobrescreve este Space inteiro.
+          README
+
+      - name: Conferir o staging
+        # Defesa contra a lista fechada ser alargada sem querer: nada de dado
+        # de treino, config do DVC ou ambiente pode estar no que sobe.
+        run: |
+          set -euo pipefail
+          find build/space -type f | sort
+          if find build/space -type f | grep -E '\.(csv|env|dvc|db)$|/\.dvc/|config\.local'; then
+            echo "::error::o staging contem arquivo que nao pode ir para o Space"
+            exit 1
+          fi
+
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: 2.117.0 # fixa: o CLI muda o comportamento do db push entre versoes
+
+      - name: Migrations no Supabase de producao (Passo 10.1)
+        # Falha aqui (senha errada, migration quebrada) para o deploy ANTES do
+        # sync: o codigo novo nunca chega ao Space contra schema antigo.
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
+          supabase db push
+
+      - name: Sync do staging para o Space
+        uses: huggingface/hub-sync@fdffea8e04104d0bd4e3181c5feb3025f0433ff5 # v0.3.0
+        with:
+          github_repo_id: ${{ github.repository }}
+          # Variavel do environment, nao valor versionado: o id do Space e'
+          # identificador de infraestrutura.
+          huggingface_repo_id: ${{ vars.HF_SPACE_ID }}
+          hf_token: ${{ secrets.HF_TOKEN }}
+          repo_type: space
+          space_sdk: docker
+          private: "false"
+          subdirectory: build/space
+          hf_version: "2.0.0" # fixa: a action instalaria a ultima por padrao (achado 14)
