@@ -247,7 +247,7 @@ Sem isto o resto do passo é cerimonial: com `data/consultas-historicas.csv` fix
   - **Se bloquear**: `champion_metrics.json`/`model.pkl` **não mudam** (modelo anterior continua em produção por construção, não por convenção), e o workflow **falha** (exit ≠ 0). A evidência da rejeição precisa sobreviver ao workflow: o comparativo campeão × desafiante vai para o `$GITHUB_STEP_SUMMARY` e como artifact JSON do run — taguear a run no MLflow efêmero não serve, porque ele é destruído junto com o job, e isso é exatamente o que o [ADR-006](adr/adr-006-observabilidade.md) proíbe ("o coletor não pode morar dentro daquilo que ele mede"). Alerta via Healthchecks/Actions (decisão 4).
   - Caso "bootstrap" (primeiro ciclo, `champion_metrics.json` ainda não existe): promove direto, sem comparação, e cria o arquivo — registrando explicitamente que o primeiro campeão **já viola os alvos absolutos do SLO §3** (`recall_1` 0.522 < 0.75, `f1_1` 0.419 < 0.65). O gate protege contra **regressão relativa**; o gap absoluto é exceção documentada, não critério de promoção.
 - `.github/workflows/retrain.yml` (cron mensal + `workflow_dispatch` manual para teste). **Pinga o Healthchecks.io ao concluir com sucesso** (Passo 8.5): workflow agendado do GitHub é desativado automaticamente após inatividade prolongada do repositório, e sem o dead-man's-switch o re-treino mensal pode parar de rodar em silêncio — violando o SLA §5 sem que ninguém perceba (ver [ADR-006](adr/adr-006-observabilidade.md)).
-- **Fecha o loop até produção**: como o Passo 11 empacota `data/model.pkl` direto na imagem do HF Space, o merge do PR de promoção em `main` dispara o `deploy.yml` do Passo 10, que faz `dvc pull` do modelo promovido (Azure) e sincroniza o Space via `huggingface/huggingface-sync-action` — não é preciso a API em produção falar com um MLflow ao vivo em nenhum momento, nem existe um segundo mecanismo de deploy além do já usado para código.
+- **Fecha o loop até produção**: como o Passo 11 empacota `data/model.pkl` direto na imagem do HF Space, o merge do PR de promoção em `main` dispara o `deploy.yml` do Passo 10, que faz `dvc pull` do modelo promovido (Azure) e sincroniza o Space via `huggingface/hub-sync` (o antigo `huggingface-sync-action`), a partir de um diretório de staging com lista fechada — não é preciso a API em produção falar com um MLflow ao vivo em nenhum momento, nem existe um segundo mecanismo de deploy além do já usado para código.
 
 **Verificação**: `tests/test_retrain_gate.py` — duas runs MLflow fake (`sqlite:///{tmp_path}`, mesmo padrão de `test_train.py`) comparadas contra um `champion_metrics.json` de fixture, uma pior confirma bloqueio (arquivo/`model.pkl` inalterados), uma melhor confirma promoção (arquivo atualizado); caso bootstrap (sem `champion_metrics.json`) promove sem travar o primeiro ciclo; caso de regressão **dentro** da tolerância promove (prova que o número do SLO §3 está sendo lido, não hardcoded). Para 9.0: teste de que o export nunca emite coluna de PII e teste point-in-time (um paciente com `no_show` posterior à consulta exportada não pode aparecer no `historico_noshow` daquela linha). Teste de integração (`integracao`): rodar `retrain.yml` via `workflow_dispatch` numa branch de teste, confirmar que o PR automático é aberto com `champion_metrics.json`/`dvc.lock` atualizados, mergear, confirmar que o HF Space (Passo 11) rebuilda e `/health` reporta a nova `model_version`. **O ping do Healthchecks não é verificável aqui** — o check só existe a partir do Passo 11, que tem a URL pública; fica pendência declarada, como o Passo 8.5 já fez com as sondas externas.
 
@@ -484,8 +484,8 @@ jobs:
 - Quebrar um teste de propósito e confirmar que o job `deploy` aparece como **pulado** — não "não disparado", já que agora é o mesmo workflow.
 
 **Pendências** (não bloqueiam o início do passo):
-- Decisão da autora sobre o achado 5 e, com ela, as emendas no ADR-005 (a), no `architecture.md` §3.2.2 e no `LGPD.md` §2.1/§9.
-- `architecture.md` §6, o Passo 9.1 ("Fecha o loop até produção") e o Passo 11 ainda citam `huggingface/huggingface-sync-action` pelo nome antigo — atualizar junto da implementação.
+- ~~Decisão da autora sobre o achado 5 e, com ela, as emendas no ADR-005 (a), no `architecture.md` §3.2.2 e no `LGPD.md` §2.1/§9.~~ Decidido na 2ª revisão (opção a, job no runner); emendas feitas em 2026-09-30 (ADR-005, `architecture.md` §3.2.2/§6, `LGPD.md` §4/§9.1).
+- ~~`architecture.md` §6, o Passo 9.1 ("Fecha o loop até produção") e o Passo 11 ainda citam `huggingface/huggingface-sync-action` pelo nome antigo — atualizar junto da implementação.~~ Feito em 2026-09-30.
 - Secrets do `retrain.yml` ou desativação dele **antes de 2026-10-01** (ver o estado do repositório acima).
 
 ### Revisão de 2026-09-29 (2ª) — inferência só em batch e gates por camada
@@ -532,7 +532,7 @@ jobs:
 
 **Pendências operacionais**: `supabase db push` da migration nova no projeto remoto **antes** de subir o código. As predições já gravadas no remoto foram feitas com o horário deslocado.
 
-#### 10.3 — Contrato de features e gate de dados — a implementar
+#### 10.3 — Contrato de features e gate de dados — **implementado em 2026-09-30**
 
 - Módulo único de contrato (ex. `src/contrato_features.py`, pandera ou pydantic) aplicado no export, no `preprocess` e no job, com coerção explícita de tipo. Duas faixas por campo:
 
@@ -558,7 +558,7 @@ jobs:
 - Lista de especialidades do cadastro vinda de configuração, com teste de que ela está contida no mapa do modelo.
 - Na carga do modelo, conferir nomes, ordem e categóricas contra `booster_.feature_name()`.
 
-#### 10.4 — Gates do modelo — a implementar
+#### 10.4 — Gates do modelo — **implementado em 2026-09-30**
 
 - **Piso absoluto** de `roc_auc` = 0,60 (`params.yaml`, `gate.piso`), além da comparação relativa.
 - **Taxa de disparo projetada** no fold de teste: reportada no resumo e no PR de promoção, com notificação (sem bloqueio) acima de 30%, que é o "cortar 70%" do BRIEFING. O campeão atual marca 22 de 76 (29%).
@@ -570,11 +570,12 @@ jobs:
   Expectativas direcionais (mais `historico_noshow` não reduz o risco) entram só como aviso.
 - **Threshold amarrado ao campeão**: o job exige `decision.threshold` igual a `champion_metrics.decision_threshold`.
 
-#### 10.5 — Workflows — a implementar
+#### 10.5 — Workflows — **implementado em 2026-09-30**
 
 A forma resultante da 1ª revisão continua valendo, com estes acréscimos:
 - **`ci.yml`**:
   - regras `S` no `ruff`;
+  - `mypy src scripts` (10.6), logo depois do `ruff` e antes do `dvc pull`/`pytest`;
   - testes de skew e do validador de dados;
   - suíte do modelo;
   - `docker build` da imagem de deploy com smoke (`/_stcore/health`);
@@ -589,6 +590,111 @@ A forma resultante da 1ª revisão continua valendo, com estes acréscimos:
 - **SLO §1/§2**: reescritos como SLOs do batch — fila [amanhã, D+2] 100% processada até as 09h, uma execução por dia. A latência de `/predict` sai do compromisso de produção (decisão 1).
 - Emendar o ADR-005 (a) e o `architecture.md` §3.2.2/§6 com a execução no runner.
 
+#### 10.6 — Type-check estático (mypy) — **implementado em 2026-09-30**
+
+> Acrescentado em 2026-09-30, a pedido da autora. A camada "script" dos quatro gates da 2ª revisão só tinha o `ruff`, que olha cada arquivo isoladamente e não verifica tipos atravessando a fronteira entre módulos.
+
+**O que o type-check pega neste repositório — e o que não pega.** Medido contra o código atual: das ~203 funções de `src/` e `scripts/`, ~130 já declaram tipo de retorno. Sem anotação nenhuma: `train.py`, `tune.py`, `preprocess.py`, `validate.py`, `ui/app.py`, `api/main.py` e `scripts/gerar_timestamp_sintetico.py` (`api/schemas.py` aparece com zero `def` porque é só modelo Pydantic — é o arquivo mais bem tipado do repo). O código já usa genéricos nativos (`list[time]`, `dict`) e tem um único `from typing import`, então não há dívida de sintaxe a pagar antes: o mypy entra sobre um código que já está no estilo do `target-version = "py310"`.
+
+- **Não pega o bug crítico do 10.2.** Para o mypy, `datetime` naive e `datetime` com fuso são o mesmo tipo — `para_horario_da_clinica(valor) -> datetime` continuaria válida recebendo qualquer um dos dois. A proteção contra deslocamento de fuso permanece sendo o teste de regressão e a convenção de `config_projeto` registrada no `architecture.md` §8. **O type-check não deve ser anunciado como rede para fuso.**
+- **Pega a fronteira escalar entre banco/configuração e modelo**, que hoje não tem guarda nenhuma: `calcular_idade(data_nascimento: date, referencia: date)` chamada com a string que o Supabase devolve no JSON, retorno `None` de repositório usado sem checagem, chave trocada em desempacotamento. É exatamente o tipo de erro que só aparece em runtime, no job diário, sobre um paciente real.
+- **Não cobre DataFrame, e não deve tentar.** `pandas` não traz `py.typed` (o `pandas-stubs` é pacote separado e ruidoso) e `sklearn`, `shap` e `joblib` não têm stubs. Além disso `df: pd.DataFrame` não diz nada sobre colunas, dtypes ou domínio — que é precisamente o que o **10.3** garante em runtime. Divisão de trabalho resultante: **mypy na fronteira escalar, contrato do 10.3 na fronteira tabular**, sem sobreposição. Consequência prática: **não** adotar `pandas-stubs` neste passo.
+
+**Decisão de ferramenta**: `mypy`, pinado em `requirements/dev.txt` ao lado do `ruff` (versão exata resolvida na implementação). Não `pyright`/`basedpyright`: exigem Node no runner e não entram em `requirements/dev.txt`, o que quebraria a regra do §8 de que o CI roda o mesmo comando que a máquina local, sem flags extras.
+
+**Configuração**: arquivo `mypy.ini` dedicado, pelo mesmo motivo já documentado no `ruff.toml` — este repo não é um pacote Python instalável, e um `pyproject.toml` na raiz confundiria pip/build tools.
+
+- `python_version = 3.10`, alinhado ao `target-version` do `ruff`.
+- `mypy_path = src`, `explicit_package_bases = true`, `namespace_packages = true` — **obrigatórios, não estilo**: não existe um único `__init__.py` em `src/`, e `db`, `api`, `ui`, `jobs` e `messaging` são pacotes implícitos (PEP 420). Sem essas três opções o mypy deriva o nome do módulo do caminho do arquivo e `src/db/client.py` e `src/messaging/client.py` colidem no mesmo módulo `client` — o gate morre num erro de duplicata, antes de verificar tipo algum. É o mesmo problema que obrigou `src = ["src", "tests", "scripts"]` no `ruff.toml`, e a implementação deve confirmá-lo executando o mypy (ele ainda não está instalado; a colisão é dedução do layout, não medição).
+- `ignore_missing_imports` **por módulo** (`sklearn.*`, `shap.*`, `joblib`, `imblearn.*`), nunca global: assim uma dependência nova sem stub aparece como erro em vez de passar calada.
+- `types-PyYAML` em `requirements/dev.txt` (pinado): `yaml.safe_load` é a porta de entrada do `params.yaml` em `config_projeto.carregar_params`, o ponto mais central do repo a ficar sem tipo.
+- Sem ação para `numpy`, `lightgbm`, `streamlit`, `mlflow`, `supabase`, `fastapi` e `pydantic` — todos já distribuem `py.typed`.
+
+**Adoção gradual, em dois níveis** (ligar `disallow_untyped_defs` no repo inteiro de uma vez travaria o passo):
+
+| Nível | Módulos | Por quê |
+|---|---|---|
+| `disallow_untyped_defs = true` | `contrato_features.py` (nasce assim, 10.3), `config_projeto.py`, `agenda_clinica.py`, `db/client.py`, `db/repositories.py`, `export_treino.py`, `jobs/inferencia_diaria.py`, `messaging/client.py`, `observabilidade.py`, `api/schemas.py`, `retrain_gate.py` | Fronteira escalar: datas, identificadores, telefone, threshold, retorno de repositório. É onde o tipo carrega invariante de negócio e onde o erro chega ao paciente |
+| Baseline (só o que o mypy achar no código já anotado) | `train.py`, `tune.py`, `preprocess.py`, `validate.py`, `features.py`, `inference.py`, `explain.py`, `ui/`, `scripts/` | Assinaturas essencialmente `DataFrame -> DataFrame`, onde o mypy não agrega e a garantia vem do 10.3 |
+
+`tests/` fica fora do comando por ora: fixtures sem anotação e dublês trocados por `monkeypatch` geram erro em volume sem proteger invariante de produção. Reavaliar depois de o `src/` estar estável no nível 1.
+
+**Ordem obrigatória de implementação**: zerar antes de ligar o gate. O PR que adiciona o step ao `ci.yml` é o mesmo que traz `mypy src scripts` a zero erro no nível escolhido — senão o `ci.yml` nasce vermelho e bloqueia o Passo 10 inteiro, inclusive o `deploy.yml`, que depende dele. Se o volume no nível 1 for grande, **encurtar a lista fechada**, nunca afrouxar com `--ignore-errors` global.
+
+**Verificação**:
+- `mypy src scripts` passa local e no CI com o comando idêntico, sem flags extras (regra do §8).
+- Introduzir de propósito `calcular_idade("1990-01-01", hoje)` e confirmar que o CI falha nessa linha.
+- Confirmar que a colisão `db/client.py` × `messaging/client.py` **não** aparece — prova de que `mypy_path`/`explicit_package_bases` estão corretos.
+- Remover a anotação de retorno de uma função da lista fechada e confirmar que o `disallow_untyped_defs` reprova.
+- Controle negativo: um `df` sem anotação em `train.py` continua passando — o baseline é intencional, não esquecimento.
+- Confirmar que o step roda **antes** do `dvc pull`, isto é, que uma quebra de tipo falha sem consumir SAS nem baixar modelo.
+
+**Documentação a emendar junto da implementação**: `architecture.md` §8 "Code Quality Tools" (hoje cita só o `ruff`) e o README §"Lint e testes" (acrescentar a linha do `mypy` e o `mypy.ini`). Não gera ADR — é escolha de ferramental dentro de uma decisão de qualidade já registrada, não tradeoff de arquitetura.
+
+
+#### Estado: 10.1 e 10.3–10.6 implementados em 2026-09-30 — verificação do 10.2 e o que mudou em relação ao texto acima
+
+**Verificação do 10.2, antes de seguir.** Conferido contra o repositório: `ruff` limpo, 275 testes rápidos e 19 de integração verdes, `dvc status` limpo e `model.pkl` = campeão (`6430cb3315da`). Um achado, corrigido aqui: ao ampliar a quarentena para `except Exception`, o job passou a pôr `str(exc)` de **qualquer** exceção em `resultado["erros"]`, que a aba de dev exibe crua — o mesmo vetor que o Passo 8 fechou para a Infobip. Um `ValueError` de data de nascimento ilegível, por exemplo, traz a data. O motivo agora é campo + regra (`ViolacaoDoContrato`), status HTTP + `messageId` (`ErroEnvioInfobip`) ou só o nome da classe, com teste travando.
+
+**Dois achados colaterais, ambos anteriores a este passo:**
+
+1. **O re-treino no Actions nunca reconheceria "nenhum dado novo".** O DVC 3 calcula o md5 das dependências sobre os bytes do arquivo, sem normalizar fim de linha. Com `core.autocrlf=true`, o checkout da autora tinha CRLF; o do runner Linux tem LF. Nenhum md5 do `dvc.lock` bateria no runner, todo `dvc repro` reexecutaria o pipeline inteiro, e o código 2 do gate (decisão 8 do Passo 9.1) nunca dispararia — cada mês geraria uma run nova e um PR de promoção com delta zero. Corrigido: `.gitattributes` força LF em `*.py`, `*.txt`, `*.yml`, `*.yaml`, `dockerfile*` e `dvc.lock`; os arquivos de trabalho foram convertidos (nenhuma mudança de conteúdo para o git) e os quatro stages reconciliados com `dvc commit`. Os md5 do lock agora são os do blob do git, que é o que o runner vê. `tests/test_coerencia_repo.py::test_dependencias_do_dvc_estao_em_lf_no_checkout` pega o arquivo novo que um editor de Windows grave com CRLF.
+2. **`tests/test_pipeline_dvc_integracao.py` estava quebrado desde a segregação dos stages** (Passo 9): rodava a imagem de treino sem comando nenhum e falhava sem dizer por quê. Reescrito para rodar as quatro etapas do `dvc.yaml` em sequência, no container, sobre a semente. É ele que prova que o `validate_data` roda na imagem de treino.
+
+**Decisões tomadas ao implementar** (onde o texto acima não decidia, ou onde a implementação divergiu dele):
+
+| # | Tema | O que foi feito | Por quê |
+|---|---|---|---|
+| 1 | Biblioteca do contrato | Python puro (`src/contrato_features.py`), nem pandera nem pydantic | O contrato tem duas faixas por campo — recusa e **marca** — e nenhum dos dois expressa a segunda nativamente. O pydantic também não está na imagem de treino, onde o `validate_data` roda |
+| 2 | Mensagem de violação | Campo e regra, nunca o valor | Ela vai para o resultado do job, para o log público do Actions e para a aba de dev |
+| 3 | Completude de rótulo | Medida no **export**, não no `validate_data` | O stage lê o CSV, que só contém consultas com desfecho: a consulta passada ainda `agendado` só é visível no banco. É alerta, não bloqueio |
+| 4 | Saídas do `validate_data` | Duas: o **selo** (`dados_validados.json`, dependência do `preprocess`) e o **relatório** (`relatorio_dados.json`, lido pelo gate) | O selo só carrega md5/linhas/positivos. Se o relatório fosse a dependência, mudar uma checagem mudaria o arquivo e re-treinaria o modelo sem mudança no dado |
+| 5 | Mínimo de positivos no fold | `ceil(1/tolerância)` do gate = **20** (o fold vigente tem 21) | Derivado da regra do SLO §3.1, não um número novo. Faixa de positivos (10%–50%) e corte de PSI (0,2) ficam em `params.yaml` (`dados`) |
+| 6 | Linha fora do contrato no export | Fica **fora** do dataset, contada e identificada pelo `id` | A mesma quarentena do job. Deixar o `validate_data` barrar o dataset inteiro por uma linha travaria o re-treino do mês |
+| 7 | `predicoes.fora_do_dominio` | Nullable, **sem default** | `null` = "não verificado", o estado honesto das predições anteriores. Um default `false` afirmaria que elas foram conferidas |
+| 8 | Lista de especialidades | `params.yaml` → `cadastro.especialidades` | Testada contra o mapa do modelo em produção (CI) e contra o do desafiante (suíte de sanidade) |
+| 9 | Entrada da suíte de sanidade | Grade determinística montada do contrato | O CI baixa só o `model.pkl`; o `test.pkl` não existe lá. Dois **avisos** a mais que o texto previa: direção do histórico e domínio do contrato ≠ `feature_infos` do modelo (a marca passaria a mentir depois de um re-treino com dado novo) |
+| 10 | Taxa de disparo | Calculada pelo gate, não pelo stage `validate` | Mexer no `validate.py` invalidaria o stage, que reabre a run do MLflow pelo `run_id` — e no runner o MLflow é efêmero. Vai para o resumo, o relatório, o PR e o próprio `champion_metrics.json` (`taxa_disparo_projetada`) |
+| 11 | Pipeline que falha | Código de saída **3** no gate, com o motivo do `validate_data` no resumo | Antes, um `dvc repro` quebrado virava traceback com código 1 — indistinguível de um bloqueio por regressão |
+| 12 | Guarda do campeão | `src/campeao.py`, só biblioteca padrão; `calcular_model_version` mudou para lá e é reexportada por `inference` | O deploy instala só o DVC e roda a guarda como script. A guarda confere sha **e** threshold — no deploy também, não só no job |
+| 13 | Quarentena de 100% | **Falha** o job, além de avisar | É defeito sistêmico, e pela regra do lembrete sem predição a fila inteira recebeu SMS: precisa do `/fail` do Healthchecks para acordar alguém, mesmo que num dia de fila de uma linha seja alarme falso |
+| 14 | `MESSAGING_PROVIDER` no job D-2 | Variável **obrigatória** no workflow (falha se ausente) | O stub não é inofensivo em produção: "envia" e o job marca `lembrete_enviado`, que o re-treino lê como "foi lembrado" |
+| 15 | Ordem do deploy | Guarda do campeão e staging **antes** do `supabase db push` | São checagens sem efeito colateral: um deploy que não vai acontecer não deve deixar o banco migrado. A migração continua antes do sync (10.1) |
+| 16 | DVC nos workflows | `requirements/dvc.txt`, incluído pelo `dev.txt` | Deploy, job D-2 e imagem instalam só o DVC, com o pin num lugar só |
+| 17 | Log do Streamlit na imagem | `STREAMLIT_BROWSER_SERVER_ADDRESS=localhost` no `infra/deploy/dockerfile` | Achado pelo smoke: sem ele o Streamlit consulta um serviço externo e imprime o IP público da máquina no log ("External URL"), e a varredura de PII do CI reprovava a imagem. Só muda a URL impressa e o CORS de upload, que a UI não usa |
+| 18 | CI sem o dataset | Teste da grade no dataset real pula quando ele não está no disco; a guarda de coerência aceita dependência versionada por `.dvc`; a integração baixa também a semente | O CI baixa só o `model.pkl` (regra "nunca sem alvo"). A exceção da integração é porque o teste do pipeline treina sobre a semente — o runner é descartável e nada dele sobe para lugar nenhum |
+| 19 | Versões fixas | Actions por SHA (checkout v7.0.1, setup-python v7.0.0, upload-artifact v7.0.1, dependency-review v5.0.0, setup-cli v3.0.1, hub-sync v0.3.0), Supabase CLI 2.117.0 (a da autora), `hf` 2.0.0, mypy 2.3.1 | Achados 13 e 14. O Dependabot mantém os SHAs |
+| 20 | `concurrency` no `ci.yml` | Não tem | Ele é chamado como workflow reutilizável pelo deploy, que tem a sua; um grupo no nível do workflow chamado é armadilha à toa |
+
+**O check no banco `dias_entre_agendamento_consulta <= 180` não foi criado**, de propósito: o código do 10.2 ainda não está em produção, e migration restritiva só pode ir num deploy **posterior** ao do código que a exige (regra do 10.1). Quando o primeiro deploy tiver acontecido, o PR seguinte leva:
+
+```sql
+-- restritiva: deploy POSTERIOR ao do codigo do 10.2 (regra do Passo 10.1)
+alter table agendamentos
+  add constraint agendamentos_antecedencia_maxima
+  check (dias_entre_agendamento_consulta <= 180) not valid;
+-- `not valid` nao confere as linhas antigas no ALTER (que falharia se houver
+-- alguma acima de 180); conferir e corrigir antes de validar:
+-- alter table agendamentos validate constraint agendamentos_antecedencia_maxima;
+```
+
+**Verificado:**
+- `ruff check src tests scripts` (agora com as regras S) e `mypy src scripts` limpos. Controles do 10.6 conferidos: sem `mypy.ini`, o mypy morre em "Duplicate module named client" (a colisão era real, não dedução); `calcular_idade("1990-01-01", hoje)` reprova com `arg-type`; função sem anotação num módulo do nível 1 reprova com `no-untyped-def`; num módulo baseline, passa.
+- **368 testes rápidos** (eram 275) e **22 de integração**: 21 contra o Supabase local, com a migration nova aplicada por `supabase migration up`, e o pipeline completo no container.
+- `dvc repro validate_data` no container: aprovado, 21 positivos no fold de teste (mínimo 20). `train_raw.pkl`/`test.pkl`/`mapa_especialidade.json` regerados com o contrato no `preprocess` são **byte a byte** os versionados; `model.pkl` e `model_version` intactos; `dvc status` limpo.
+- Suíte de sanidade sobre o campeão vigente: zero falhas, zero avisos.
+- Imagem de deploy: build, `/_stcore/health` e `/health` em ~4s, e `scripts/auditoria_lgpd.py` sobre o log do container sem achado (depois da decisão 17).
+- Os cinco workflows passam no `actionlint` sem erro; as expressões `jq` do corpo do PR de promoção foram testadas.
+
+**Pendências — dependem de GitHub/Hugging Face, não de código** (o checklist do Passo 11 parte daqui):
+- **Antes de 2026-10-01 06:00 UTC (hoje à noite)**: o `retrain.yml` de `main` ainda é o antigo e dispara nesse horário com zero secrets. Configurar os secrets ou `gh workflow disable retrain.yml` — continua valendo o aviso da revisão de 2026-09-29.
+- Secrets e variáveis da tabela do README ("CI/CD"), incluindo a SAS só de leitura e o environment `production` com `HF_TOKEN`/`HF_SPACE_ID`; proteção de `main` exigindo os checks do `ci.yml`; CodeQL pelo *default setup* em Settings.
+- As verificações que só existem com o repositório no GitHub (as da 1ª revisão e do 10.1): PR de teste, CI quebrado deixando o deploy pulado, migração aditiva de brincadeira, lista de arquivos do Space igual à do staging, PR de promoção recebendo o check, `job_d2.yml` disparado duas vezes sem SMS em dobro.
+- **`supabase db push` das migrations `20260929000000` e `20260930000000` no projeto remoto.** O primeiro deploy faz isso sozinho; até lá, a "Fila do dia" local apontando para o remoto mostra o aviso de schema desatualizado (`42703`), porque o select passou a pedir `predicoes.fora_do_dominio`.
+- **Threshold recalibrado não tem caminho até produção.** Com o dataset inalterado, o gate sai com código 2 e não reescreve o campeão; a pré-checagem do job recusa um `params.yaml` com outro threshold. A decisão do Passo 12 sobre o gap de recall precisa decidir também o caminho: um modo do gate que só re-mede no threshold novo, ou um PR revisado que reescreve o campeão com as métricas re-medidas.
+- **Sugestão, não implementada:** um disjuntor antes do envio — se a quarentena passar de um limite no meio da fila, parar de mandar lembrete sem predição. Hoje a pós-checagem detecta a quarentena de 100%, mas depois de os SMS terem saído. Mudaria a decisão 3 da 2ª revisão, por isso fica com a autora.
+
+
 ---
 
 ## Passo 11 — Deploy no Hugging Face Space
@@ -601,7 +707,7 @@ A forma resultante da 1ª revisão continua valendo, com estes acréscimos:
 - **Ligar as sondas externas do Passo 8.5**, que só agora têm URL pública para apontar: monitor do UptimeRobot em `/health` do Space e checks do Healthchecks.io para o job D-2 e o re-treino. Vale anotar que o Space free **hiberna por inatividade** — o monitor batendo de minutos em minutos mantém o container acordado como efeito colateral, o que melhora o cold start percebido (SLO §2) mas mascara o comportamento real de hibernação. Decidir conscientemente se isso é desejável antes de medir o cold start para o pitch.
 - **Antes do primeiro sync**, conferir que o projeto Supabase remoto está com todas as migrations aplicadas (`supabase db push`) e que os três secrets do sub-passo [10.1](#101--migrations-de-banco-no-deploy) existem no repositório — senão o primeiro deploy sincroniza código contra schema antigo, que é o incidente de 2026-09-28 acontecendo com a clínica na frente.
 - **Login da equipe no projeto remoto** ([ADR-008](adr/adr-008-login-da-equipe.md)): desligar "Allow new users to sign up" no Dashboard do Supabase (Authentication → Sign In / Providers), subir o tamanho mínimo de senha para 8 e criar as contas da equipe com `scripts/criar_funcionario.py`, antes de divulgar a URL do Space. O `supabase/config.toml` vale só para o Supabase local. Com o cadastro aberto, a tela de login seria só decoração.
-- Deploy inicial: criar o HF Space e rodar manualmente o `deploy.yml` do Passo 10 (`workflow_dispatch`) para o primeiro sync via `huggingface/huggingface-sync-action`. Dali em diante, todo push em `main` (deploy manual de código ou promoção automática do Passo 9) usa o mesmo workflow — não há um segundo mecanismo de deploy a manter.
+- Deploy inicial: criar o HF Space e rodar manualmente o `deploy.yml` do Passo 10 (`workflow_dispatch`) para o primeiro sync via `huggingface/hub-sync` (a action cria o Space se ele não existir, com `--exist-ok`). Dali em diante, todo push em `main` (deploy manual de código ou promoção automática do Passo 9) usa o mesmo workflow — não há um segundo mecanismo de deploy a manter.
 
 **Verificação**: Space público respondendo `/health` 200 com a `model_version` esperada; smoke test manual fim a fim (criar agendamento → job via `workflow_dispatch` → predição+explicação visível na fila do Streamlit → log de decisão de mensageria); medição manual do cold start vs. SLO <10s; smoke test do loop de deploy automático (merge de um PR de promoção do Passo 9 → confirmar que o Space rebuilda sozinho, sem passo manual).
 

@@ -4,21 +4,33 @@
 
 Service Level Objectives (SLOs) são as metas técnicas internas, mensuráveis, que sustentam os compromissos do [SLA.md](SLA.md). Cobrem o ciclo completo descrito no diagrama de [architecture.md](architecture.md): API de inferência, pipeline de re-treino mensal e disparo de lembretes.
 
-## 1. Disponibilidade da API de inferência
+## 1. Processamento da fila D-2 (batch)
+
+> **Reescrito em 2026-09-30 (Passo 10.5).** As versões anteriores das §1/§2 mediam a API `/predict` (uptime e p95 de latência). A revisão do Passo 10 fixou a premissa de que a solução é de **inferência em batch**: o produto depende do job diário, do registro do desfecho pela atendente e do re-treino mensal — nada em tempo real. A API continua no repositório para cumprir o item 1 do BRIEFING, mas **saiu do caminho crítico e do compromisso de produção** (decisão 1 da 2ª revisão do Passo 10). O que a clínica percebe é se a fila de amanhã foi processada a tempo, e é isso que passa a ser medido.
 
 | Métrica | Alvo | Observação |
 |---|---|---|
-| Uptime mensal da API `/predict` | ≥ 99.0% | Compatível com orçamento de US$ 100/mês (BRIEFING.md) — não justifica multi-região/HA cara. Cold start de plataformas serverless (Hugging Face Spaces / Inference Endpoints / Modal, avaliadas no ADR-001) é um risco explícito para esse número. |
-| Erro 5xx | < 1% das requisições | Medido por janela de 30 dias. |
+| Fila [amanhã, D+2] processada | **100%** dos agendamentos pendentes, **até as 09h** de São Paulo, todo dia | "Processado" = predito **ou** em quarentena com lembrete enviado como exceção (`enviado_sem_predicao`). O job roda às 08h17 (`.github/workflows/job_d2.yml`); a folga cobre o atraso que o GitHub aplica a eventos agendados. |
+| Execuções do job D-2 | 1 por dia | A janela de três dias recupera sozinha um dia perdido; dois dias seguidos sem execução deixam a fila de amanhã sem lembrete. |
+| Contabilidade da fila | predições = pendentes − quarentena, em 100% das execuções | Pós-checagem do próprio job (`inferencia_diaria.pos_checagem`): divergência **falha** o workflow. |
+| Quarentena | 0 no dia típico; **nunca 100%** da fila | Quarentena parcial vira aviso no run. Fila inteira em quarentena é defeito sistêmico — falha o workflow e aciona o `/fail` do Healthchecks, porque, pela regra do lembrete sem predição, a fila inteira recebeu SMS. |
 
-**Por que não 99.9%:** o ADR-001 já sinaliza o cold start do provedor de deploy escolhido como risco conhecido; e o orçamento de US$ 100/mês (BRIEFING.md) exclui redundância de infraestrutura.
+**De onde vem o número**: `eventos_app` (`tipo = job_d2`: horário, `agendamentos_encontrados`, `predicoes_gravadas`, `quarentena`) é a fonte de verdade; o histórico de runs do Actions e o Healthchecks.io são a prova externa de que o job rodou — inclusive do dia em que não rodou, que é o que o coletor interno não consegue registrar ([ADR-006](adr/adr-006-observabilidade.md)).
+
+### 1.1 Disponibilidade da interface
+
+| Métrica | Alvo | Observação |
+|---|---|---|
+| Uptime mensal da interface (fila do dia, cadastro) | ≥ 99.0% | Sonda externa no Space (Passo 11). Orçamento de US$ 100/mês (BRIEFING.md) exclui redundância; o Space free hiberna, e o cold start é risco conhecido. |
 
 ## 2. Latência
 
 | Métrica | Alvo | Observação |
 |---|---|---|
-| p95 de latência de `/predict` (requisição já aquecida) | < 2s | Modelo é um LightGBM leve (`src/train.py`), inferência em si é da ordem de milissegundos; a folga cobre overhead de rede/serialização. |
-| p95 incluindo cold start (serverless) | < 10s | Só aplicável se a stack final usar plataforma serverless com scale-to-zero (ADR-001). Reavaliar se inviabilizar a UX da fila do dia (BRIEFING.md, item 2). |
+| Duração do job D-2 | termina antes das 09h (≈ 40 min a partir do disparo) | Folga larga: o job processa uma fila diária de uma clínica em segundos; o que ocupa a janela é o atraso do cron do GitHub. |
+| Carga da interface depois de hibernar (cold start) | < 10s | Medido no Passo 11/12. A fila do dia lê predições **já gravadas** pelo job — nenhuma predição acontece na hora em que a atendente abre a tela. |
+
+**Fora do compromisso de produção** (decisão 1 da 2ª revisão do Passo 10): o p95 de `/predict` e da aba "Testar predição". Continuam medidos em `eventos_app` (`origem` = `api`/`processo`) como indicador de desenvolvimento — a medição do Passo 8.5 (~1,4s na primeira predição de um processo, ~10ms nas seguintes) segue valendo como referência.
 
 ## 3. Qualidade do modelo (re-treino mensal)
 
@@ -93,4 +105,4 @@ Duas correções ao texto original desta seção, decididas ao implementar o Pas
 
 ## Revisão
 
-Este documento deve ser revisado a cada marco do semestre (BRIEFING.md) e sempre que o [ADR-001](adr/adr-001-stack.md) ou a arquitetura mudar. Última geração: 2026-09-07; última revisão: 2026-09-27 (§6/§6.1, método de verificação do zero-PII e escopo da lista de campos; §3.1 revisado em 2026-09-21 com as tolerâncias de regressão do gate e a correção das métricas do modelo vigente, agora medidas e registradas em `data/champion_metrics.json`).
+Este documento deve ser revisado a cada marco do semestre (BRIEFING.md) e sempre que o [ADR-001](adr/adr-001-stack.md) ou a arquitetura mudar. Última geração: 2026-09-07; última revisão: 2026-09-30 (§1/§2 reescritas como SLOs do batch, Passo 10.5); revisão anterior: 2026-09-27 (§6/§6.1, método de verificação do zero-PII e escopo da lista de campos; §3.1 revisado em 2026-09-21 com as tolerâncias de regressão do gate e a correção das métricas do modelo vigente, agora medidas e registradas em `data/champion_metrics.json`).

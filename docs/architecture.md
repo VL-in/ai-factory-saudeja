@@ -8,7 +8,7 @@ ai-factory-saudeja/
 ├── data/
 │   ├── consultas-historicas.csv       # versionado via DVC (não versionado no git)
 │   ├── consultas-historicas.csv.dvc   # metadados do DVC
-│   ├── interim/                       # artefatos intermediários do pipeline (train_raw.pkl, test.pkl, mapa_especialidade.json, mlflow_run_id.txt)
+│   ├── interim/                       # artefatos intermediários do pipeline (dados_validados.json, relatorio_dados.json, train_raw.pkl, test.pkl, mapa_especialidade.json, mlflow_run_id.txt)
 │   ├── model.pkl                      # modelo treinado (saída do stage train)
 │   ├── consultas-treino.csv           # semente + desfechos reais de produção (Passo 9.0, via DVC)
 │   ├── champion_metrics.json          # métricas do modelo em produção (versionado em git, Passo 9.1)
@@ -42,7 +42,11 @@ ai-factory-saudeja/
 │   ├── agenda_clinica.py              # grade de horários da clínica (cadastro do paciente, Passo 5)
 │   ├── db/                            # client.py (supabase-py) + repositories.py (Passo 5)
 │   ├── export_treino.py               # desfechos reais do Supabase -> consultas-treino.csv (Passo 9.0)
-│   ├── retrain_gate.py                # gate de promoção do re-treino mensal (Passo 9.1)
+│   ├── contrato_features.py           # contrato de features: regra de negócio x domínio do treino (Passo 10.3)
+│   ├── validate_data.py               # gate de dados do re-treino (stage 0, Passo 10.3)
+│   ├── retrain_gate.py                # gate de promoção do re-treino mensal (Passo 9.1; piso e sanidade no 10.4)
+│   ├── sanidade_modelo.py             # suíte de sanidade e casos limítrofes do modelo (Passo 10.4)
+│   ├── campeao.py                     # "só o campeão vai para produção": sha + threshold (Passos 10.4/10.5)
 │   ├── preprocess.py                  # feature engineering + split treino/teste (stage 1)
 │   ├── train.py                       # SMOTE-NC + treino LightGBM, loga no MLflow (stage 2)
 │   ├── validate.py                    # métricas no fold de teste isolado (stage 3)
@@ -55,15 +59,16 @@ ai-factory-saudeja/
 │   ├── jobs/                          # inferencia_diaria.py: job D-2 (Passo 6)
 │   └── messaging/                     # client.py: interface + stub + InfobipClient (SMS real, Passo 7)
 ├── tests/                             # testes unitários e de integração do pipeline
-├── .github/workflows/                 # retrain.yml (cron mensal do gate, Passo 9.1); ci.yml/deploy.yml/job_d2.yml no Passo 10
+├── .github/                          # workflows/: ci.yml, deploy.yml, job_d2.yml, retrain.yml, dependency-review.yml (Passo 10); dependabot.yml
 ├── .dvc/                              # configuração e cache do DVC (config versionado só com `core.remote`; URL/credencial fora do git)
 ├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
 ├── params.yaml                        # hiperparâmetros do modelo
 ├── dockerfile / dockerfile.mlflow     # imagens de treino e do servidor MLflow
 ├── docker-compose.yml                 # orquestração local (mlflow-server)
-├── requirements/                      # base.txt / train.txt / api.txt / dev.txt
+├── requirements/                      # base.txt / train.txt / api.txt / ui.txt / dvc.txt / dev.txt
 ├── pytest.ini                         # marcador `integracao`
-├── ruff.toml                          # configuração do lint
+├── ruff.toml                          # configuração do lint (inclui as regras S, Passo 10.5)
+├── mypy.ini                           # type-check estático em dois níveis (Passo 10.6)
 ├── .dockerignore / .gitattributes  # contexto de build enxuto; LF nos .sh mesmo no Windows
 ├── .env.example
 └── README.md
@@ -140,11 +145,11 @@ Deployment: Hugging Face Space (SDK Docker), junto com o Streamlit no mesmo cont
 
 Name: Job de inferência no-show
 
-Description: Executado diariamente às 08h de São Paulo (agendado externamente, ver ADR-005-a), busca no Supabase os agendamentos **de amanhã até D+2** ainda sem predição e sem lembrete — a janela de três dias recupera sozinha um dia em que o cron não rodou (revisão do Passo 10, 2026-09-29). Agendamento que não pode ser predito vai para quarentena sem interromper a fila, e o paciente recebe o lembrete mesmo assim, registrado como exceção (`enviado_sem_predicao`); todo lembrete enviado marca `agendamentos.lembrete_enviado`, que o re-treino usa contra o feedback loop. Datas e horas lidas do banco (UTC) são convertidas para o fuso da clínica antes de virar feature ou texto do SMS. Roda a predição+explicação (import direto de `src/inference.py`, mesmo módulo usado pela API), grava o resultado na tabela `predicoes` e aciona o disparo de mensageria (5) quando a probabilidade ultrapassa o threshold de `params.yaml`. É também onde as duas políticas de retenção rodam (`eventos_app` e dados derivados, ver 4.1) -- o job já é diário, e agendador novo seria peça de infra a manter. Também exposto na aba "Dev: disparo manual" do Streamlit para acompanhamento sem depender de CLI/cron separados.
+Description: Executado diariamente às 08h17 de São Paulo (agendado externamente, ver ADR-005-a), busca no Supabase os agendamentos **de amanhã até D+2** ainda sem predição e sem lembrete — a janela de três dias recupera sozinha um dia em que o cron não rodou (revisão do Passo 10, 2026-09-29). Agendamento que não pode ser predito vai para quarentena sem interromper a fila, e o paciente recebe o lembrete mesmo assim, registrado como exceção (`enviado_sem_predicao`); todo lembrete enviado marca `agendamentos.lembrete_enviado`, que o re-treino usa contra o feedback loop. Datas e horas lidas do banco (UTC) são convertidas para o fuso da clínica antes de virar feature ou texto do SMS. Cada agendamento passa pelo **contrato de features** (`src/contrato_features.py`, Passo 10.3): fora da regra de negócio vai para a quarentena; fora do domínio do treino é predito e marcado (`predicoes.fora_do_dominio`). Roda a predição+explicação (import direto de `src/inference.py`, mesmo módulo usado pela API), grava o resultado na tabela `predicoes` e aciona o disparo de mensageria (5) quando a probabilidade ultrapassa o threshold de `params.yaml`. É também onde as duas políticas de retenção rodam (`eventos_app` e dados derivados, ver 4.1) -- o job já é diário, e agendador novo seria peça de infra a manter. Também exposto na aba "Dev: disparo manual" do Streamlit para acompanhamento sem depender de CLI/cron separados.
 
 Technologies: Python (`src/jobs/inferencia_diaria.py`)
 
-Deployment: roda como parte da imagem do HF Space, disparado por GitHub Actions cron (ver 6 e ADR-005-a) via `workflow_dispatch`/chamada HTTP ao Space.
+Deployment: roda **no runner do GitHub Actions** (`.github/workflows/job_d2.yml`, cron 08h17 + `workflow_dispatch`, `concurrency` obrigatório), não no Space — ver a emenda do Passo 10 no ADR-005. O caminho agendado (`main()`) acrescenta **pré-checagem** (modelo e threshold são os do campeão, banco alcançável) antes de qualquer SMS e **pós-checagem** (contabilidade da fila; quarentena de 100% falha o run) depois, com ping do Healthchecks.io em sucesso e `/fail` em falha. O modelo chega por `dvc pull data/model.pkl` com SAS só de leitura.
 
 #### 3.2.3. Gate de re-treino mensal
 
@@ -152,7 +157,9 @@ Name: Gate de promoção de modelo
 
 Description: Re-treina o pipeline DVC/MLflow contra os desfechos reais que a clínica registra na "Fila do dia" (`src/export_treino.py`, Passo 9.0), compara `recall_1`/`f1_1`/`roc_auc` contra o campeão (`data/champion_metrics.json`, versionado em git) e só promove se não houver **regressão relativa** além da tolerância por métrica de `params.yaml` (`gate.tolerancia`, justificada no [SLO §3.1](SLO.md)). Os alvos absolutos do SLO §3 não são critério de promoção — o modelo vigente já os viola, e se fossem nada seria promovido.
 
-Três desfechos, distinguidos pelo código de saída porque o workflow age diferente em cada um: **0** promove (reescreve o campeão, `dvc push`, branch + PR automático), **1** bloqueia por regressão (nada é publicado — o modelo anterior segue em produção por construção, não por convenção) e **2** significa "nenhum re-treino efetivo" (dataset com o mesmo hash: nenhum desfecho novo registrado). Os códigos 1 e 2 falham o workflow; o comparativo campeão × desafiante vai para o `$GITHUB_STEP_SUMMARY` e para um artifact JSON, porque o MLflow daquele ciclo não sobrevive ao job. Alerta por Healthchecks.io/notificação nativa do Actions, **não** por `src/messaging` (5) — ver decisão 4 do Passo 9.
+Além da regressão relativa, o Passo 10.4 acrescentou um **piso absoluto** de `roc_auc` (0,60, contra o efeito catraca), a **suíte de sanidade** do desafiante (`src/sanidade_modelo.py`: saída em [0, 1], não constante, SHAP aditivo, política do contrato nos casos limítrofes) e a **taxa de disparo projetada** no fold de teste, que só avisa. Antes do treino, o stage `validate_data` (Passo 10.3) barra o dataset por schema, regra de negócio e distribuição.
+
+Quatro desfechos, distinguidos pelo código de saída porque o workflow age diferente em cada um: **0** promove (reescreve o campeão, `dvc push`, branch + PR automático, com o CI disparado no PR por `workflow_dispatch`), **1** bloqueia (regressão, piso ou sanidade — nada é publicado, o modelo anterior segue em produção por construção, não por convenção), **2** significa "nenhum re-treino efetivo" (dataset com o mesmo hash: nenhum desfecho novo registrado) e **3** "o pipeline falhou" (em geral o `validate_data` barrou o dataset). Os códigos 1, 2 e 3 falham o workflow; o comparativo campeão × desafiante vai para o `$GITHUB_STEP_SUMMARY` e para um artifact JSON, porque o MLflow daquele ciclo não sobrevive ao job. Alerta por Healthchecks.io/notificação nativa do Actions, **não** por `src/messaging` (5) — ver decisão 4 do Passo 9.
 
 Technologies: Python (`src/retrain_gate.py`), DVC (remote em Azure Blob Storage), MLflow (efêmero via `docker-compose`, só durante o workflow)
 
@@ -172,7 +179,7 @@ Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens,
 
 **CPF segue nunca persistido**: `id_paciente_externo` é o hash sha256 dele, calculado em `src/ui/logic.py::_id_paciente_externo_de_cpf`. O ADR-007 fecha sete portas de saída para o nome (log, guarda de AST, `eventos_app`, export de treino, schema da API, select do job D-2 → Infobip, e o contexto do LLM), cada uma com teste travando. `idade` também não é mais coluna: guarda-se `data_nascimento`, e a idade usada como feature de inferência é sempre calculada sob demanda (`src/features.py::calcular_idade`), nunca persistida. Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
 
-Key Schemas/Collections: `pacientes`, `agendamentos` (`lembrete_enviado` registra se o paciente foi lembrado — o re-treino precisa disso para não confundir "compareceu" com "compareceu porque foi lembrado"; desfecho só é gravado para consulta de hoje ou anterior; status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb` e `explicacao_texto` nullable — plug do LLM, Passo 13), `mensagens_disparadas` (auditoria de envio, SLA §6), `eventos_app` (observabilidade de aplicação, Passo 8.5/[ADR-006](adr/adr-006-observabilidade.md) — latência por predição, execução do job e erros; **sem nenhuma coluna de PII**, e o `detalhe jsonb` é restringido por allowlist em `src/observabilidade.py`, já que o grep de nome de coluna não alcança dentro de um jsonb). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
+Key Schemas/Collections: `pacientes`, `agendamentos` (`lembrete_enviado` registra se o paciente foi lembrado — o re-treino precisa disso para não confundir "compareceu" com "compareceu porque foi lembrado"; desfecho só é gravado para consulta de hoje ou anterior; status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb`, `explicacao_texto` nullable — plug do LLM, Passo 13 — e `fora_do_dominio` nullable, Passo 10.3: a predição foi feita sobre um agendamento com algum campo que o modelo não viu no treino; `null` = anterior à checagem), `mensagens_disparadas` (auditoria de envio, SLA §6), `eventos_app` (observabilidade de aplicação, Passo 8.5/[ADR-006](adr/adr-006-observabilidade.md) — latência por predição, execução do job e erros; **sem nenhuma coluna de PII**, e o `detalhe jsonb` é restringido por allowlist em `src/observabilidade.py`, já que o grep de nome de coluna não alcança dentro de um jsonb). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
 
 Retenção (Passo 8, [`LGPD.md` §5](LGPD.md)): `eventos_app` 90 dias (teto do free tier, ADR-006) e `predicoes`/`mensagens_disparadas` 365 dias (`RETENCAO_DADOS_DERIVADOS_DIAS`, necessidade — Art. 6º, III), as duas purgas penduradas no job diário, sem agendador novo. `pacientes`/`agendamentos` **não** têm purga automática: são registro do atendimento, cuja exclusão é decisão do controlador (§7).
 
@@ -208,13 +215,23 @@ Integration Method: API Python do MLflow, servidor local via Docker Compose.
 
 Cloud Provider: Hugging Face Space (SDK Docker) para a aplicação; Supabase (gerenciado) para o banco.
 
-Key Services Used: Hugging Face Space (Streamlit + FastAPI no mesmo container, modelo `data/model.pkl` versionado via DVC e empacotado direto na imagem — não depende de MLflow ao vivo em produção, ver Passo 9); Azure Blob Storage como remote do DVC (Passo 9.1 — dataset de treino e `model.pkl`, os dois fora do git; é o que torna o modelo alcançável pelo Actions e pelo deploy, o que o remote anterior `/tmp/dvc-remote` não era); GitHub Actions (CI de PR, deploy por sync ao HF Hub via `huggingface/huggingface-sync-action`, cron mensal do gate de re-treino, cron diário do job D-2 — ver [ADR-005-a](adr/adr-005-integracoes-implicitas.md)).
+Key Services Used: Hugging Face Space (Streamlit + FastAPI no mesmo container, modelo `data/model.pkl` versionado via DVC e empacotado direto na imagem — não depende de MLflow ao vivo em produção, ver Passo 9); Azure Blob Storage como remote do DVC (Passo 9.1 — dataset de treino e `model.pkl`, os dois fora do git; é o que torna o modelo alcançável pelo Actions e pelo deploy, o que o remote anterior `/tmp/dvc-remote` não era); GitHub Actions (CI de PR, deploy por sync ao HF Hub via `huggingface/hub-sync` — o antigo `huggingface-sync-action` —, cron mensal do gate de re-treino, cron diário do job D-2 — ver [ADR-005-a](adr/adr-005-integracoes-implicitas.md)).
 
 A imagem combinada vive em `infra/deploy/` (`dockerfile` + `entrypoint.sh`) e já existe desde o Passo 4 — antecipada do Passo 11 para o conjunto poder ser exercitado localmente como ele vai rodar em produção (`docker compose up -d app`: UI em 7860, API em 8000). Um container, dois processos, sem supervisord: `entrypoint.sh` sobe os dois, derruba o container inteiro se qualquer um deles sair (`wait -n`) e encerra ambos em SIGTERM. O `model.pkl` é empacotado na imagem (ao contrário de `infra/api/dockerfile`, que o monta por volume em dev) porque não há DVC nem acesso ao remote no runtime do Space.
 
 **Ponto em aberto para o Passo 11**: o HF Space (SDK Docker) publica **uma única porta** (`app_port`, default 7860). Com UI e API em portas diferentes, só uma fica acessível de fora — a UI. Como a UI chama o modelo em processo (ADR-005 b), o produto funciona; o que fica sem endereço público é o papel da API como porta de entrada para integrações externas ao Saúde Já (diagrama C2). Decidir no Passo 11 entre: expor só a UI e adiar a API pública, colocar um proxy reverso na frente dos dois, ou publicar a API e servir a UI por outro caminho. Localmente as duas portas são publicadas e o dilema não aparece.
 
-CI/CD Pipeline: GitHub Actions — `ci.yml` (lint + pytest em PRs) e `deploy.yml`, que aplica as migrations do Supabase (`supabase db push`) e **depois** sincroniza `main` → HF Space, só após `ci.yml` passar. A ordem importa: o Space rebuilda sozinho ao receber o espelho, então não há janela entre o sync e o container novo em que dê para migrar com segurança. Nada na imagem do Space aplica migration — `supabase/` não entra nela. Ver Passo 10.1, que também fixa a regra de compatibilidade (migration aditiva pode ir junto do código que a exige; destrutiva/restritiva, nunca).
+CI/CD Pipeline (Passo 10): GitHub Actions, com gates por camada do mais barato ao mais caro.
+
+| Workflow | Gatilhos | O que faz |
+|---|---|---|
+| `ci.yml` | PR para `dev`/`main`, `workflow_dispatch`, `workflow_call` | `ruff` (com regras S) → `mypy` → `dvc pull data/model.pkl` (SAS de leitura) → `pytest` (contrato, `validate_data`, skew, suíte de sanidade do modelo). Em paralelo, build da imagem de deploy com smoke (`/_stcore/health` e `/health`) e varredura de PII no log do container. Integração (Supabase local + pipeline no container) obrigatória em PR que toque `src/jobs`, `src/db`, `src/export_treino.py` ou `supabase/`, e sempre em `main` |
+| `deploy.yml` | push em `main` (sem `docs/**`), `workflow_dispatch` | `ci` reutilizado → `dvc pull data/model.pkl` → guarda do campeão (`src/campeao.py`: sha e threshold) → **staging com lista fechada** → `supabase db push` → `huggingface/hub-sync` do staging. `environment: production`, `concurrency` sem cancelamento |
+| `job_d2.yml` | cron 08h17 SP, `workflow_dispatch` | job D-2 no runner (3.2.2) |
+| `retrain.yml` | cron dia 1 às 03h17 SP, `workflow_dispatch` | gate de re-treino (3.2.3) |
+| `dependency-review.yml` | PR | template do GitHub |
+
+O CI é o primeiro job do deploy (`workflow_call`): o SHA testado é o deployado, e falha no CI deixa o deploy pulado por construção. A migration vem **antes** do sync: o Space rebuilda sozinho ao receber os arquivos, então não há janela depois dele em que dê para migrar com segurança; nada na imagem do Space aplica migration. Ver Passo 10.1, que também fixa a regra de compatibilidade (migration aditiva pode ir junto do código que a exige; destrutiva/restritiva, nunca). O sync sobe um **diretório de staging com lista fechada** (Dockerfile, README com o front-matter do Space, `requirements/{base,api,ui}.txt`, `src/`, `params.yaml`, `entrypoint.sh`, `data/model.pkl`), nunca o checkout: a action faz `hf upload` sem git e não respeita os `.gitignore` aninhados — subiria a URL do remote do DVC e o dataset de treino para um Space público. Actions de terceiros fixadas por SHA, mantidas pelo Dependabot.
 
 Monitoring & Logging: MLflow para métricas de ML (4.2); `eventos_app` no Supabase como fonte de verdade das métricas de aplicação (4.1/ADR-006); logging estruturado JSON com redação de PII (`src/logging_config.py`, Passo 8) para a aplicação. Sem Langfuse/APM dedicado no núcleo — reservado para tracing do LLM opcional (Passo 13).
 
@@ -222,7 +239,7 @@ O filtro de redação é instalado por `configurar_logging()`, chamado uma vez e
 
 ## 7. Security Considerations
 
-Authentication: chaves de serviço do Supabase (`SUPABASE_URL`/`SUPABASE_SECRET_KEY`), token do HF Space (`HF_TOKEN`) e credencial do remote DVC (`AZURE_STORAGE_CONNECTION_STRING`) como secrets, nunca versionados (`.env.example` documenta as variáveis, não os valores). No caso do DVC, **a própria URL do remote** (`DVC_REMOTE_URL`) também fica fora do git: `.dvc/config` é versionado e guarda só `[core] remote = azure`, porque a URL carrega o nome do container onde o dataset de treino está armazenado.
+Authentication: chaves de serviço do Supabase (`SUPABASE_URL`/`SUPABASE_SECRET_KEY`), token do HF Space (`HF_TOKEN`, fine-grained, só no environment `production`) e credencial do remote DVC como secrets, nunca versionados — com duas credenciais do DVC desde o Passo 10: a de escrita (`AZURE_STORAGE_CONNECTION_STRING`) só no re-treino, o único que faz `dvc push`, e uma **SAS só de leitura** (`AZURE_STORAGE_CONNECTION_STRING_LEITURA`) no CI, no deploy e no job D-2, porque o CI roda código de PR (`.env.example` documenta as variáveis, não os valores). No caso do DVC, **a própria URL do remote** (`DVC_REMOTE_URL`) também fica fora do git: `.dvc/config` é versionado e guarda só `[core] remote = azure`, porque a URL carrega o nome do container onde o dataset de treino está armazenado.
 
 Data residency: o banco de produção fica em `sa-east-1` (São Paulo), mas o remote do DVC fica em **Chile Central** — ou seja, há transferência internacional de um dataset derivado de dados de saúde. O que limita a exposição é o conteúdo, não a região: o dataset exportado é pseudonimizado (`id_paciente` é hash sha256 de CPF) e nunca inclui telefone, nome ou CPF. Registrado como emenda do Passo 9.1 no [ADR-005](adr/adr-005-integracoes-implicitas.md); base legal fechada no Passo 8 em [`LGPD.md` §4](LGPD.md) (Art. 33, II, "d" — cláusulas contratuais padrão do DPA do provedor), com o risco residual declarado ali e destinado ao slide de risco do Passo 12. A formulação correta para o pitch: "os dados não saem do Brasil" é verdade para o banco de produção e **falso** para o artefato de treino.
 
@@ -242,7 +259,9 @@ Testing Frameworks: Pytest (`pytest.ini` define o marcador `integracao` para tes
 
 A interface é testada em duas camadas: `tests/test_ui_logic.py` (lógica pura, sem runtime do Streamlit, incluindo o teste de paridade entre os backends de predição) e `tests/test_ui_smoke.py` (`streamlit.testing.v1.AppTest`, que roda o script de verdade sem browser — abas presentes, gating de `APP_ENV`, caminho feliz do formulário).
 
-Code Quality Tools: `ruff`, configurado em [`ruff.toml`](../ruff.toml) (line-length 100, target `py310`, regras `E,W,F,I,UP,B,SIM,C4,RUF`) e pinado em `requirements/dev.txt`. Roda com `ruff check src tests scripts`; o CI (Passo 10) usa o mesmo comando, sem flags extras, para que local e CI não possam divergir.
+Code Quality Tools: `ruff`, configurado em [`ruff.toml`](../ruff.toml) (line-length 100, target `py310`, regras `E,W,F,I,UP,B,SIM,C4,RUF` e, desde o Passo 10.5, `S` — flake8-bandit, no lugar de um workflow Bandit separado), e `mypy` (Passo 10.6), configurado em [`mypy.ini`](../mypy.ini), ambos pinados em `requirements/dev.txt`. Rodam com `ruff check src tests scripts` e `mypy src scripts`; o CI usa os mesmos comandos, sem flags extras, para que local e CI não possam divergir.
+
+O `mypy` tem dois níveis: `disallow_untyped_defs` na **fronteira escalar** (contrato, configuração, agenda, banco, export, job, mensageria, observabilidade, schemas da API, gate, sanidade, campeão) — datas, identificadores, telefone, threshold, retorno de repositório — e baseline no resto, cujas assinaturas são essencialmente `DataFrame -> DataFrame`. A divisão de trabalho é deliberada: **mypy na fronteira escalar, contrato de features (runtime) na fronteira tabular**; `pandas-stubs` fica de fora. E o type-check **não** protege contra fuso horário: `datetime` naive e com fuso são o mesmo tipo — quem protege é `tests/test_skew_features.py`.
 
 Nota de convenção — **datas sempre no fuso da clínica**: `config_projeto.fuso_da_clinica()`/`hoje_na_clinica()` (`TIMEZONE_CLINICA`, default `America/Sao_Paulo`) são a fonte única para UI, repositórios e o job D-2. Nem `date.today()` nem UTC servem: o container roda em UTC, então depois das 21h em São Paulo a "fila do dia" e a janela D-2 cairiam no dia civil errado, e horários de `timestamptz` apareceriam 3h deslocados. Gravação leva o fuso explícito; leitura faz `astimezone`.
 
@@ -262,7 +281,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-28 (ADR-007 — nome do paciente na fila do dia)
+Date of Last Update: 2026-09-30 (Passo 10 — CI/CD, contrato de features, gates do modelo e job D-2 no runner)
 
 ## 11. Glossary / Acronyms
 

@@ -8,6 +8,31 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
+## [v1.13] (Vanessa + Claude) - 2026-09-30
+
+### Adicionado
+- **A "Fila do dia" marca a predição feita sobre dados que o modelo não viu no treino** (coluna "Fora do domínio", com aviso no detalhe da linha). Exemplos: distância acima de 50 km, consulta marcada com mais de 90 dias de antecedência, mais de 10 faltas anteriores. A probabilidade dessas linhas é extrapolação e merece menos confiança. Coluna nova `predicoes.fora_do_dominio` (migration `20260930000000_fora_do_dominio.sql`, aditiva); predições anteriores ficam sem a marca ("não verificado"). **Aplicar no projeto remoto com `supabase db push`** (o primeiro deploy automático também o faz): até lá, a "Fila do dia" local apontando para o banco remoto mostra o aviso de banco desatualizado.
+- **O job diário passa a rodar sozinho todo dia às 08h17**, pelo GitHub Actions, e não no servidor da aplicação. Antes de enviar qualquer SMS, ele confere se o modelo e o threshold em uso são os aprovados no último re-treino; se não forem, não roda. Se a fila inteira do dia não puder ser predita, o job falha e avisa a equipe.
+- **Deploy automático**: cada mudança aprovada em `main` passa pelos testes, aplica as migrations do banco e só então atualiza o Space. Só o modelo aprovado pelo re-treino chega a produção.
+- O re-treino mensal informa, no resumo e no pedido de promoção, **quantos pacientes o modelo novo mandaria lembrete pago** — o número que liga o modelo ao custo de mensageria.
+
+### Modificado
+- **O job diário recusa agendamentos com dado impossível** (idade fora de 0 a 120, sexo inválido, horário fora do expediente da clínica, campo vazio) em vez de predizer sobre eles. O paciente recebe o lembrete mesmo assim, como já acontecia com os que não podiam ser preditos.
+- **O re-treino mensal é bloqueado antes de treinar se o dataset estiver quebrado** (coluna faltando, valor impossível, especialidade que a clínica não oferece, poucas faltas registradas para a comparação com o modelo atual ser confiável). O motivo aparece no resumo do run.
+- **O re-treino também bloqueia** um modelo novo com ROC-AUC abaixo de 0,60, mesmo que pareça melhor que o atual, e um modelo que se comporte de forma anormal (mesma probabilidade para todos, explicação que não fecha com a probabilidade).
+- O dataset de re-treino passa a usar o **histórico de faltas registrado no momento do agendamento** — o mesmo que o modelo viu ao predizer — em vez de recalculá-lo depois. Agendamentos com dado impossível ficam de fora do dataset.
+- As especialidades oferecidas no cadastro passam a vir da configuração (`params.yaml`), não do modelo treinado. A lista não mudou.
+
+### Corrigido
+- A aba "Dev: disparo manual" podia mostrar, no motivo de um erro, o dado do paciente que causou o erro (por exemplo, a data de nascimento ilegível). Agora mostra só o campo e a regra.
+- O re-treino mensal rodando no GitHub Actions reexecutaria o pipeline inteiro todo mês, mesmo sem nenhum desfecho novo registrado, porque o fim de linha dos arquivos no Windows e no Linux era diferente. Ele passa a reconhecer corretamente o mês sem dado novo.
+
+### Segurança
+- O CI, o deploy e o job diário usam uma credencial **só de leitura** para baixar o modelo; a de escrita fica só no re-treino.
+- O job diário roda num servidor do GitHub fora do Brasil e o log dele é público: ele registra só contagens e identificadores internos, e a redação de dado pessoal no log passa a ser a última barreira. Registrado em `docs/LGPD.md` §4 e §9.1.
+- A aplicação deixou de consultar um serviço externo, na inicialização, para descobrir o próprio IP público, e de imprimi-lo no log.
+- Pull requests passam por revisão automática de dependências vulneráveis.
+
 ## [v1.12] (Vanessa + Claude) - 2026-09-29
 
 ### Corrigido

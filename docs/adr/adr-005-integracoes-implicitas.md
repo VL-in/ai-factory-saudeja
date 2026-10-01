@@ -45,6 +45,20 @@ A escolha é **reversível a baixo custo** e vale registrar o caminho: criar um 
 
 **Pendência fechada (2026-09-27, Passo 8)**: a decisão foi **manter Chile Central**, e a base legal ficou registrada em [`LGPD.md` §4](../LGPD.md) — Art. 33, II, alínea "d" (cláusulas contratuais padrão, via o acordo de processamento de dados do provedor de nuvem). O que o Passo 8 acrescentou à análise acima: um dataset pseudonimizado **não** é equiparado a anônimo (Art. 12 só faz isso para o irreversível), e o hash sha256 de CPF é reversível por força bruta sobre o espaço de CPFs válidos — a pseudonimização reduz a gravidade de um incidente, não tira a transferência do escopo do Art. 33. O risco residual está nomeado em `LGPD.md` §9, item 1, e a formulação correta para o pitch está fixada em `architecture.md` §7. O caminho de reversão para Brazil South segue válido e documentado acima.
 
+### Emenda (2026-09-30, Passo 10) — o job D-2 roda no runner do Actions, não no Space
+
+O item (a) acima dizia que o workflow "chama o endpoint/job" do Space. Isso não se sustentava: a API não tem endpoint de job (só `/health` e `/predict`), o Space publica uma única porta (a da UI), hiberna — o motivo de este ADR ter tirado o agendador de dentro dele — e um endpoint público que dispara SMS pago exigiria autenticação própria.
+
+**Decisão** (decisão 2 da 2ª revisão do Passo 10): `.github/workflows/job_d2.yml` roda `python src/jobs/inferencia_diaria.py` **no próprio runner**, às 08h17 de São Paulo, com `concurrency` obrigatório (o filtro de pendentes só é idempotente em sequência). O item (b) é o que torna isso trivial: o job já carrega o modelo em processo, então roda igual fora do Space. O modelo chega por `dvc pull data/model.pkl` (SAS só de leitura) e a pré-checagem do job confere que ele e o threshold são os do campeão (`data/champion_metrics.json`) antes de qualquer SMS.
+
+**O que muda de lugar, e precisa estar escrito:**
+
+- Os secrets do Supabase e da Infobip passam a existir também no GitHub Actions, além do Space.
+- **Dado de paciente é processado num runner fora do Brasil** (data de nascimento, sexo, especialidade e o telefone para o envio). É a mesma classe de transferência que o Space já implicava, mas um operador a mais (GitHub) — registrado em [`LGPD.md`](../LGPD.md) §4 e §9. O argumento "dados permanecem no Brasil" da emenda do Passo 5 continua valendo **para o armazenamento**; não vale para o processamento do job.
+- **O log do Actions deste repositório é público.** O filtro de redação de `src/logging_config.py` (Passo 8) deixa de ser defesa em profundidade e vira a última barreira; o job loga só contadores e identificadores internos.
+
+**Alternativa recusada**: endpoint de disparo no Space — pelos quatro motivos do primeiro parágrafo, a menos que surja outro consumidor para ele.
+
 ## Consequências
 Pros:
 - Scheduler externo (GitHub Actions) remove uma dependência de disponibilidade do próprio Space.

@@ -108,6 +108,8 @@ Isso é transferência internacional de dado derivado de dado de saúde, e preci
 
 **A alternativa segue aberta e custa pouco.** O [ADR-005](adr/adr-005-integracoes-implicitas.md) registra o caminho: criar um container em Brazil South, apontar `DVC_REMOTE_URL`/`.dvc/config.local` para ele e rodar `dvc push`. Nada no código depende da região. Enquanto a decisão atual vigora, este documento é o registro dela.
 
+**Processamento do job D-2 no GitHub Actions** (2026-09-30, Passo 10, [ADR-005](adr/adr-005-integracoes-implicitas.md)). O job diário roda num runner hospedado pelo GitHub, fora do Brasil, e lê do banco o que a predição e o envio precisam: data de nascimento, sexo, especialidade, distância, antecedência, histórico de faltas e o **telefone** para o lembrete — nunca nome nem CPF (o select do job não traz `nome_completo`). Nada é gravado no runner além do `model.pkl`, e ele é descartado ao fim da execução. É a mesma classe de transferência que o Space já implicava, mas **um operador a mais** (o GitHub), com a mesma base: Art. 33, II, "d", pelas cláusulas do contrato do provedor. A formulação do pitch fica mais estreita: "os dados **armazenados** não saem do Brasil" continua verdadeira para o banco; o processamento diário acontece fora.
+
 ---
 
 ## 5. Retenção e término do tratamento
@@ -201,6 +203,12 @@ Nada aqui é surpresa oculta — cada item é para constar do slide de risco do 
 
 ---
 
+### 9.1 Riscos acrescentados pelo CI/CD (2026-09-30, Passo 10)
+
+10. **O log do job D-2 é público.** O repositório é público, e o log do GitHub Actions também. O job processa telefone de paciente; o que impede o número de aparecer no log é o filtro de redação de `src/logging_config.py` (§8), que aqui deixa de ser defesa em profundidade e vira **a última barreira**. Mitigações: o job loga só contadores e identificadores internos (`id_agendamento`), a lista de erros com motivo nunca vai para o log nem para o resumo do run, e a guarda estática sobre a AST de `src/` impede que código novo passe campo de PII a uma chamada de log. O CI ainda varre o log da imagem de deploy com `scripts/auditoria_lgpd.py`. **Não mitigado**: um bug de terceiro que logue o corpo de uma requisição antes do filtro existir no processo.
+11. **Processamento fora do Brasil num operador a mais** (§4): o runner do GitHub. Sem gravação local que sobreviva ao job.
+12. **Credencial do remote do DVC no CI.** O CI roda código de PR. Por isso CI, deploy e job D-2 usam uma SAS **só de leitura** (e só do container); a credencial de escrita fica só no workflow de re-treino. PR de fork não recebe secret nenhum.
+
 ## 10. Incidentes
 
 Exposição de dado pessoal é comunicada à clínica-cliente (controladora) e ao DPO em **até 72h** da ciência, alinhado ao SLA §6 e às boas práticas do Art. 48. Como operadora, a SaúdeJá comunica o controlador; a comunicação à ANPD e aos titulares é decisão da clínica, apoiada pelas informações técnicas que fornecermos (o que foi exposto, quantos titulares, quando, o que foi feito).
@@ -220,4 +228,4 @@ O que existe de capacidade de investigação hoje: `eventos_app` (90 dias, sobre
 
 ## Revisão
 
-Revisar sempre que: (a) uma coluna nova entrar em `supabase/migrations/`, (b) a região de qualquer armazenamento mudar, (c) uma integração externa nova passar a receber dado de paciente — o LLM do Passo 13 é o próximo candidato —, ou (d) o [SLO.md](SLO.md)/[SLA.md](SLA.md)/[architecture.md](architecture.md) mudarem. Última geração: 2026-09-27 (Passo 8); revisado em 2026-09-28 (§2/§2.1/§6/§7/§9 — nome do paciente gravado e visível à equipe, ADR-007); revisado de novo em 2026-09-28 (§2/§7/§9 — login da equipe, ADR-008).
+Revisar sempre que: (a) uma coluna nova entrar em `supabase/migrations/`, (b) a região de qualquer armazenamento mudar, (c) uma integração externa nova passar a receber dado de paciente — o LLM do Passo 13 é o próximo candidato —, ou (d) o [SLO.md](SLO.md)/[SLA.md](SLA.md)/[architecture.md](architecture.md) mudarem. Última geração: 2026-09-27 (Passo 8); revisado em 2026-09-28 (§2/§2.1/§6/§7/§9 — nome do paciente gravado e visível à equipe, ADR-007); revisado de novo em 2026-09-28 (§2/§7/§9 — login da equipe, ADR-008); revisado em 2026-09-30 (§4/§9.1 — job D-2 no runner do GitHub Actions e log público, Passo 10).
