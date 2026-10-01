@@ -12,6 +12,7 @@ import joblib
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+import contrato_features
 from config_projeto import caminho_de_env, carregar_params
 from features import extrair_features_temporais
 
@@ -40,11 +41,30 @@ def carregar_dados(path):
     return df
 
 
+def aplicar_contrato(df):
+    """Contrato de features (Passo 10.3) no caminho de treino: coerção
+    explícita de tipo e regra de negócio de cada linha.
+
+    O stage `validate_data` do dvc.yaml já barra o dataset antes daqui, e com
+    relatório; isto é a defesa em profundidade para quem chama `preprocessar`
+    por outro caminho (testes, notebook, `tune.py`). A especialidade é checada
+    contra as do próprio dataset -- confrontá-la com a lista do cadastro é
+    trabalho do `validate_data`, que tem a configuração como dependência."""
+    df = contrato_features.coagir_colunas_numericas(df)
+    especialidades = {e for e in df["especialidade"] if isinstance(e, str)}
+    violacoes = contrato_features.violacoes_do_dataframe(df, especialidades)
+    if violacoes:
+        raise contrato_features.ViolacaoDoContrato(
+            "dataset", contrato_features.resumir_violacoes(violacoes)
+        )
+    return df
+
+
 def preprocessar(df):
     # Copia defensiva: preprocessar() nao deve alterar o DataFrame do
     # chamador -- carregar_dados() devolve um df que pode ser reusado cru
     # (EDA, auditoria) depois desta chamada.
-    df = df.copy()
+    df = aplicar_contrato(df).copy()
 
     # sexo -> 0/1
     df["sexo"] = df["sexo"].map({"F": 0, "M": 1})

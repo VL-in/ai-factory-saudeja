@@ -30,3 +30,44 @@ gate:
     recall_1: 0.05
     f1_1: 0.05
     roc_auc: 0.02
+  # Piso ABSOLUTO (Passo 10.4), alem da comparacao relativa: sem ele, cada
+  # promocao pode regredir ate' a tolerancia em relacao ao campeao da vez e,
+  # somadas, as regressoes pequenas levam o modelo para perto do acaso (efeito
+  # catraca). 0.60 e' decisao da autora; o campeao vigente mede 0.643.
+  piso:
+    roc_auc: 0.60
+  # Fracao do fold de teste que o desafiante mandaria para lembrete pago no
+  # threshold vigente. So' NOTIFICA acima disto, nao bloqueia (decisao da
+  # autora): 0.30 e' o "cortar 70% do custo de mensageria" do BRIEFING. O
+  # campeao vigente marca 22 de 76 (29%).
+  taxa_disparo_alerta: 0.30
+
+# Contrato de dados (Passo 10.3, src/contrato_features.py e src/validate_data.py).
+# Especialidades que o cadastro oferece -- a lista vem daqui, e nao do mapa do
+# modelo, para o que a clinica atende ser configuracao e nao efeito colateral do
+# ultimo treino. tests/test_contrato_features.py trava que ela esta' contida no
+# mapa do modelo em producao, e a suite de sanidade faz o mesmo com o desafiante
+# do re-treino: especialidade do cadastro que o modelo nao conhece seria
+# quarentena garantida para todo paciente dela.
+cadastro:
+  especialidades:
+    - cardiologia
+    - clinica geral
+    - dermatologia
+    - ginecologia
+    - oftalmologia
+    - ortopedia
+    - pediatria
+
+# Checagens de distribuicao do stage validate_data, que BLOQUEIAM o re-treino
+# antes de treinar. O minimo de positivos no fold de teste nao mora aqui: e'
+# derivado de gate.tolerancia (1/tolerancia), pela mesma regra do SLO 3.1 --
+# com menos positivos que isso, a tolerancia do gate fica menor que o passo de
+# um unico paciente e ele decide por sorteio.
+dados:
+  taxa_positivos:
+    minimo: 0.10
+    maximo: 0.50
+  # PSI por feature (producao x semente) acima disto vira ALERTA no resumo do
+  # re-treino, sem bloquear. 0.2 e' o corte usual de "mudanca relevante".
+  psi_alerta: 0.2

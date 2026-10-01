@@ -30,6 +30,7 @@ import numpy as np
 import pytest
 
 import retrain_gate as gate
+from sanidade_modelo import ResultadoSanidade
 
 METRICAS_CAMPEAO = {
     "recall_1": 0.4286,
@@ -73,6 +74,11 @@ def ambiente(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "MODEL_PATH", str(model_path))
     monkeypatch.setattr(gate, "TEST_PATH", str(test_path))
     monkeypatch.setattr(gate, "DATASET_DVC_PATH", str(dvc_path))
+    monkeypatch.setattr(gate, "RELATORIO_DADOS_PATH", str(tmp_path / "relatorio_dados.json"))
+    # O model.pkl daqui são bytes quaisquer: a suíte de sanidade e a taxa de
+    # disparo (Passo 10.4) têm testes próprios abaixo, com modelo de verdade.
+    monkeypatch.setattr(gate, "verificar_sanidade", lambda *_: ResultadoSanidade())
+    monkeypatch.setattr(gate, "taxa_de_disparo_projetada", lambda *_: 0.29)
 
     class Ambiente:
         pass
@@ -350,3 +356,114 @@ def test_champion_do_repositorio_e_legivel_pelo_gate():
     for metrica in gate.METRICAS_DO_GATE:
         assert isinstance(champion["metricas"][metrica], float)
     assert champion["decision_threshold"] == gate.PARAMS["decision"]["threshold"]
+
+
+# --------------------------------------------------------------------------
+# Passo 10.4: piso absoluto, suíte de sanidade, taxa de disparo, pipeline
+# --------------------------------------------------------------------------
+PISO = {"roc_auc": 0.60}
+TOL = {"recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02}
+
+
+def test_piso_absoluto_bloqueia_mesmo_sem_regressao_relativa():
+    """Efeito catraca: cada promoção pode regredir até a tolerância em relação
+    ao campeão da vez. Aqui o delta (-0.01) cabe na tolerância (0.02), mas o
+    desafiante fica abaixo do piso -- e é bloqueado."""
+    campeao = {"metricas": {"recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.605}}
+    desafiante = {"recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.595}
+
+    decisao = gate.decidir(campeao, desafiante, TOL, piso=PISO)
+
+    assert decisao.codigo_saida == gate.SAIDA_BLOQUEADO
+    assert "piso absoluto" in decisao.motivo
+    assert not any(c["regrediu"] for c in decisao.comparacoes)
+
+
+def test_piso_absoluto_vale_tambem_no_bootstrap():
+    decisao = gate.decidir(None, {"recall_1": 0.5, "f1_1": 0.5, "roc_auc": 0.55}, TOL, piso=PISO)
+
+    assert not decisao.promover
+    assert decisao.codigo_saida == gate.SAIDA_BLOQUEADO
+
+
+def test_piso_vem_de_params_yaml():
+    assert gate.pisos() == {"roc_auc": 0.60}
+
+
+def test_suite_de_sanidade_reprovada_bloqueia_e_nao_toca_no_campeao(ambiente, monkeypatch):
+    ambiente.semear_champion()
+    antes = ambiente.champion_path.read_bytes()
+    # métricas melhores que o campeão: só a sanidade pode bloquear
+    ambiente.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}, nome="gate-insano")
+    monkeypatch.setattr(
+        gate,
+        "verificar_sanidade",
+        lambda *_: ResultadoSanidade(falhas=["o modelo é constante: devolve 0.5000"]),
+    )
+
+    assert gate.main(["--sem-repro"]) == gate.SAIDA_BLOQUEADO
+    assert ambiente.champion_path.read_bytes() == antes
+
+
+def test_taxa_de_disparo_alta_avisa_mas_nao_bloqueia(ambiente, monkeypatch, tmp_path):
+    ambiente.semear_champion()
+    ambiente.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}, nome="gate-caro")
+    monkeypatch.setattr(gate, "taxa_de_disparo_projetada", lambda *_: 0.45)
+    relatorio = tmp_path / "relatorio.json"
+
+    assert gate.main(["--sem-repro", "--relatorio-json", str(relatorio)]) == gate.SAIDA_PROMOVIDO
+
+    conteudo = json.loads(relatorio.read_text(encoding="utf-8"))
+    assert conteudo["taxa_disparo_projetada"] == 0.45
+    assert any("taxa de disparo projetada" in a for a in conteudo["avisos"])
+    campeao = json.loads(ambiente.champion_path.read_text(encoding="utf-8"))
+    assert campeao["taxa_disparo_projetada"] == 0.45
+
+
+def test_taxa_de_disparo_projetada_com_o_modelo_real(tmp_path):
+    """Contra o data/model.pkl de verdade, sobre um fold sintético montado da
+    grade da suíte de sanidade (o test.pkl do DVC não existe no CI)."""
+    import inference
+    import sanidade_modelo
+
+    model, mapa = inference.carregar_modelo("data/model.pkl")
+    X = inference.construir_features_lote(sanidade_modelo.grade_de_casos(sorted(mapa)), mapa)
+    fold = tmp_path / "test.pkl"
+    joblib.dump({"X": X, "y": np.zeros(len(X))}, fold)
+
+    taxa = gate.taxa_de_disparo_projetada("data/model.pkl", str(fold))
+
+    esperado = float((inference.predizer(model, X) >= gate.PARAMS["decision"]["threshold"]).mean())
+    assert taxa == pytest.approx(esperado)
+    assert 0.0 <= taxa <= 1.0
+
+
+def test_dataset_barrado_pelo_validate_data_vira_codigo_3_com_o_motivo(ambiente, monkeypatch):
+    """`dvc repro` falhando no stage validate_data: o resumo diz o que barrou,
+    em vez de um traceback indistinguível de um bloqueio por regressão."""
+    import subprocess
+
+    ambiente.semear_champion()
+    antes = ambiente.champion_path.read_bytes()
+    (ambiente.tmp_path / "relatorio_dados.json").write_text(
+        json.dumps(
+            {
+                "aprovado": False,
+                "bloqueios": ["distribuição: taxa de positivos 3.0% fora da faixa [10%, 50%]"],
+                "alertas": [],
+                "resumo": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def repro_que_falha():
+        raise subprocess.CalledProcessError(1, ["dvc", "repro"])
+
+    monkeypatch.setattr(gate, "_dvc_repro", repro_que_falha)
+    relatorio = ambiente.tmp_path / "relatorio.json"
+
+    assert gate.main(["--relatorio-json", str(relatorio)]) == gate.SAIDA_FALHA_PIPELINE
+    assert ambiente.champion_path.read_bytes() == antes
+    conteudo = json.loads(relatorio.read_text(encoding="utf-8"))
+    assert "taxa de positivos" in conteudo["motivo"]

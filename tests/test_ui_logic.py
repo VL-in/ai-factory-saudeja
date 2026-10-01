@@ -66,15 +66,20 @@ def test_payload_da_ui_satisfaz_o_schema_da_api(payload):
     assert validado.data_hora_agendada == payload["data_hora_agendada"]
 
 
-def test_listar_especialidades_vem_do_mapa_do_modelo(especialidade_valida):
-    especialidades = logic.listar_especialidades(MODEL_PATH)
+def test_listar_especialidades_vem_da_configuracao_do_cadastro():
+    """Passo 10.3: o que a clínica atende é configuração (params.yaml), não
+    efeito colateral do último treino."""
+    assert logic.listar_especialidades() == sorted(
+        inference.PARAMS["cadastro"]["especialidades"]
+    )
 
-    assert especialidade_valida in especialidades
 
+def test_especialidades_do_cadastro_estao_no_mapa_do_modelo_em_producao():
+    """Uma especialidade que o cadastro oferece e o modelo não conhece seria
+    quarentena garantida no job D-2 para todo paciente dela."""
+    _, mapa_especialidade = inference.carregar_modelo(MODEL_PATH)
 
-def test_listar_especialidades_sem_modelo_nao_derruba_a_ui(tmp_path):
-    """Formulário degrada para texto livre em vez de estourar exceção."""
-    assert logic.listar_especialidades(str(tmp_path / "inexistente.pkl")) == []
+    assert set(logic.listar_especialidades()) <= set(mapa_especialidade)
 
 
 # --- backend em processo (default, ADR-005 b) ---------------------------------

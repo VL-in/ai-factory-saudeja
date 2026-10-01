@@ -8,9 +8,27 @@ job D-2 (Passo 6) precisam -- nada de query builder genérico aqui, só os
 acessos que o produto de fato usa (ver PLANO-IMPLEMENTACAO.md, Passo 5).
 """
 from datetime import date, datetime, timedelta
+from typing import Any, cast
+
+from postgrest.types import CountMethod
 
 from config_projeto import fuso_da_clinica, hoje_na_clinica
 from db.client import obter_client
+
+Linha = dict[str, Any]
+
+
+def _linhas(dados: object) -> list[Linha]:
+    """`resposta.data` de um select/insert/update do PostgREST: sempre um
+    array JSON de objetos. O `supabase-py` o tipa como JSON genérico (`bool |
+    str | ... | None`); o cast aqui é a fronteira que diz ao type-check o que o
+    PostgREST garante, em vez de espalhar `# type: ignore` pelo módulo."""
+    return cast(list[Linha], dados or [])
+
+
+def _primeira(dados: object) -> Linha:
+    """Primeira linha devolvida por um insert/upsert/update com retorno."""
+    return _linhas(dados)[0]
 
 
 def _intervalo_do_dia(dia: date) -> tuple[str, str]:
@@ -82,7 +100,7 @@ def inserir_paciente(
         .upsert(registro, on_conflict="id_paciente_externo")
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
 def contar_no_shows_anteriores(id_paciente: str) -> int:
@@ -94,7 +112,7 @@ def contar_no_shows_anteriores(id_paciente: str) -> int:
     client = obter_client()
     resposta = (
         client.table("agendamentos")
-        .select("id", count="exact")
+        .select("id", count=CountMethod.exact)
         .eq("id_paciente", id_paciente)
         .eq("status", "no_show")
         .execute()
@@ -109,7 +127,7 @@ def inserir_agendamento(
     data_hora_agendada: datetime,
     dias_entre_agendamento_consulta: int,
     historico_noshow: int,
-) -> dict:
+) -> Linha:
     client = obter_client()
     resposta = (
         client.table("agendamentos")
@@ -125,7 +143,7 @@ def inserir_agendamento(
         )
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
 _COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
@@ -135,7 +153,7 @@ _COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
 )
 
 
-def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
+def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[Linha]:
     """Agendamentos ainda `agendado`, **de amanhã até D+2**, sem predição
     gravada e sem lembrete já enviado -- a fila do job diário (Passo 6).
 
@@ -160,7 +178,7 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
     inicio, _ = _intervalo_do_dia(data_referencia + timedelta(days=1))
     _, fim = _intervalo_do_dia(data_referencia + timedelta(days=2))
 
-    agendamentos = (
+    agendamentos = _linhas(
         client.table("agendamentos")
         .select(_COLUNAS_AGENDAMENTO_PARA_INFERENCIA)
         .gte("data_hora_agendada", inicio)
@@ -175,7 +193,7 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
         return []
 
     ids = [a["id"] for a in agendamentos]
-    predicoes_existentes = (
+    predicoes_existentes = _linhas(
         client.table("predicoes").select("id_agendamento").in_("id_agendamento", ids).execute().data
     )
     ids_com_predicao = {p["id_agendamento"] for p in predicoes_existentes}
@@ -199,10 +217,17 @@ def gravar_predicao(
     probabilidade: float,
     classe_prevista: int,
     threshold_usado: float,
-    explicacao_shap: list,
+    explicacao_shap: list[dict[str, Any]],
     model_version: str,
     explicacao_texto: str | None = None,
-) -> dict:
+    fora_do_dominio: bool | None = None,
+) -> Linha:
+    """`fora_do_dominio` (Passo 10.3, migration
+    `20260930000000_fora_do_dominio.sql`): o agendamento tinha algum campo que
+    o modelo não viu no treino (distância > 50 km, antecedência > 90 dias...).
+    A predição é gravada mesmo assim -- o contrato manda marcar, nunca
+    rejeitar -- e a marca aparece na fila do dia. `None` é "não verificado",
+    que é o que as predições anteriores à coluna carregam."""
     client = obter_client()
     resposta = (
         client.table("predicoes")
@@ -215,14 +240,15 @@ def gravar_predicao(
                 "explicacao_shap": explicacao_shap,
                 "explicacao_texto": explicacao_texto,
                 "model_version": model_version,
+                "fora_do_dominio": fora_do_dominio,
             }
         )
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
-def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> dict:
+def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> Linha:
     """Auditoria de disparo (SLA §6) -- uma linha por agendamento processado
     pelo job D-2 (Passo 6), enviado ou não: `status_envio` distingue
     'enviado' (probabilidade acima do threshold, lembrete pago disparado) de
@@ -234,7 +260,7 @@ def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> di
         .insert({"id_agendamento": id_agendamento, "canal": canal, "status_envio": status_envio})
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
 STATUSES_DESFECHO = ("concluido", "no_show", "cancelado")
@@ -246,7 +272,7 @@ class DesfechoForaDePrazo(Exception):
 
 def atualizar_status_agendamento(
     id_agendamento: str, status: str, hoje: date | None = None
-) -> dict:
+) -> Linha:
     """Registra o desfecho real de um agendamento (Passo 9.0), acionado pela
     aba "Fila do dia". É a fonte do `historico_noshow` automático do cadastro
     e, via `export_treino.py`, do dataset real do re-treino mensal (Passo 9.1).
@@ -273,24 +299,24 @@ def atualizar_status_agendamento(
         raise DesfechoForaDePrazo(
             "desfecho só pode ser registrado para consulta de hoje ou anterior"
         )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
 _COLUNAS_AGENDAMENTO_PARA_EXPORT = (
     "id, especialidade, distancia_km, data_hora_agendada, "
-    "dias_entre_agendamento_consulta, status, lembrete_enviado, "
+    "dias_entre_agendamento_consulta, historico_noshow, status, lembrete_enviado, "
     "pacientes(id_paciente_externo, data_nascimento, sexo)"
 )
 
 
-def buscar_agendamentos_com_desfecho() -> list[dict]:
+def buscar_agendamentos_com_desfecho() -> list[Linha]:
     """Agendamentos com desfecho real conhecido (`concluido` ou `no_show`,
     Passo 9.0) -- fonte de dado real de `src/export_treino.py`. Sem
     `telefone` no select, mesma minimização de PII de
     `buscar_agendamentos_d2_pendentes`: o export nunca deve ter como emitir
     essa coluna, mesmo por acidente."""
     client = obter_client()
-    return (
+    return _linhas(
         client.table("agendamentos")
         .select(_COLUNAS_AGENDAMENTO_PARA_EXPORT)
         .in_("status", ["concluido", "no_show"])
@@ -298,6 +324,22 @@ def buscar_agendamentos_com_desfecho() -> list[dict]:
         .execute()
         .data
     )
+
+
+def contar_consultas_sem_desfecho(antes_de: date) -> int:
+    """Consultas de antes de `antes_de` (dia civil da clínica) ainda
+    `agendado`: o desfecho não foi registrado. Completude de rótulo do
+    re-treino (Passo 10.3), medida no export porque só o banco a enxerga."""
+    inicio, _ = _intervalo_do_dia(antes_de)
+    resposta = (
+        obter_client()
+        .table("agendamentos")
+        .select("id", count=CountMethod.exact)
+        .eq("status", "agendado")
+        .lt("data_hora_agendada", inicio)
+        .execute()
+    )
+    return resposta.count or 0
 
 
 # Lista explícita, em vez do `*, pacientes(*), predicoes(*)` que vigorava até
@@ -310,11 +352,11 @@ _COLUNAS_FILA_DO_DIA = (
     "id, especialidade, data_hora_agendada, status, "
     "pacientes(id_paciente_externo, nome_completo), "
     "predicoes(criado_em, probabilidade, classe_prevista, explicacao_shap, "
-    "explicacao_texto, model_version)"
+    "explicacao_texto, model_version, fora_do_dominio)"
 )
 
 
-def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
+def buscar_fila_do_dia(dia: date | None = None) -> list[Linha]:
     """Agendamentos do dia (default hoje) com paciente e última predição
     embutidos, ordenados por probabilidade desc -- quem ainda não tem
     predição (job ainda não rodou/D-2 não bateu) vai para o fim da fila, não
@@ -326,7 +368,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
     client = obter_client()
     inicio, fim = _intervalo_do_dia(dia or hoje_na_clinica())
 
-    agendamentos = (
+    agendamentos = _linhas(
         client.table("agendamentos")
         .select(_COLUNAS_FILA_DO_DIA)
         .gte("data_hora_agendada", inicio)
@@ -336,7 +378,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
         .data
     )
 
-    def _probabilidade(agendamento: dict) -> float:
+    def _probabilidade(agendamento: Linha) -> float:
         predicoes = agendamento.get("predicoes") or []
         if not predicoes:
             return -1.0
@@ -354,8 +396,8 @@ def inserir_evento_app(
     origem: str,
     duracao_ms: int | None = None,
     model_version: str | None = None,
-    detalhe: dict | None = None,
-) -> dict:
+    detalhe: dict[str, Any] | None = None,
+) -> Linha:
     """Grava uma linha em `eventos_app` (migration
     `20260921000000_eventos_app.sql`). Chamada **só** pelo worker de
     `src/observabilidade.py`, nunca direto do caminho de uma predição: é lá que
@@ -379,10 +421,10 @@ def inserir_evento_app(
         )
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
-def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[dict]:
+def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[Linha]:
     """Eventos a partir de `desde`, mais recentes primeiro.
 
     `limite` é explícito porque a agregação (p95) é feita em Python sobre estas
@@ -391,7 +433,7 @@ def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[dict]:
     calculado sobre uma fatia silenciosamente cortada mentiria, e é justamente
     um número que vai para o pitch (SLO §2)."""
     client = obter_client()
-    return (
+    return _linhas(
         client.table("eventos_app")
         .select("criado_em, tipo, origem, duracao_ms, status, model_version, detalhe")
         .gte("criado_em", desde.isoformat())
@@ -402,7 +444,7 @@ def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[dict]:
     )
 
 
-def ultimo_evento_app(tipo: str, status: str | None = None) -> dict | None:
+def ultimo_evento_app(tipo: str, status: str | None = None) -> Linha | None:
     """Evento mais recente de um tipo -- usado para "última execução
     bem-sucedida do job D-2" na aba de observabilidade (SLO §5). O
     dead-man's-switch externo (Healthchecks.io) cobre o caso em que o job nem
@@ -411,7 +453,7 @@ def ultimo_evento_app(tipo: str, status: str | None = None) -> dict | None:
     consulta = client.table("eventos_app").select("*").eq("tipo", tipo)
     if status:
         consulta = consulta.eq("status", status)
-    linhas = consulta.order("criado_em", desc=True).limit(1).execute().data
+    linhas = _linhas(consulta.order("criado_em", desc=True).limit(1).execute().data)
     return linhas[0] if linhas else None
 
 
@@ -423,7 +465,7 @@ def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
     client = obter_client()
     total = (
         client.table("predicoes")
-        .select("id", count="exact")
+        .select("id", count=CountMethod.exact)
         .gte("criado_em", desde.isoformat())
         .execute()
         .count
@@ -431,7 +473,7 @@ def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
     )
     com_explicacao = (
         client.table("predicoes")
-        .select("id", count="exact")
+        .select("id", count=CountMethod.exact)
         .gte("criado_em", desde.isoformat())
         .not_.is_("explicacao_shap", "null")
         .execute()
@@ -456,7 +498,7 @@ def purgar_dados_derivados(anteriores_a: datetime) -> dict[str, int]:
     nunca a probabilidade que o modelo previu.
     """
     client = obter_client()
-    removidas = {}
+    removidas: dict[str, int] = {}
     for tabela in ("predicoes", "mensagens_disparadas"):
         linhas = (
             client.table(tabela)

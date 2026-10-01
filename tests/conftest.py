@@ -10,6 +10,8 @@ if str(SRC_DIR) not in sys.path:
 
 import observabilidade
 
+_HORAS_DA_GRADE = (8, 9, 10, 11, 13, 14, 15, 16, 17)
+
 
 def _descartar_evento(**evento):
     """Destino nulo de `eventos_app` durante os testes."""
@@ -83,8 +85,12 @@ def df_consultas_smote():
             "dias_entre_agendamento_consulta": [1 + (i % 60) for i in range(n)],
             "historico_noshow": [i % 4 for i in range(n)],
             "no_show": [1 if i % 3 == 0 else 0 for i in range(n)],
+            # Seg a sex (05-09/01/2026) e só horários da grade da clínica: o
+            # contrato de features (Passo 10.3) recusa domingo e o almoço, e o
+            # `preprocess` o aplica como defesa em profundidade.
             "data_hora_agendada": [
-                f"2026-01-{5 + (i % 20):02d} {8 + (i % 9):02d}:00:00" for i in range(n)
+                f"2026-01-{5 + (i % 5):02d} {_HORAS_DA_GRADE[i % len(_HORAS_DA_GRADE)]:02d}:00:00"
+                for i in range(n)
             ],
         }
     )

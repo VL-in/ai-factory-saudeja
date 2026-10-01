@@ -28,6 +28,7 @@ import sys
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from typing import NoReturn
 
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:
@@ -110,22 +111,16 @@ def montar_payload(
     }
 
 
-def listar_especialidades(model_path: str | None = None) -> list:
-    """Especialidades do mapa fixado no treino, para o formulário oferecer um
-    selectbox em vez de texto livre (uma especialidade fora do mapa só poderia
-    virar erro 422, ver inference.EspecialidadeDesconhecidaError).
+def listar_especialidades() -> list[str]:
+    """Especialidades que o cadastro e o formulário de teste oferecem
+    (selectbox em vez de texto livre).
 
-    Lê o artefato local nos dois backends de propósito: a API não expõe um
-    endpoint de vocabulário, e a UI roda na mesma imagem que o modelo (Passo
-    11). Se o artefato não estiver disponível, devolve [] e app.py cai para
-    entrada de texto livre -- a UI não deve morrer por causa do formulário."""
-    try:
-        _, mapa_especialidade = inference.carregar_modelo(
-            model_path or caminho_de_env("MODEL_PATH", "data/model.pkl")
-        )
-    except Exception:  # artefato ausente/corrompido não pode derrubar a UI
-        return []
-    return sorted(mapa_especialidade)
+    Vêm de `params.yaml` (`cadastro.especialidades`, Passo 10.3), não mais do
+    mapa do modelo: o que a clínica atende é configuração, e não efeito
+    colateral do último treino. O teste de coerência trava que a lista está
+    contida no mapa do modelo em produção -- uma especialidade que o modelo não
+    conhece seria quarentena garantida no job D-2."""
+    return sorted(inference.PARAMS.get("cadastro", {}).get("especialidades", []))
 
 
 class ClientePredicaoEmProcesso:
@@ -297,6 +292,10 @@ class ItemFila:
     model_version: str | None = None
     status: str = "agendado"
     nome_completo: str | None = None
+    # Passo 10.3: a predição foi feita sobre um agendamento com algum campo
+    # que o modelo não viu no treino -- a probabilidade é extrapolação. `None`
+    # = predição anterior à checagem, ou ainda sem predição.
+    fora_do_dominio: bool | None = None
 
     @property
     def tem_predicao(self) -> bool:
@@ -321,7 +320,7 @@ class ItemFila:
 _CODIGOS_DE_SCHEMA_DESATUALIZADO = frozenset({"42703", "42P01"})
 
 
-def _relatar_falha_persistencia(exc: Exception, acao: str):
+def _relatar_falha_persistencia(exc: Exception, acao: str) -> NoReturn:
     if isinstance(exc, ConfiguracaoSupabaseAusente):
         raise ErroPersistencia(str(exc)) from exc
     if getattr(exc, "code", None) in _CODIGOS_DE_SCHEMA_DESATUALIZADO:
@@ -372,6 +371,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
                 model_version=ultima.get("model_version") if ultima else None,
                 status=linha["status"],
                 nome_completo=linha["pacientes"].get("nome_completo"),
+                fora_do_dominio=ultima.get("fora_do_dominio") if ultima else None,
             )
         )
     return itens
@@ -797,6 +797,11 @@ def autenticar_funcionario(
         ) from exc
 
     usuario = resposta.user
+    if usuario is None:
+        # O supabase-py levanta quando a senha não confere; resposta sem
+        # usuário não é "login recusado", é o serviço respondendo fora do
+        # contrato -- tratado como indisponível, nunca como sucesso.
+        raise ErroAutenticacaoIndisponivel("resposta do serviço de autenticação sem usuário.")
     # Revoga já o refresh token desta sessão do Supabase: a UI não o usa (ver
     # SessaoFuncionario), e um token válido que ninguém guarda é só superfície.
     # `local` e não o default `global`, que derrubaria as sessões do mesmo

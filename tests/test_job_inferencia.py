@@ -174,6 +174,10 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
     assert por_agendamento[agendamento_baixo["id"]]["classe_prevista"] == 0
     assert por_agendamento[agendamento_alto["id"]]["explicacao_shap"]
     assert por_agendamento[agendamento_baixo["id"]]["explicacao_shap"]
+    # Passo 10.3: os dois payloads estão no domínio do treino, e a marca é
+    # gravada explicitamente como `false` -- `null` ficou para "não verificado".
+    assert por_agendamento[agendamento_alto["id"]]["fora_do_dominio"] is False
+    assert por_agendamento[agendamento_baixo["id"]]["fora_do_dominio"] is False
 
     mensagens = db.table("mensagens_disparadas").select("*").execute().data
     status_por_agendamento = {m["id_agendamento"]: m["status_envio"] for m in mensagens}
@@ -219,8 +223,11 @@ def test_job_sem_agendamentos_d2_nao_toca_mensageria(db):
     assert resultado == {
         "agendamentos_encontrados": 0,
         "predicoes_gravadas": 0,
+        "quarentena": 0,
+        "fora_do_dominio": 0,
         "mensagens_disparadas": 0,
         "lembretes_sem_predicao": 0,
+        "falhas_de_envio": 0,
         "erros": [],
     }
     assert espiao.chamadas == []

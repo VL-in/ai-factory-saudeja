@@ -1,6 +1,8 @@
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from features import calcular_idade, extrair_features_temporais
 
@@ -20,6 +22,13 @@ def test_horario_descarta_minutos_de_proposito():
     assert list(df["horario"]) == [17, 17]
 
 
+@pytest.mark.skipif(
+    not Path("data/consultas-historicas.csv").exists(),
+    reason=(
+        "dataset versionado por DVC, fora do git -- o CI baixa só o model.pkl "
+        "(Passo 10.5). No re-treino, a mesma regra é checada pelo stage validate_data."
+    ),
+)
 def test_dia_de_semana_e_horario_respeitam_grade_de_negocio_no_dataset_real():
     """
     A clinica funciona seg-sex 08h-18h (exceto almoco 12h-13h) e sabado

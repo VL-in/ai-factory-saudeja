@@ -1,4 +1,40 @@
 stages:
+  # Gate de dados (Passo 10.3): barra o dataset ANTES de treinar -- schema,
+  # regra de negocio do contrato de features e distribuicao. O `preprocess`
+  # depende do selo (dados_validados.json), que e' o que garante a ordem entre
+  # os dois stages; o selo so' carrega o que depende do dado, entao mudar uma
+  # checagem aqui nao re-treina o modelo. O relatorio completo (inclusive PSI
+  # producao x semente) e' lido pelo src/retrain_gate.py para o resumo do run.
+  validate_data:
+    cmd: >-
+      docker compose run --rm --build -T
+      -e DATA_PATH=/app/data/consultas-treino.csv
+      -e CONSULTAS_HISTORICAS_PATH=/app/data/consultas-historicas.csv
+      -e SELO_DADOS_PATH=/app/data/interim/dados_validados.json
+      -e RELATORIO_DADOS_PATH=/app/data/interim/relatorio_dados.json
+      train
+      src/validate_data.py
+    deps:
+      - dockerfile
+      - docker-compose.yml
+      - requirements/base.txt
+      - requirements/train.txt
+      - src/validate_data.py
+      - src/contrato_features.py
+      - src/agenda_clinica.py
+      - src/preprocess.py
+      - src/features.py
+      - src/config_projeto.py
+      - data/consultas-treino.csv
+      - data/consultas-historicas.csv
+    params:
+      - cadastro.especialidades
+      - dados
+      - gate.tolerancia
+    outs:
+      - data/interim/dados_validados.json
+      - data/interim/relatorio_dados.json
+
   preprocess:
     cmd: >-
       docker compose run --rm --build -T
@@ -15,8 +51,11 @@ stages:
       - requirements/train.txt
       - src/preprocess.py
       - src/features.py
+      - src/contrato_features.py
+      - src/agenda_clinica.py
       - src/config_projeto.py
       - data/consultas-treino.csv
+      - data/interim/dados_validados.json
     params:
       - features.temporais
     outs:

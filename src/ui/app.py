@@ -298,6 +298,7 @@ def _aba_fila_do_dia():
                 "Horário": item.data_hora_agendada,
                 "Probabilidade": item.probabilidade,
                 "Alto risco": bool(item.classe_prevista) if item.tem_predicao else None,
+                "Fora do domínio": item.fora_do_dominio,
                 "Status": item.status,
             }
             for item in fila
@@ -319,6 +320,13 @@ def _aba_fila_do_dia():
                 format="percent", min_value=0.0, max_value=1.0
             ),
             "Alto risco": st.column_config.CheckboxColumn(),
+            "Fora do domínio": st.column_config.CheckboxColumn(
+                help=(
+                    "O agendamento tem algum dado que o modelo não viu no treino "
+                    "(ex.: distância acima de 50 km, antecedência acima de 90 dias). "
+                    "A probabilidade é extrapolação -- leia com cautela."
+                )
+            ),
         },
     )
 
@@ -347,6 +355,11 @@ def _aba_fila_do_dia():
         f"probabilidade {item.probabilidade:.1%} · modelo `{item.model_version}` · "
         "explicação lida de `predicoes.explicacao_shap`, gravada junto da predição"
     )
+    if item.fora_do_dominio:
+        st.warning(
+            "Este agendamento tem dados fora do que o modelo viu no treino -- a "
+            "probabilidade acima é uma extrapolação e merece menos confiança que as demais."
+        )
     _mostrar_contribuicoes(item.explicacao, item.explicacao_texto)
 
 

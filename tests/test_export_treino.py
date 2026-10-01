@@ -1,5 +1,6 @@
 """
-SaúdeJá — testes de src/export_treino.py (Passo 9.0).
+SaúdeJá — testes de src/export_treino.py (Passo 9.0; contrato e
+`historico_noshow` gravado no Passo 10.3).
 
 `montar_dataset_producao`/`montar_dataset_treino` recebem `agendamentos` já
 prontos (mesma forma que `db.repositories.buscar_agendamentos_com_desfecho()`
@@ -27,6 +28,7 @@ def _agendamento(
         "distancia_km": 5.5,
         "data_hora_agendada": data_hora_agendada,
         "dias_entre_agendamento_consulta": 14,
+        "historico_noshow": 0,
         "status": status,
         "pacientes": {
             "id_paciente_externo": id_paciente_externo,
@@ -59,38 +61,56 @@ def test_idade_calculada_a_partir_da_data_da_consulta_nao_de_hoje():
     """idade é a idade NA CONSULTA (mesmo conceito do dataset histórico),
     não a idade atual de quem roda o export."""
     agendamentos = [
-        _agendamento("A1", "P1", "2000-06-15", "2026-06-14 10:00:00", "concluido"),
-        _agendamento("A2", "P1", "2000-06-15", "2026-06-15 10:00:00", "concluido"),
+        _agendamento("A1", "P1", "2000-06-16", "2026-06-15 10:00:00", "concluido"),
+        _agendamento("A2", "P1", "2000-06-16", "2026-06-16 10:00:00", "concluido"),
     ]
     df = export_treino.montar_dataset_producao(agendamentos).set_index("id_consulta")
     assert df.loc["A1", "idade"] == 25  # véspera do aniversário
     assert df.loc["A2", "idade"] == 26  # dia do aniversário
 
 
-def test_historico_noshow_conta_so_no_shows_anteriores_do_mesmo_paciente():
-    """Point-in-time: um no_show POSTERIOR não pode contaminar o
-    historico_noshow de uma consulta anterior -- vazaria futuro."""
+def test_historico_noshow_e_o_valor_gravado_no_cadastro_nao_recalculado():
+    """Passo 10.3: o dataset de treino carrega o `historico_noshow` com que o
+    job D-2 predisse (o gravado no cadastro). Até aqui ele era recontado a
+    partir dos desfechos -- e uma falta acontecida entre o agendamento e a
+    consulta entrava no recálculo, mas não na predição: skew treino-serving.
+
+    A1 é uma falta anterior a A2, mas A2 foi agendada antes de A1 acontecer
+    (gravou 0): o treino tem de ver 0, como o modelo viu."""
     agendamentos = [
-        _agendamento("A1", "P1", "1990-01-01", "2026-01-01 10:00:00", "no_show"),
-        _agendamento("A2", "P1", "1990-01-01", "2026-01-10 10:00:00", "concluido"),
-        _agendamento("A3", "P1", "1990-01-01", "2026-01-20 10:00:00", "no_show"),
-        _agendamento("A4", "P1", "1990-01-01", "2026-01-30 10:00:00", "concluido"),
+        _agendamento("A1", "P1", "1990-01-01", "2026-01-05 10:00:00", "no_show"),
+        _agendamento(
+            "A2", "P1", "1990-01-01", "2026-01-20 10:00:00", "concluido", historico_noshow=0
+        ),
+        _agendamento(
+            "A3", "P2", "1990-01-01", "2026-01-30 10:00:00", "concluido", historico_noshow=3
+        ),
     ]
     df = export_treino.montar_dataset_producao(agendamentos).set_index("id_consulta")
 
-    assert df.loc["A1", "historico_noshow"] == 0  # nenhum no_show antes desta
-    assert df.loc["A2", "historico_noshow"] == 1  # só A1 aconteceu antes
-    assert df.loc["A3", "historico_noshow"] == 1  # A1 antes; A3 é o no_show desta linha
-    assert df.loc["A4", "historico_noshow"] == 2  # A1 e A3 aconteceram antes
+    assert df.loc["A2", "historico_noshow"] == 0
+    assert df.loc["A3", "historico_noshow"] == 3
 
 
-def test_historico_noshow_nao_mistura_pacientes_diferentes():
+def test_linha_fora_do_contrato_fica_fora_do_export_e_e_identificada():
+    """Mesma quarentena do job D-2: uma linha impossível não entra no dataset
+    de treino, e o export diz qual foi -- pelo id do agendamento, sem o valor."""
     agendamentos = [
-        _agendamento("A1", "P1", "1990-01-01", "2026-01-01 10:00:00", "no_show"),
-        _agendamento("A2", "P2", "1990-01-01", "2026-01-10 10:00:00", "concluido"),
+        _agendamento("A1", "P1", "1990-01-01", "2026-01-05 10:00:00", "concluido"),
+        # domingo: a clínica não abre
+        _agendamento("A2", "P1", "1990-01-01", "2026-02-01 10:00:00", "no_show"),
+        # especialidade que o cadastro não oferece
+        _agendamento(
+            "A3", "P2", "1990-01-01", "2026-01-06 10:00:00", "concluido", especialidade="xxx"
+        ),
     ]
-    df = export_treino.montar_dataset_producao(agendamentos).set_index("id_consulta")
-    assert df.loc["A2", "historico_noshow"] == 0  # no_show foi de outro paciente
+    df, quarentena = export_treino.montar_dataset_producao_com_quarentena(agendamentos)
+
+    assert list(df["id_consulta"]) == ["A1"]
+    assert {ident for ident, _ in quarentena} == {"A2", "A3"}
+    motivos = {ident: violacao.campo for ident, violacao in quarentena}
+    assert motivos == {"A2": "data_hora_agendada", "A3": "especialidade"}
+    assert all("1990" not in str(violacao) for _, violacao in quarentena)
 
 
 def test_producao_nunca_emite_coluna_de_telefone_ou_outra_pii():
@@ -123,7 +143,7 @@ def test_montar_dataset_treino_junta_semente_e_producao(tmp_path):
     semente.to_csv(caminho_semente, index=False)
 
     agendamentos = [
-        _agendamento("A1", "P1", "1990-01-01", "2026-02-01 10:00:00", "no_show"),
+        _agendamento("A1", "P1", "1990-01-01", "2026-02-02 10:00:00", "no_show"),
     ]
 
     dataset = export_treino.montar_dataset_treino(

@@ -35,8 +35,10 @@ import os
 import queue
 import threading
 import time
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 TIPO_PREDICAO = "predicao"
 TIPO_JOB_D2 = "job_d2"
@@ -57,8 +59,13 @@ CHAVES_DETALHE_PERMITIDAS = frozenset(
         "rota",
         "status_http",
         "excecao",
+        # Nome do campo do contrato de features (Passo 10.3) que mandou um
+        # agendamento para a quarentena -- um de um conjunto fechado de nomes
+        # de coluna, nunca o valor que estava nele.
+        "campo_invalido",
         "agendamentos_encontrados",
         "predicoes_gravadas",
+        "quarentena",
         "mensagens_disparadas",
         "lembretes_sem_predicao",
         "erros",
@@ -72,10 +79,12 @@ SEGUNDOS_DE_PAUSA_APOS_FALHAS = 60.0
 FALHAS_CONSECUTIVAS_ATE_PAUSAR = 5
 RETENCAO_PADRAO_DIAS = 90
 
-_fila: queue.Queue | None = None
+Escritor = Callable[..., Any]
+
+_fila: queue.Queue[dict[str, Any]] | None = None
 _worker: threading.Thread | None = None
 _trava = threading.Lock()
-_escritor = None  # injetável nos testes (ver tests/test_observabilidade.py)
+_escritor: Escritor | None = None  # injetável nos testes (ver tests/test_observabilidade.py)
 
 # Estado de degradação, tocado só pelo worker.
 _falhas_consecutivas = 0
@@ -101,14 +110,14 @@ def retencao_dias() -> int:
         return RETENCAO_PADRAO_DIAS
 
 
-def sanitizar_detalhe(detalhe: dict | None) -> dict:
+def sanitizar_detalhe(detalhe: dict[str, Any] | None) -> dict[str, Any]:
     """Mantém só as chaves da allowlist e corta valores longos. Chave
     desconhecida é **descartada em silêncio**, não um erro: um caller novo
     passando `telefone=...` por engano não pode derrubar a predição -- mas
     também não pode gravar o telefone."""
     if not detalhe:
         return {}
-    limpo = {}
+    limpo: dict[str, Any] = {}
     for chave, valor in detalhe.items():
         if chave not in CHAVES_DETALHE_PERMITIDAS:
             continue
@@ -125,7 +134,7 @@ def registrar_evento(
     origem: str = ORIGEM_PROCESSO,
     duracao_ms: int | None = None,
     model_version: str | None = None,
-    detalhe: dict | None = None,
+    detalhe: dict[str, Any] | None = None,
 ) -> bool:
     """Enfileira um evento para gravação assíncrona. Devolve se foi enfileirado
     (False = desligado, fila cheia ou processo sem destino de escrita) -- quem
@@ -162,8 +171,8 @@ def medir(
     tipo: str,
     origem: str = ORIGEM_PROCESSO,
     model_version: str | None = None,
-    detalhe: dict | None = None,
-):
+    detalhe: dict[str, Any] | None = None,
+) -> Iterator[dict[str, Any]]:
     """Cronometra o bloco e registra um evento ao sair -- `ok` se passou,
     `erro` (com o *nome da classe* da exceção, nunca a mensagem) se levantou.
     A exceção segue subindo: este módulo observa, não trata.
@@ -172,7 +181,7 @@ def medir(
     (`model_version`, contadores), sem obrigar quem chama a montar o evento
     duas vezes.
     """
-    contexto = {"model_version": model_version, "detalhe": dict(detalhe or {})}
+    contexto: dict[str, Any] = {"model_version": model_version, "detalhe": dict(detalhe or {})}
     inicio = time.perf_counter()
     try:
         yield contexto
@@ -182,7 +191,14 @@ def medir(
     _registrar_do_contexto(tipo, origem, contexto, inicio, STATUS_OK, None)
 
 
-def _registrar_do_contexto(tipo, origem, contexto, inicio, status, exc):
+def _registrar_do_contexto(
+    tipo: str,
+    origem: str,
+    contexto: dict[str, Any],
+    inicio: float,
+    status: str,
+    exc: BaseException | None,
+) -> None:
     detalhe = dict(contexto.get("detalhe") or {})
     if exc is not None:
         detalhe["excecao"] = exc.__class__.__name__
@@ -196,7 +212,7 @@ def _registrar_do_contexto(tipo, origem, contexto, inicio, status, exc):
     )
 
 
-def definir_escritor(funcao) -> None:
+def definir_escritor(funcao: Escritor | None) -> None:
     """Troca o destino de gravação (default: `db.repositories`). Existe para os
     testes injetarem um escritor que conta chamadas ou falha de propósito, sem
     precisar de Supabase de pé para provar que a falha não derruba nada."""
@@ -207,7 +223,7 @@ def definir_escritor(funcao) -> None:
     _pausado_ate = 0.0
 
 
-def _garantir_worker() -> queue.Queue:
+def _garantir_worker() -> queue.Queue[dict[str, Any]]:
     global _fila, _worker
     with _trava:
         if _fila is None:
@@ -216,22 +232,22 @@ def _garantir_worker() -> queue.Queue:
             # daemon: o processo (job, uvicorn, streamlit) nunca deve ficar
             # preso esperando o worker de métrica terminar.
             _worker = threading.Thread(
-                target=_consumir_fila, name="observabilidade", daemon=True
+                target=_consumir_fila, args=(_fila,), name="observabilidade", daemon=True
             )
             _worker.start()
     return _fila
 
 
-def _consumir_fila() -> None:
+def _consumir_fila(fila: queue.Queue[dict[str, Any]]) -> None:
     while True:
-        evento = _fila.get()
+        evento = fila.get()
         try:
             _gravar(evento)
         finally:
-            _fila.task_done()
+            fila.task_done()
 
 
-def _gravar(evento: dict) -> None:
+def _gravar(evento: dict[str, Any]) -> None:
     """Único ponto que fala com o destino. Engole toda exceção de propósito:
     este código roda no worker, e uma exceção aqui mataria a thread e levaria
     junto o registro de todos os eventos seguintes."""
@@ -259,7 +275,7 @@ def _gravar(evento: dict) -> None:
         _pausado_ate = 0.0
 
 
-def _obter_escritor():
+def _obter_escritor() -> Escritor:
     if _escritor is not None:
         return _escritor
     # Import tardio: ver docstring do módulo (a imagem da API não tem
@@ -287,7 +303,7 @@ def flush(timeout: float = 5.0) -> bool:
     return _fila.unfinished_tasks == 0
 
 
-def percentil(valores, p: float) -> float | None:
+def percentil(valores: Iterable[float | int | None], p: float) -> float | None:
     """Percentil por interpolação linear (mesma definição de `numpy.percentile`
     com method='linear'), implementado aqui para a aba não importar numpy só
     para isso e para ser testável com um conjunto de latências conhecidas.

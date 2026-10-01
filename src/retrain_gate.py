@@ -19,13 +19,23 @@ modelo vigente já os viola (0.429 / 0.419) e, se fossem, nada jamais seria
 promovido. O gap absoluto é exceção documentada, com fechamento previsto
 para o Passo 12.
 
-**Três desfechos, três códigos de saída** (o workflow depende deles):
+**Além da regressão relativa** (Passo 10.4): um **piso absoluto** de
+`roc_auc` (`gate.piso`, contra o efeito catraca de promoções que regridem um
+pouco cada) e a **suíte de sanidade** do desafiante (`src/sanidade_modelo.py`:
+saída em [0, 1], não constante, SHAP aditivo, política do contrato nos casos
+limítrofes). As duas bloqueiam. A **taxa de disparo projetada** no fold de
+teste só avisa acima de `gate.taxa_disparo_alerta` (decisão da autora: sem
+teto) -- e vai para o resumo e o PR de promoção, porque é o número que liga o
+modelo ao custo de mensageria do BRIEFING.
+
+**Quatro desfechos, quatro códigos de saída** (o workflow depende deles):
 
 | Código | Situação | Efeito |
 |---|---|---|
 | 0 | promovido (ou bootstrap) | `champion_metrics.json` reescrito; o workflow faz `dvc push` + PR |
-| 1 | bloqueado por regressão | nada é reescrito; o anterior segue em produção **por construção** |
+| 1 | bloqueado (regressão, piso, sanidade) | nada é reescrito; o anterior segue em produção |
 | 2 | nenhum re-treino efetivo | dataset com hash idêntico, `dvc repro` não reexecutou nada |
+| 3 | o pipeline falhou | `dvc repro` não terminou -- em geral o `validate_data` barrou o dataset |
 
 O código 2 existe porque `RANDOM_STATE`/`TEST_SIZE` são fixos: sem desfecho
 novo registrado pela clínica (Passo 9.0), reexecutar o treino reproduziria a
@@ -51,11 +61,14 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 import joblib
 import yaml
 from mlflow.tracking import MlflowClient
 
+import inference
+import sanidade_modelo
 from config_projeto import REPO_ROOT, caminho_de_env, carregar_params, fuso_da_clinica
 from inference import calcular_model_version
 
@@ -66,6 +79,9 @@ RUN_ID_PATH = caminho_de_env("RUN_ID_PATH", "data/interim/mlflow_run_id.txt")
 MODEL_PATH = caminho_de_env("MODEL_PATH", "data/model.pkl")
 TEST_PATH = caminho_de_env("TEST_PATH", "data/interim/test.pkl")
 DATASET_DVC_PATH = caminho_de_env("DATASET_DVC_PATH", "data/consultas-treino.csv.dvc")
+RELATORIO_DADOS_PATH = caminho_de_env(
+    "RELATORIO_DADOS_PATH", "data/interim/relatorio_dados.json"
+)
 
 # O gate roda no HOST (ou no runner), não dentro dos containers do dvc.yaml --
 # os stages apontam para http://mlflow-server:5000 (nome de serviço na rede
@@ -81,6 +97,7 @@ METRICAS_DO_GATE = ("recall_1", "f1_1", "roc_auc")
 SAIDA_PROMOVIDO = 0
 SAIDA_BLOQUEADO = 1
 SAIDA_SEM_RETREINO = 2
+SAIDA_FALHA_PIPELINE = 3
 
 # Acima deste número de positivos no fold de teste, a tolerância de contagem
 # de 0.05 deixa de ser justificada pela granularidade da amostra e passa a
@@ -101,15 +118,16 @@ class Decisao:
     promover: bool
     codigo_saida: int
     motivo: str
-    comparacoes: list[dict] = field(default_factory=list)
+    comparacoes: list[dict[str, Any]] = field(default_factory=list)
     bootstrap: bool = False
     avisos: list[str] = field(default_factory=list)
+    taxa_disparo_projetada: float | None = None
 
 
 # --------------------------------------------------------------------------
 # leitura
 # --------------------------------------------------------------------------
-def tolerancias(params: dict | None = None) -> dict[str, float]:
+def tolerancias(params: dict[str, Any] | None = None) -> dict[str, float]:
     """Tolerâncias de regressão por métrica, lidas de `params.yaml`.
 
     Não têm default no código de propósito: um default silencioso é a
@@ -125,7 +143,15 @@ def tolerancias(params: dict | None = None) -> dict[str, float]:
     return {m: float(config[m]) for m in METRICAS_DO_GATE}
 
 
-def carregar_champion(path: str | None = None) -> dict | None:
+def pisos(params: dict[str, Any] | None = None) -> dict[str, float]:
+    """Pisos absolutos (`gate.piso`, Passo 10.4). Diferente da tolerância, a
+    ausência aqui não é erro: o piso é uma proteção a mais sobre a comparação
+    relativa, não o critério principal."""
+    config = (params or PARAMS).get("gate", {}).get("piso", {}) or {}
+    return {m: float(v) for m, v in config.items()}
+
+
+def carregar_champion(path: str | None = None) -> dict[str, Any] | None:
     """Métricas do campeão em produção, ou `None` no primeiro ciclo
     (bootstrap). `None` e "arquivo corrompido" são coisas diferentes: o
     segundo levanta erro, porque promover por cima de um campeão ilegível
@@ -135,7 +161,7 @@ def carregar_champion(path: str | None = None) -> dict | None:
         return None
     try:
         with open(caminho, encoding="utf-8") as f:
-            champion = json.load(f)
+            champion: dict[str, Any] = json.load(f)
     except json.JSONDecodeError as exc:
         raise ErroGate(f"{caminho} não é JSON válido: {exc}") from exc
 
@@ -190,11 +216,11 @@ def positivos_no_fold_de_teste(path: str | None = None) -> int | None:
         return None
 
 
-def _info_dataset() -> dict:
+def _info_dataset() -> dict[str, Any]:
     """Identidade do dataset que gerou o desafiante: o md5 que o DVC
     registra. Sem isso, duas linhas de `champion_metrics.json` com métricas
     diferentes não dizem se o que mudou foi o dado ou o código."""
-    info: dict = {"arquivo": os.path.basename(DATASET_DVC_PATH).removesuffix(".dvc")}
+    info: dict[str, Any] = {"arquivo": os.path.basename(DATASET_DVC_PATH).removesuffix(".dvc")}
     if os.path.exists(DATASET_DVC_PATH):
         with open(DATASET_DVC_PATH, encoding="utf-8") as f:
             outs = (yaml.safe_load(f) or {}).get("outs") or [{}]
@@ -209,8 +235,8 @@ def _info_dataset() -> dict:
 # decisão (puro -- é o que os testes exercitam sem Docker/MLflow)
 # --------------------------------------------------------------------------
 def comparar(
-    metricas_campeao: dict, metricas_desafiante: dict, tol: dict[str, float]
-) -> list[dict]:
+    metricas_campeao: dict[str, Any], metricas_desafiante: dict[str, Any], tol: dict[str, float]
+) -> list[dict[str, Any]]:
     """Uma linha por métrica do gate. `delta` negativo é piora; só conta
     como regressão o que piora **além** da tolerância daquela métrica."""
     linhas = []
@@ -233,16 +259,38 @@ def comparar(
     return linhas
 
 
+def abaixo_do_piso(metricas: dict[str, Any], piso: dict[str, float]) -> list[str]:
+    return [
+        f"{m} {float(metricas[m]):.4f} abaixo do piso absoluto {p}"
+        for m, p in piso.items()
+        if m in metricas and float(metricas[m]) < p
+    ]
+
+
 def decidir(
-    champion: dict | None,
-    metricas_desafiante: dict,
+    champion: dict[str, Any] | None,
+    metricas_desafiante: dict[str, Any],
     tol: dict[str, float] | None = None,
     positivos_no_fold: int | None = None,
+    piso: dict[str, float] | None = None,
 ) -> Decisao:
     """Promove, bloqueia ou registra bootstrap. Função pura: não escreve
-    arquivo nem toca em MLflow/DVC."""
+    arquivo nem toca em MLflow/DVC.
+
+    O piso vale também no bootstrap: sem campeão para comparar, é a única
+    coisa que impede um primeiro modelo perto do acaso de ir para produção."""
     tol = tol or tolerancias()
+    piso = pisos() if piso is None else piso
     avisos = _avisos_de_tolerancia(tol, positivos_no_fold)
+    furos_de_piso = abaixo_do_piso(metricas_desafiante, piso)
+
+    if champion is None and furos_de_piso:
+        return Decisao(
+            promover=False,
+            codigo_saida=SAIDA_BLOQUEADO,
+            motivo=f"bootstrap bloqueado: {'; '.join(furos_de_piso)}",
+            avisos=avisos,
+        )
 
     if champion is None:
         return Decisao(
@@ -259,16 +307,22 @@ def decidir(
     comparacoes = comparar(champion["metricas"], metricas_desafiante, tol)
     regressoes = [c for c in comparacoes if c["regrediu"]]
 
-    if regressoes:
-        detalhe = ", ".join(
-            f"{c['metrica']} {c['campeao']:.4f} -> {c['desafiante']:.4f} "
-            f"({c['delta']:+.4f}, tolerância {c['tolerancia']})"
-            for c in regressoes
-        )
+    if regressoes or furos_de_piso:
+        motivos = []
+        if regressoes:
+            detalhe = ", ".join(
+                f"{c['metrica']} {c['campeao']:.4f} -> {c['desafiante']:.4f} "
+                f"({c['delta']:+.4f}, tolerância {c['tolerancia']})"
+                for c in regressoes
+            )
+            motivos.append(
+                f"regressão além da tolerância em {len(regressoes)} métrica(s): {detalhe}"
+            )
+        motivos += furos_de_piso
         return Decisao(
             promover=False,
             codigo_saida=SAIDA_BLOQUEADO,
-            motivo=f"regressão além da tolerância em {len(regressoes)} métrica(s): {detalhe}",
+            motivo="; ".join(motivos),
             comparacoes=comparacoes,
             avisos=avisos,
         )
@@ -304,11 +358,11 @@ def _avisos_de_tolerancia(tol: dict[str, float], positivos_no_fold: int | None) 
 # escrita
 # --------------------------------------------------------------------------
 def montar_champion(
-    metricas: dict,
+    metricas: dict[str, Any],
     run_id: str,
     decisao: Decisao,
     model_path: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """O conteúdo de `champion_metrics.json`. `metricas` guarda tudo que a
     run logou (accuracy/pr_auc/classe 0 servem ao pitch do Passo 12), mas só
     `METRICAS_DO_GATE` é critério. `decision_threshold` entra porque
@@ -326,6 +380,7 @@ def montar_champion(
         "promovido_em": datetime.now(tz=fuso_da_clinica()).isoformat(timespec="seconds"),
         "motivo": decisao.motivo,
         "decision_threshold": PARAMS["decision"]["threshold"],
+        "taxa_disparo_projetada": decisao.taxa_disparo_projetada,
         "dataset": _info_dataset(),
         "metricas": {k: float(v) for k, v in sorted(metricas.items())},
         "excecao_slo_documentada": (
@@ -336,7 +391,7 @@ def montar_champion(
     }
 
 
-def escrever_champion(champion: dict, path: str | None = None) -> str:
+def escrever_champion(champion: dict[str, Any], path: str | None = None) -> str:
     caminho = path or CHAMPION_PATH
     # Escrita atômica, mesma razão de src/train.py: este arquivo é lido pelo
     # passo seguinte do workflow (commit/PR) e por quem inspeciona o repo.
@@ -348,7 +403,11 @@ def escrever_champion(champion: dict, path: str | None = None) -> str:
     return caminho
 
 
-def formatar_resumo(decisao: Decisao, metricas_desafiante: dict | None = None) -> str:
+def formatar_resumo(
+    decisao: Decisao,
+    metricas_desafiante: dict[str, Any] | None = None,
+    dados: dict[str, Any] | None = None,
+) -> str:
     """Markdown para o `$GITHUB_STEP_SUMMARY`. É aqui que a evidência de uma
     rejeição sobrevive ao workflow -- taguear a run no MLflow efêmero não
     serviria, porque ele é destruído junto com o job (ADR-006)."""
@@ -359,6 +418,8 @@ def formatar_resumo(decisao: Decisao, metricas_desafiante: dict | None = None) -
     # ainda protege o caso geral; aqui a escolha é não criar o problema.
     if decisao.codigo_saida == SAIDA_SEM_RETREINO:
         titulo = "sem re-treino efetivo"
+    elif decisao.codigo_saida == SAIDA_FALHA_PIPELINE:
+        titulo = "pipeline falhou"
     elif decisao.promover and decisao.bootstrap:
         titulo = "campeão criado (bootstrap)"
     elif decisao.promover:
@@ -386,8 +447,27 @@ def formatar_resumo(decisao: Decisao, metricas_desafiante: dict | None = None) -
             linhas.append(f"| `{metrica}` | {metricas_desafiante[metrica]:.4f} |")
         linhas.append("")
 
+    if decisao.taxa_disparo_projetada is not None:
+        linhas += [
+            f"Taxa de disparo projetada no fold de teste: "
+            f"**{decisao.taxa_disparo_projetada:.1%}** dos agendamentos receberiam "
+            "lembrete pago no threshold vigente.",
+            "",
+        ]
+
     for aviso in decisao.avisos:
         linhas += [f"> **Aviso:** {aviso}", ""]
+
+    if dados:
+        linhas.append("**Validação de dados** (`validate_data`):")
+        linhas += [f"- **bloqueio:** {b}" for b in dados.get("bloqueios", [])]
+        linhas += [f"- alerta: {a}" for a in dados.get("alertas", [])]
+        fora = (dados.get("resumo") or {}).get("fora_do_dominio_do_treino")
+        if fora:
+            linhas.append(f"- fora do domínio do treino (não bloqueia): {fora}")
+        if not dados.get("bloqueios") and not dados.get("alertas") and not fora:
+            linhas.append("- sem bloqueios nem alertas")
+        linhas.append("")
 
     if not decisao.promover and decisao.codigo_saida == SAIDA_BLOQUEADO:
         linhas += [
@@ -415,7 +495,12 @@ def _publicar_resumo(texto: str) -> None:
             f.write(texto + "\n")
 
 
-def _escrever_relatorio(caminho: str, decisao: Decisao, metricas: dict | None) -> None:
+def _escrever_relatorio(
+    caminho: str,
+    decisao: Decisao,
+    metricas: dict[str, Any] | None,
+    dados: dict[str, Any] | None = None,
+) -> None:
     """Artifact JSON do run -- o comparativo campeão x desafiante legível por
     máquina, para o caso bloqueado não deixar só um texto no log."""
     relatorio = {
@@ -425,7 +510,9 @@ def _escrever_relatorio(caminho: str, decisao: Decisao, metricas: dict | None) -
         "bootstrap": decisao.bootstrap,
         "avisos": decisao.avisos,
         "comparacoes": decisao.comparacoes,
+        "taxa_disparo_projetada": decisao.taxa_disparo_projetada,
         "metricas_desafiante": {k: float(v) for k, v in sorted((metricas or {}).items())},
+        "dados": dados,
     }
     os.makedirs(os.path.dirname(caminho) or ".", exist_ok=True)
     with open(caminho, "w", encoding="utf-8") as f:
@@ -435,11 +522,75 @@ def _escrever_relatorio(caminho: str, decisao: Decisao, metricas: dict | None) -
 # --------------------------------------------------------------------------
 # orquestração
 # --------------------------------------------------------------------------
+def ler_relatorio_de_dados(path: str | None = None) -> dict[str, Any] | None:
+    """Relatório do stage `validate_data` (Passo 10.3), se existir. Escrito
+    inclusive quando o dataset é barrado -- que é quando ele mais importa."""
+    caminho = path or RELATORIO_DADOS_PATH
+    if not os.path.exists(caminho):
+        return None
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            dados: dict[str, Any] = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return dados
+
+
+def taxa_de_disparo_projetada(
+    model_path: str | None = None, test_path: str | None = None
+) -> float | None:
+    """Fração do fold de teste que receberia lembrete pago no threshold
+    vigente. `None` se o fold ou o modelo não puderem ser lidos -- é um
+    número de acompanhamento, não pode derrubar a decisão do gate."""
+    try:
+        model, _ = inference.carregar_modelo(model_path or MODEL_PATH)
+        X = joblib.load(test_path or TEST_PATH)["X"]
+    except Exception:
+        return None
+    threshold = float(PARAMS["decision"]["threshold"])
+    return float((inference.predizer(model, X) >= threshold).mean())
+
+
+def verificar_sanidade(model_path: str | None = None) -> sanidade_modelo.ResultadoSanidade:
+    """Ponto único de chamada da suíte (os testes do gate a substituem, porque
+    o `model.pkl` deles são bytes quaisquer)."""
+    return sanidade_modelo.verificar_modelo(model_path or MODEL_PATH)
+
+
+def _aplicar_verificacoes_do_desafiante(decisao: Decisao) -> Decisao:
+    """Sanidade (bloqueia) e taxa de disparo (avisa), somadas à decisão das
+    métricas. Rodam também num ciclo já bloqueado: o resumo fica completo."""
+    sanidade = verificar_sanidade()
+    decisao.avisos += [f"sanidade: {a}" for a in sanidade.avisos]
+
+    decisao.taxa_disparo_projetada = taxa_de_disparo_projetada()
+    limite = float(PARAMS.get("gate", {}).get("taxa_disparo_alerta", 1.0))
+    if decisao.taxa_disparo_projetada is not None and decisao.taxa_disparo_projetada > limite:
+        decisao.avisos.append(
+            f"taxa de disparo projetada {decisao.taxa_disparo_projetada:.1%} acima de "
+            f"{limite:.0%} -- o modelo mandaria lembrete pago a mais pacientes do que o "
+            "orçamento de mensageria prevê (BRIEFING: cortar 70%)"
+        )
+
+    if sanidade.aprovado:
+        return decisao
+    reprovacao = "suíte de sanidade reprovou o desafiante: " + "; ".join(sanidade.falhas)
+    motivo = reprovacao if decisao.promover else f"{decisao.motivo}; {reprovacao}"
+    decisao.promover = False
+    decisao.codigo_saida = SAIDA_BLOQUEADO
+    decisao.bootstrap = False
+    decisao.motivo = motivo
+    return decisao
+
+
 def _dvc_repro() -> None:
     """Reexecuta o pipeline. Sem `capture_output`: a saída do DVC/Docker vai
     direto para o log do workflow, que é onde se debuga um treino que falhou."""
     print("[gate] dvc repro (pipeline de treino completo)", flush=True)
-    subprocess.run(["dvc", "repro"], cwd=REPO_ROOT, check=True)
+    # S607: `dvc` vem do PATH de propósito -- é o do ambiente Python ativo
+    # (`requirements/dvc.txt`), o mesmo que o workflow e a autora usam. Os
+    # argumentos são literais; não há entrada externa no comando.
+    subprocess.run(["dvc", "repro"], cwd=REPO_ROOT, check=True)  # noqa: S607
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -464,7 +615,10 @@ def main(argv: list[str] | None = None) -> int:
         run_id = _ler_run_id()
     else:
         run_id_antes = _ler_run_id()
-        _dvc_repro()
+        try:
+            _dvc_repro()
+        except subprocess.CalledProcessError as exc:
+            return _falha_do_pipeline(exc, args.relatorio_json)
         run_id = _ler_run_id()
         if run_id is not None and run_id == run_id_antes:
             # Nada reexecutou: dataset com o mesmo hash. Com RANDOM_STATE e
@@ -497,14 +651,35 @@ def main(argv: list[str] | None = None) -> int:
     decisao = decidir(
         champion, metricas, positivos_no_fold=positivos_no_fold_de_teste()
     )
+    decisao = _aplicar_verificacoes_do_desafiante(decisao)
 
     if decisao.promover:
         caminho = escrever_champion(montar_champion(metricas, run_id, decisao))
         print(f"[gate] campeão atualizado em {caminho}")
 
-    _publicar_resumo(formatar_resumo(decisao, metricas))
+    dados = ler_relatorio_de_dados()
+    _publicar_resumo(formatar_resumo(decisao, metricas, dados))
     if args.relatorio_json:
-        _escrever_relatorio(args.relatorio_json, decisao, metricas)
+        _escrever_relatorio(args.relatorio_json, decisao, metricas, dados)
+    return decisao.codigo_saida
+
+
+def _falha_do_pipeline(exc: subprocess.CalledProcessError, relatorio_json: str | None) -> int:
+    """`dvc repro` não terminou. O caso esperado é o `validate_data` barrando
+    o dataset -- aí o relatório dele diz por quê, e vai para o resumo. Sem
+    isso o workflow mostraria só um traceback com código 1, indistinguível de
+    um bloqueio por regressão."""
+    dados = ler_relatorio_de_dados()
+    if dados is not None and not dados.get("aprovado", True):
+        motivo = "a validação de dados barrou o dataset antes do treino: " + "; ".join(
+            dados.get("bloqueios", [])
+        )
+    else:
+        motivo = f"`dvc repro` falhou (código {exc.returncode}) -- ver o log do passo"
+    decisao = Decisao(promover=False, codigo_saida=SAIDA_FALHA_PIPELINE, motivo=motivo)
+    _publicar_resumo(formatar_resumo(decisao, dados=dados))
+    if relatorio_json:
+        _escrever_relatorio(relatorio_json, decisao, None, dados)
     return decisao.codigo_saida
 
 

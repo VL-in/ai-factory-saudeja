@@ -381,6 +381,48 @@ def test_fila_da_ui_carrega_a_explicacao_gravada_com_a_predicao(db):
     assert item.explicacao == contribuicoes
     assert item.model_version == "6430cb3315da"
     assert item.explicacao_texto is None  # plug do LLM inativo (Passo 13)
+    assert item.fora_do_dominio is None  # gravada sem a marca: "não verificado"
+
+
+@pytest.mark.integracao
+def test_marca_fora_do_dominio_faz_round_trip_ate_a_fila(db):
+    """Passo 10.3: o job grava a marca e a fila a mostra (migration
+    20260930000000_fora_do_dominio.sql)."""
+    import db.repositories as repositories
+    from ui import logic
+
+    _, agendamento = _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-DOM-1")
+    repositories.gravar_predicao(
+        id_agendamento=agendamento["id"],
+        probabilidade=0.4,
+        classe_prevista=0,
+        threshold_usado=0.6,
+        explicacao_shap=[{"feature": "distancia_km", "contribuicao": 0.1}],
+        model_version="6430cb3315da",
+        fora_do_dominio=True,
+    )
+
+    item = next(
+        i
+        for i in logic.buscar_fila_do_dia(hoje_na_clinica())
+        if i.id_paciente_externo == "EXT-DOM-1"
+    )
+    assert item.fora_do_dominio is True
+
+
+@pytest.mark.integracao
+def test_conta_consultas_passadas_ainda_sem_desfecho(db):
+    """Completude de rótulo do re-treino (Passo 10.3): só conta consulta de
+    antes de hoje ainda `agendado` -- a de hoje ainda pode receber desfecho, e
+    a que já tem desfecho não é lacuna."""
+    import db.repositories as repositories
+
+    _criar_paciente_e_agendamento(repositories, dias=-3, id_externo="EXT-ROT-1")
+    _, com_desfecho = _criar_paciente_e_agendamento(repositories, dias=-2, id_externo="EXT-ROT-2")
+    repositories.atualizar_status_agendamento(com_desfecho["id"], "concluido")
+    _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-ROT-3")
+
+    assert repositories.contar_consultas_sem_desfecho(hoje_na_clinica()) == 1
 
 
 @pytest.mark.integracao

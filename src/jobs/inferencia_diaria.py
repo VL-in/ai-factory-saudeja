@@ -3,32 +3,40 @@ SaúdeJá — job de inferência diária D-2 (Passo 6 do plano de implementaçã
 
 Busca no Supabase os agendamentos de amanhã até D+2 ainda sem predição (via
 `db.repositories.buscar_agendamentos_d2_pendentes` -- a janela de três dias
-recupera sozinha um dia em que o cron não rodou), roda a predição+
+recupera sozinha um dia em que o cron não rodou), aplica o contrato de
+features (`src/contrato_features.py`, Passo 10.3), roda a predição+
 explicação reaproveitando `src/inference.py`/`src/explain.py` -- os mesmos
 módulos que a API (Passo 3) usa, sem lógica de predição duplicada --, grava
 o resultado em `predicoes` e decide o disparo de lembrete pago conforme o
 threshold de `params.yaml`, sempre registrando a decisão (enviado ou não)
 em `mensagens_disparadas` para auditoria (SLA §6).
 
-Importa o modelo em processo (decisão do ADR-005 b), não via HTTP à API --
-mesmo motivo do Streamlit: o job roda como parte da imagem do HF Space
-(architecture.md §3.2.2), sem depender de a API estar de pé.
+Importa o modelo em processo (decisão do ADR-005 b), não via HTTP à API. Roda
+no runner do GitHub Actions (`.github/workflows/job_d2.yml`, Passo 10.5), não
+no Space -- ver a emenda do Passo 10 no ADR-005.
 
-Rodar como script (`python src/jobs/inferencia_diaria.py`) ou via
-`main()` -- a aba "Dev: disparo manual" do Streamlit (Passo 4) chama esta
-última para acompanhar o pipeline sem CLI/cron separados.
+`main()` é o caminho agendado e acrescenta o que a aba "Dev: disparo manual"
+(que chama `processar_dia()` direto) não precisa: **pré-checagem** (o modelo e
+o threshold são os do campeão, o banco responde) antes de qualquer SMS, e
+**pós-checagem** (a contabilidade da fila fecha, a quarentena não foi
+sistêmica) depois, com o código de saída que o workflow usa para avisar o
+Healthchecks.
 """
+import argparse
 import logging
 import os
 import sys
 import time
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+import campeao  # noqa: E402
+import contrato_features  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
 import observabilidade  # noqa: E402
@@ -41,7 +49,12 @@ from config_projeto import (  # noqa: E402
 from explain import construir_explicador, explicar  # noqa: E402
 from features import calcular_idade  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
-from messaging.client import ErroEnvioInfobip, InfobipClient, StubMessagingClient  # noqa: E402
+from messaging.client import (  # noqa: E402
+    ErroEnvioInfobip,
+    InfobipClient,
+    MessagingClient,
+    StubMessagingClient,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +65,9 @@ logger = logging.getLogger(__name__)
 # confundida com o disparo normal por risco.
 STATUS_ENVIADO_SEM_PREDICAO = "enviado_sem_predicao"
 
+SAIDA_OK = 0
+SAIDA_FALHA = 1
+
 
 class ProvedorMensageriaDesconhecido(Exception):
     """MESSAGING_PROVIDER aponta para um provedor sem implementação -- erro
@@ -59,7 +75,7 @@ class ProvedorMensageriaDesconhecido(Exception):
     configuração de produção errada."""
 
 
-def obter_cliente_mensageria():
+def obter_cliente_mensageria() -> MessagingClient:
     """`stub` (default) nunca faz rede; `infobip` (Passo 7) envia SMS de
     verdade via `InfobipClient`, lendo `INFOBIP_BASE_URL`/`INFOBIP_CHAVE_API`
     do ambiente."""
@@ -73,11 +89,14 @@ def obter_cliente_mensageria():
     )
 
 
-def _payload_de_agendamento(agendamento: dict) -> dict:
+def _payload_de_agendamento(agendamento: dict[str, Any]) -> dict[str, Any]:
     """`pacientes.data_nascimento` (não `idade` -- ver migration
     20260920010000_cadastro_pacientes.sql) precisa virar idade aqui, na hora
     da predição, calculada em relação à data da própria consulta -- mesmo
-    conceito que `idade` já representa no dataset histórico de treino."""
+    conceito que `idade` já representa no dataset histórico de treino.
+
+    Só monta; a coerção de tipo e as regras são do contrato de features
+    (`_processar_fila` o aplica logo em seguida)."""
     paciente = agendamento["pacientes"]
     # Hora da clínica, não a UTC que o Postgres devolve (revisão do Passo 10):
     # sem isto o modelo via `horario` 3h adiantado e o SMS dizia 21:00 para
@@ -88,14 +107,16 @@ def _payload_de_agendamento(agendamento: dict) -> dict:
         "idade": calcular_idade(data_nascimento, data_hora_agendada.date()),
         "sexo": paciente["sexo"],
         "especialidade": agendamento["especialidade"],
-        "distancia_km": float(agendamento["distancia_km"]),
+        "distancia_km": agendamento["distancia_km"],
         "dias_entre_agendamento_consulta": agendamento["dias_entre_agendamento_consulta"],
         "historico_noshow": agendamento["historico_noshow"],
         "data_hora_agendada": data_hora_agendada,
     }
 
 
-def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) -> dict:
+def processar_dia(
+    data_referencia: date | None = None, cliente_mensageria: MessagingClient | None = None
+) -> dict[str, Any]:
     """Roda o pipeline D-2 uma vez para `data_referencia` (default hoje na
     clínica). Devolve contagens (não levanta por agendamento individual malformado
     -- um payload ruim não pode travar a fila inteira do dia) para a aba de
@@ -108,7 +129,11 @@ def processar_dia(data_referencia: date | None = None, cliente_mensageria=None) 
     return resultado
 
 
-def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) -> dict:
+def _processar_fila(
+    data_referencia: date,
+    cliente_mensageria: MessagingClient | None,
+    observado: dict[str, Any],
+) -> dict[str, Any]:
     """Corpo do job, separado de `processar_dia` só para a instrumentação do
     Passo 8.5 (ADR-006) envolver a execução inteira -- inclusive a busca no
     banco e uma falha antes do primeiro agendamento -- sem indentar a lógica
@@ -117,11 +142,14 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
     o `detalhe` do evento `job_d2` gravado ao final."""
     pendentes = repositories.buscar_agendamentos_d2_pendentes(data_referencia)
 
-    resultado = {
+    resultado: dict[str, Any] = {
         "agendamentos_encontrados": len(pendentes),
         "predicoes_gravadas": 0,
+        "quarentena": 0,
+        "fora_do_dominio": 0,
         "mensagens_disparadas": 0,
         "lembretes_sem_predicao": 0,
+        "falhas_de_envio": 0,
         "erros": [],
     }
     observado["detalhe"]["agendamentos_encontrados"] = len(pendentes)
@@ -134,32 +162,30 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
     model_version = inference.calcular_model_version(model_path)
     observado["model_version"] = model_version
     threshold = float(inference.PARAMS["decision"]["threshold"])
-    cliente_mensageria = cliente_mensageria or obter_cliente_mensageria()
+    cliente = cliente_mensageria or obter_cliente_mensageria()
 
     for agendamento in pendentes:
         inicio = time.perf_counter()
         try:
-            payload = _payload_de_agendamento(agendamento)
-            X = inference.construir_features(payload, mapa_especialidade)
+            linha = contrato_features.validar_payload(
+                _payload_de_agendamento(agendamento), mapa_especialidade
+            )
+            X = inference.construir_features(linha.valores, mapa_especialidade)
             probabilidade = float(inference.predizer(model, X)[0])
             contribuicoes = explicar(explainer, X)
         except Exception as exc:
-            # Quarentena: QUALQUER falha ao predizer uma linha (especialidade
-            # fora do mapa, nulo inesperado, tipo errado vindo do banco) fica
-            # restrita àquela linha. Antes só KeyError/Especialidade eram
-            # capturadas, e um TypeError abortava o resto da fila -- que, com a
-            # janela de um dia só, ficava sem predição para sempre.
+            # Quarentena: QUALQUER falha ao predizer uma linha (regra de
+            # negócio do contrato, especialidade fora do mapa, nulo inesperado)
+            # fica restrita àquela linha. Antes só KeyError/Especialidade eram
+            # capturadas, e um TypeError abortava o resto da fila.
             _registrar_quarentena(agendamento, exc, model_version, resultado)
-            _enviar_lembrete(
-                agendamento, cliente_mensageria, resultado, STATUS_ENVIADO_SEM_PREDICAO
-            )
+            _enviar_lembrete(agendamento, cliente, resultado, STATUS_ENVIADO_SEM_PREDICAO)
             continue
 
         classe_prevista = int(probabilidade >= threshold)
         # Mede só o trecho de modelo (features + predição + SHAP), o mesmo que
-        # a rota /predict executa, para o p95 do SLO §2 comparar caminhos
-        # equivalentes -- a gravação no banco e o envio de SMS que vêm a seguir
-        # são custo do job, não da predição.
+        # a rota /predict executa -- a gravação no banco e o envio de SMS que
+        # vêm a seguir são custo do job, não da predição.
         observabilidade.registrar_evento(
             tipo=observabilidade.TIPO_PREDICAO,
             origem=observabilidade.ORIGEM_JOB,
@@ -174,21 +200,24 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
             threshold_usado=threshold,
             explicacao_shap=contribuicoes,
             model_version=model_version,
+            fora_do_dominio=linha.fora_do_dominio,
         )
         resultado["predicoes_gravadas"] += 1
+        resultado["fora_do_dominio"] += int(linha.fora_do_dominio)
 
         if classe_prevista:
-            _enviar_lembrete(agendamento, cliente_mensageria, resultado, "enviado")
+            _enviar_lembrete(agendamento, cliente, resultado, "enviado")
         else:
             repositories.registrar_mensagem(
                 id_agendamento=agendamento["id"],
-                canal=cliente_mensageria.canal,
+                canal=cliente.canal,
                 status_envio="nao_enviado",
             )
 
     observado["detalhe"].update(
         {
             "predicoes_gravadas": resultado["predicoes_gravadas"],
+            "quarentena": resultado["quarentena"],
             "mensagens_disparadas": resultado["mensagens_disparadas"],
             "lembretes_sem_predicao": resultado["lembretes_sem_predicao"],
             "erros": len(resultado["erros"]),
@@ -197,29 +226,49 @@ def _processar_fila(data_referencia: date, cliente_mensageria, observado: dict) 
     return resultado
 
 
-def _registrar_quarentena(agendamento: dict, exc: Exception, model_version, resultado) -> None:
+def _motivo_seguro(exc: BaseException) -> str:
+    """O que pode ir para `resultado["erros"]` (exibido na aba de dev) sem
+    carregar dado de paciente. `ViolacaoDoContrato` e `ErroEnvioInfobip` são
+    escritas para isso (campo + regra; status HTTP + messageId). De qualquer
+    outra exceção, só a classe: `str(exc)` de um `ValueError` de data, por
+    exemplo, traz a data de nascimento que não pôde ser lida."""
+    if isinstance(exc, contrato_features.ViolacaoDoContrato | ErroEnvioInfobip):
+        return str(exc)
+    return exc.__class__.__name__
+
+
+def _registrar_quarentena(
+    agendamento: dict[str, Any],
+    exc: Exception,
+    model_version: str | None,
+    resultado: dict[str, Any],
+) -> None:
     """Agendamento que não pôde ser predito: registra e deixa o job seguir."""
-    resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
-    # Só a CLASSE da exceção vai para `eventos_app`: `str(exc)` traz o dado do
-    # agendamento junto, e a tabela de observabilidade não guarda dado de
-    # paciente (ADR-006).
+    resultado["quarentena"] += 1
+    resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": _motivo_seguro(exc)})
+    detalhe = {"excecao": exc.__class__.__name__}
+    if isinstance(exc, contrato_features.ViolacaoDoContrato):
+        detalhe["campo_invalido"] = exc.campo
+    # Só a CLASSE da exceção (e, se for do contrato, o NOME do campo) vai para
+    # `eventos_app`: a tabela de observabilidade não guarda dado de paciente
+    # (ADR-006).
     observabilidade.registrar_evento(
         tipo=observabilidade.TIPO_ERRO,
         status=observabilidade.STATUS_ERRO,
         origem=observabilidade.ORIGEM_JOB,
         model_version=model_version,
-        detalhe={"excecao": exc.__class__.__name__},
+        detalhe=detalhe,
     )
     # `id_agendamento` no log de propósito (Passo 8): é uuid interno, não PII,
     # e sem ele o diagnóstico de "por que este paciente não tem predição" não
-    # sai do lugar. `str(exc)` fica de fora -- carrega o dado do agendamento.
+    # sai do lugar.
     logger.warning(
         "agendamento sem predição",
-        extra={"id_agendamento": agendamento["id"], "excecao": exc.__class__.__name__},
+        extra={"id_agendamento": agendamento["id"], **detalhe},
     )
 
 
-def _mensagem_de_lembrete(agendamento: dict) -> str:
+def _mensagem_de_lembrete(agendamento: dict[str, Any]) -> str:
     """Texto do SMS, com data e hora no fuso da clínica. Se o próprio
     agendamento estiver malformado (é o caso da quarentena), cai numa mensagem
     genérica em vez de deixar de lembrar o paciente."""
@@ -233,7 +282,12 @@ def _mensagem_de_lembrete(agendamento: dict) -> str:
         return "Olá! Lembramos da sua consulta agendada nos próximos dias. Poderá comparecer?"
 
 
-def _enviar_lembrete(agendamento: dict, cliente_mensageria, resultado: dict, status: str) -> None:
+def _enviar_lembrete(
+    agendamento: dict[str, Any],
+    cliente_mensageria: MessagingClient,
+    resultado: dict[str, Any],
+    status: str,
+) -> None:
     """Envia o lembrete, registra a auditoria (SLA §6) e marca
     `agendamentos.lembrete_enviado` -- o registro que o re-treino usa para não
     confundir "compareceu" com "compareceu porque foi lembrado", e que impede
@@ -249,11 +303,9 @@ def _enviar_lembrete(agendamento: dict, cliente_mensageria, resultado: dict, sta
         # Infobip fora do ar, paciente sem telefone no embed) não pode travar
         # a fila inteira -- registra e segue. Sem `lembrete_enviado`: a
         # execução do dia seguinte tenta de novo, se ainda estiver na janela.
-        resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": str(exc)})
-        # `str(exc)` só para `ErroEnvioInfobip`, seguro desde o Passo 8 (a
-        # mensagem deixou de embutir o corpo da resposta, que ecoava o
-        # telefone). Das demais, só a classe.
-        motivo = str(exc) if isinstance(exc, ErroEnvioInfobip) else exc.__class__.__name__
+        resultado["falhas_de_envio"] += 1
+        motivo = _motivo_seguro(exc)
+        resultado["erros"].append({"id_agendamento": agendamento["id"], "motivo": motivo})
         logger.warning(
             "falha ao enviar lembrete",
             extra={"id_agendamento": agendamento["id"], "canal": canal, "motivo": motivo},
@@ -287,7 +339,7 @@ def purgar_eventos_antigos() -> int:
         return 0
 
 
-def purgar_dados_derivados_antigos() -> dict:
+def purgar_dados_derivados_antigos() -> dict[str, int]:
     """Retenção de `predicoes`/`mensagens_disparadas` (Passo 8, `docs/LGPD.md`
     §5) -- LGPD Art. 6º, III: dado derivado não fica guardado indefinidamente
     só porque o banco aguenta.
@@ -308,36 +360,165 @@ def purgar_dados_derivados_antigos() -> dict:
         return {}
 
 
-def main() -> dict:
+# --------------------------------------------------------------------------
+# pré e pós-checagem do caminho agendado (Passo 10.5)
+# --------------------------------------------------------------------------
+def pre_checagem() -> str:
+    """Antes de qualquer SMS: o `model.pkl` e o `decision.threshold` são os do
+    campeão (`champion_metrics.json`, Passo 10.4) e o banco responde com o
+    schema esperado. Levanta na primeira divergência; devolve a
+    `model_version` conferida.
+
+    O threshold conferido é o que o job vai usar (`inference.PARAMS`), não uma
+    releitura do arquivo -- a checagem precisa olhar para o mesmo número que
+    decide quem recebe lembrete pago."""
+    versao = campeao.verificar_campeao(
+        model_path=caminho_de_env("MODEL_PATH", "data/model.pkl"),
+        threshold=float(inference.PARAMS["decision"]["threshold"]),
+    )
+    repositories.verificar_conexao()
+    return versao
+
+
+def taxa_de_disparo_alerta() -> float:
+    return float(inference.PARAMS["gate"]["taxa_disparo_alerta"])
+
+
+def pos_checagem(resultado: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """(falhas, avisos) sobre o resultado de uma execução.
+
+    Falha -- o workflow termina vermelho e o Healthchecks recebe `/fail`:
+    - a contabilidade não fecha (`predições != pendentes - quarentena`): algum
+      agendamento sumiu entre a busca e a gravação;
+    - **toda** a fila foi para a quarentena. Não é "dado ruim" de um paciente,
+      é defeito sistêmico (schema mudou, modelo incompatível) -- e, pela regra
+      do lembrete sem predição, a fila inteira recebeu SMS. Precisa acordar
+      alguém, mesmo que num dia de fila de uma linha só isso seja alarme falso.
+
+    Aviso -- anotação no run, sem falhar:
+    - quarentena parcial, agendamento fora do domínio do treino, falha de
+      envio, e taxa de disparo por risco acima de `gate.taxa_disparo_alerta`
+      (o "cortar 70%" do BRIEFING, sem teto por decisão da autora)."""
+    falhas: list[str] = []
+    avisos: list[str] = []
+    pendentes = resultado["agendamentos_encontrados"]
+    quarentena = resultado["quarentena"]
+    preditos = resultado["predicoes_gravadas"]
+
+    if preditos != pendentes - quarentena:
+        falhas.append(
+            f"contabilidade da fila não fecha: {pendentes} pendente(s), {quarentena} em "
+            f"quarentena, mas {preditos} predição(ões) gravada(s)"
+        )
+    if pendentes and quarentena == pendentes:
+        falhas.append(
+            f"todos os {pendentes} agendamento(s) foram para a quarentena -- defeito "
+            "sistêmico provável (schema, modelo ou contrato), e a fila inteira recebeu "
+            "lembrete sem predição"
+        )
+    elif quarentena:
+        avisos.append(f"{quarentena} de {pendentes} agendamento(s) em quarentena")
+
+    if resultado["fora_do_dominio"]:
+        avisos.append(
+            f"{resultado['fora_do_dominio']} predição(ões) fora do domínio do treino "
+            "(gravadas e marcadas na fila)"
+        )
+    if resultado["falhas_de_envio"]:
+        avisos.append(f"{resultado['falhas_de_envio']} falha(s) de envio de lembrete")
+
+    por_risco = resultado["mensagens_disparadas"] - resultado["lembretes_sem_predicao"]
+    limite = taxa_de_disparo_alerta()
+    if preditos and por_risco / preditos > limite:
+        avisos.append(
+            f"taxa de disparo por risco {por_risco / preditos:.0%} ({por_risco} de "
+            f"{preditos}) acima de {limite:.0%}"
+        )
+    return falhas, avisos
+
+
+def _publicar_resumo(
+    resultado: dict[str, Any], falhas: list[str], avisos: list[str], model_version: str
+) -> None:
+    """Anotações (`::error::`/`::warning::`) e `$GITHUB_STEP_SUMMARY` quando
+    roda no Actions; no terminal, as mesmas linhas servem de leitura. Só
+    contadores: a lista `erros` fica de fora, como no log (Passo 8)."""
+    for falha in falhas:
+        print(f"::error::{falha}")
+    for aviso in avisos:
+        print(f"::warning::{aviso}")
+    destino = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not destino:
+        return
+    titulo = "com falha" if falhas else "concluído"
+    linhas = [
+        f"### Job D-2 — {titulo}",
+        "",
+        f"modelo `{model_version}`",
+        "",
+        "| Contador | Valor |",
+        "|---|---:|",
+        *(
+            f"| {chave} | {resultado[chave]} |"
+            for chave in (
+                "agendamentos_encontrados",
+                "predicoes_gravadas",
+                "quarentena",
+                "fora_do_dominio",
+                "mensagens_disparadas",
+                "lembretes_sem_predicao",
+                "falhas_de_envio",
+            )
+        ),
+        "",
+        *(f"- **falha:** {f}" for f in falhas),
+        *(f"- aviso: {a}" for a in avisos),
+    ]
+    with open(destino, "a", encoding="utf-8") as f:
+        f.write("\n".join(linhas) + "\n")
+
+
+def main(argv: list[str] | None = None) -> int:
+    argparse.ArgumentParser(description="Job de inferência diária D-2").parse_args(argv)
     # Antes de tudo (Passo 8): o job é o único processo que toca telefone de
     # paciente (`enviar_lembrete`), então nenhuma linha dele pode sair antes de
-    # o filtro de redação estar instalado.
+    # o filtro de redação estar instalado -- e o log do Actions deste
+    # repositório é público (Passo 10.5): o filtro é a última barreira.
     configurar_logging()
+    model_version = pre_checagem()
     resultado = processar_dia()
     purgados = purgar_eventos_antigos()
     derivados_purgados = purgar_dados_derivados_antigos()
     # Processo curto: sem o flush, os eventos enfileirados morreriam junto com
     # o processo antes de o worker daemon gravá-los (ver observabilidade.flush).
     observabilidade.flush()
-    # Uma linha JSON em vez do `print` de antes: o job roda por cron no
-    # GitHub Actions (Passo 10), onde a única saída que sobra é stdout -- e o
-    # resumo precisa ser grep-ável junto do resto do log, não um formato só
-    # dele. Contadores, nunca a lista de erros: ela carrega `motivo` por
-    # agendamento, que é texto de exceção.
+    falhas, avisos = pos_checagem(resultado)
+    # Uma linha JSON: no Actions a única saída que sobra é stdout, e o resumo
+    # precisa ser grep-ável junto do resto do log. Contadores, nunca a lista de
+    # erros: ela carrega `motivo` por agendamento.
     logger.info(
         "job D-2 concluído",
         extra={
-            "agendamentos_encontrados": resultado["agendamentos_encontrados"],
-            "predicoes_gravadas": resultado["predicoes_gravadas"],
-            "mensagens_disparadas": resultado["mensagens_disparadas"],
-            "lembretes_sem_predicao": resultado["lembretes_sem_predicao"],
+            **{
+                chave: resultado[chave]
+                for chave in (
+                    "agendamentos_encontrados",
+                    "predicoes_gravadas",
+                    "quarentena",
+                    "fora_do_dominio",
+                    "mensagens_disparadas",
+                    "lembretes_sem_predicao",
+                    "falhas_de_envio",
+                )
+            },
             "erros": len(resultado["erros"]),
             "eventos_purgados": purgados,
             "derivados_purgados": derivados_purgados,
         },
     )
-    return resultado
+    _publicar_resumo(resultado, falhas, avisos, model_version)
+    return SAIDA_FALHA if falhas else SAIDA_OK
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
