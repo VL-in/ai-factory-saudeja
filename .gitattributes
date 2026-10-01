@@ -1,3 +1,18 @@
 # Scripts que rodam dentro de container Linux precisam de LF mesmo com
 # core.autocrlf=true no Windows -- CRLF no shebang quebra o entrypoint.
 *.sh text eol=lf
+
+# Fim de linha LF no checkout de Windows tambem para o que o DVC hasheia
+# (Passo 10.5). O DVC 3 calcula o md5 das dependencias dos stages sobre os
+# BYTES do arquivo, sem normalizar fim de linha. Com core.autocrlf=true, o
+# checkout da autora tinha CRLF e o do runner Linux tem LF: os md5 gravados no
+# dvc.lock nunca batiam no GitHub Actions, todo `dvc repro` do re-treino
+# reexecutava o pipeline inteiro mesmo sem dado novo -- e o codigo 2 do gate
+# ("nenhum re-treino efetivo", Passo 9.1) nunca disparava.
+*.py text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+dockerfile text eol=lf
+dockerfile.* text eol=lf
+dvc.lock text eol=lf
