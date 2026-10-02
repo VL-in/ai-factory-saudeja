@@ -517,3 +517,71 @@ def test_senha_errada_e_email_inexistente_sao_indistinguiveis_no_supabase_real(d
         mensagens.append(str(exc.value))
 
     assert mensagens == [logic.MENSAGEM_CREDENCIAIS_INVALIDAS] * 2
+
+
+# --- canário do modelo (Passo 10.7, ADR-009) -----------------------------------
+
+
+@pytest.mark.integracao
+def test_estatisticas_de_modelo_contam_por_braco_e_so_desfecho_de_baixo_risco(db):
+    """As contagens que decidem o canário: por `model_version`, desde o
+    início dele, com o desfecho lido de `agendamentos` -- e só para baixo
+    risco, porque o lembrete altera o desfecho de quem o recebeu."""
+    import db.repositories as repositories
+
+    # Janela larga: o relógio do Postgres no container pode estar atrás do
+    # host (visto ~1 min depois de suspender o Docker Desktop), e `criado_em`
+    # é o `now()` dele. O isolamento vem da `model_version` própria do teste.
+    inicio = datetime.now(tz=fuso_da_clinica()) - timedelta(days=1)
+    casos = [
+        # (modelo, classe, desfecho)
+        ("canario-x", 1, "no_show"),
+        ("canario-x", 0, "no_show"),
+        ("canario-x", 0, "concluido"),
+        ("canario-x", 0, None),
+        ("campeao-y", 0, "no_show"),
+    ]
+    for i, (modelo, classe, desfecho) in enumerate(casos):
+        _, agendamento = _criar_paciente_e_agendamento(
+            repositories, dias=-1, id_externo=f"EXT-CAN-{i}"
+        )
+        repositories.gravar_predicao(
+            id_agendamento=agendamento["id"],
+            probabilidade=0.9 if classe else 0.1,
+            classe_prevista=classe,
+            threshold_usado=0.6,
+            explicacao_shap=[],
+            model_version=modelo,
+            fora_do_dominio=(i == 0),
+        )
+        if desfecho:
+            repositories.atualizar_status_agendamento(agendamento["id"], desfecho)
+
+    est = repositories.estatisticas_de_modelo("canario-x", inicio)
+
+    assert {k: v for k, v in est.items() if k != "primeira_predicao"} == {
+        "predicoes": 4,
+        "disparos": 1,
+        "fora_do_dominio": 1,
+        "desfechos_baixo_risco": 2,
+        "faltas_baixo_risco": 1,
+    }
+    assert est["primeira_predicao"] >= inicio
+    depois = datetime.now(tz=fuso_da_clinica()) + timedelta(days=1)
+    assert repositories.estatisticas_de_modelo("canario-x", depois)["predicoes"] == 0
+
+
+@pytest.mark.integracao
+def test_canario_revertido_faz_round_trip_e_a_primeira_gravacao_vale(db):
+    import db.repositories as repositories
+
+    try:
+        assert repositories.canario_revertido("canario-teste-int") is None
+        repositories.registrar_canario_revertido("canario-teste-int", "primeiro motivo")
+        repositories.registrar_canario_revertido("canario-teste-int", "segundo motivo")
+
+        linha = repositories.canario_revertido("canario-teste-int")
+        assert linha is not None
+        assert linha["motivo"] == "primeiro motivo"
+    finally:
+        db.table("canarios_revertidos").delete().eq("model_version", "canario-teste-int").execute()

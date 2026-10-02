@@ -28,14 +28,28 @@ teste só avisa acima de `gate.taxa_disparo_alerta` (decisão da autora: sem
 teto) -- e vai para o resumo e o PR de promoção, porque é o número que liga o
 modelo ao custo de mensageria do BRIEFING.
 
-**Quatro desfechos, quatro códigos de saída** (o workflow depende deles):
+**Cinco desfechos, cinco códigos de saída** (o workflow depende deles):
 
 | Código | Situação | Efeito |
 |---|---|---|
-| 0 | promovido (ou bootstrap) | `champion_metrics.json` reescrito; o workflow faz `dvc push` + PR |
-| 1 | bloqueado (regressão, piso, sanidade) | nada é reescrito; o anterior segue em produção |
-| 2 | nenhum re-treino efetivo | dataset com hash idêntico, `dvc repro` não reexecutou nada |
-| 3 | o pipeline falhou | `dvc repro` não terminou -- em geral o `validate_data` barrou o dataset |
+| 0 | aprovado | canário aberto em `data/canario/` (ou campeão reescrito, ver abaixo) |
+| 1 | bloqueado (regressão, piso, sanidade, já revertido) | nada muda; o anterior segue |
+| 2 | nenhum re-treino efetivo | dataset com hash idêntico, nada reexecutou |
+| 3 | o pipeline falhou | em geral o `validate_data` barrou o dataset |
+| 4 | canário em observação | o re-treino espera o canário ativo ser decidido |
+
+No código 0, o campeão só é reescrito direto no bootstrap (sem campeão para
+o canário enfrentar) ou com `canario.habilitado: false`. O workflow faz
+`dvc push` + PR nos dois casos.
+
+**Canário (Passo 10.7, ADR-009).** Aprovar no gate deixou de ser promover:
+o fold de teste mede o modelo offline, e o canário mede o mesmo modelo na
+fila real, numa fração dela, contra o campeão no mesmo período
+(`src/canario.py`). Por isso, com campeão registrado, o código 0 grava o
+canário e **não** toca em `champion_metrics.json` nem no `dvc.lock` de
+`main`; quem promove é o `canario.yml`, quando os guardrails de produção
+confirmam. O código 4 existe porque dois desafiantes ao mesmo tempo
+dividiriam a fila em três braços e nenhum teria amostra para decidir.
 
 O código 2 existe porque `RANDOM_STATE`/`TEST_SIZE` são fixos: sem desfecho
 novo registrado pela clínica (Passo 9.0), reexecutar o treino reproduziria a
@@ -67,6 +81,7 @@ import joblib
 import yaml
 from mlflow.tracking import MlflowClient
 
+import canario
 import inference
 import sanidade_modelo
 from config_projeto import REPO_ROOT, caminho_de_env, carregar_params, fuso_da_clinica
@@ -82,6 +97,7 @@ DATASET_DVC_PATH = caminho_de_env("DATASET_DVC_PATH", "data/consultas-treino.csv
 RELATORIO_DADOS_PATH = caminho_de_env(
     "RELATORIO_DADOS_PATH", "data/interim/relatorio_dados.json"
 )
+DVC_LOCK_PATH = caminho_de_env("DVC_LOCK_PATH", "dvc.lock")
 
 # O gate roda no HOST (ou no runner), não dentro dos containers do dvc.yaml --
 # os stages apontam para http://mlflow-server:5000 (nome de serviço na rede
@@ -98,6 +114,7 @@ SAIDA_PROMOVIDO = 0
 SAIDA_BLOQUEADO = 1
 SAIDA_SEM_RETREINO = 2
 SAIDA_FALHA_PIPELINE = 3
+SAIDA_CANARIO_EM_OBSERVACAO = 4
 
 # Acima deste número de positivos no fold de teste, a tolerância de contagem
 # de 0.05 deixa de ser justificada pela granularidade da amostra e passa a
@@ -122,6 +139,7 @@ class Decisao:
     bootstrap: bool = False
     avisos: list[str] = field(default_factory=list)
     taxa_disparo_projetada: float | None = None
+    canario: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -372,7 +390,8 @@ def montar_champion(
     return {
         "_comentario": (
             "Campeão em produção (Passo 9.1). Reescrito SOMENTE por "
-            "src/retrain_gate.py ao promover. Versionado em git porque o MLflow deste "
+            "src/retrain_gate.py (promoção direta) ou por src/canario.py (promoção "
+            "depois do canário, Passo 10.7). Versionado em git porque o MLflow deste "
             "repo é efêmero e não sobrevive entre execuções do workflow mensal."
         ),
         "model_version": calcular_model_version(caminho_modelo),
@@ -420,6 +439,10 @@ def formatar_resumo(
         titulo = "sem re-treino efetivo"
     elif decisao.codigo_saida == SAIDA_FALHA_PIPELINE:
         titulo = "pipeline falhou"
+    elif decisao.codigo_saida == SAIDA_CANARIO_EM_OBSERVACAO:
+        titulo = "canário em observação"
+    elif decisao.promover and decisao.canario:
+        titulo = "aprovado para canário"
     elif decisao.promover and decisao.bootstrap:
         titulo = "campeão criado (bootstrap)"
     elif decisao.promover:
@@ -469,6 +492,16 @@ def formatar_resumo(
             linhas.append("- sem bloqueios nem alertas")
         linhas.append("")
 
+    if decisao.promover and decisao.canario:
+        linhas += [
+            "O desafiante **não** substituiu o campeão: ele entra como canário "
+            "(`data/canario/`) e decide só uma fração da fila do job D-2 até os "
+            "guardrails de produção confirmarem a promoção (`canario.yml`, Passo 10.7). "
+            "`data/champion_metrics.json` e o `dvc.lock` de `main` seguem sendo os do "
+            "campeão.",
+            "",
+        ]
+
     if not decisao.promover and decisao.codigo_saida == SAIDA_BLOQUEADO:
         linhas += [
             "O campeão **não** foi alterado: `data/champion_metrics.json` e o "
@@ -511,6 +544,7 @@ def _escrever_relatorio(
         "avisos": decisao.avisos,
         "comparacoes": decisao.comparacoes,
         "taxa_disparo_projetada": decisao.taxa_disparo_projetada,
+        "canario": decisao.canario,
         "metricas_desafiante": {k: float(v) for k, v in sorted((metricas or {}).items())},
         "dados": dados,
     }
@@ -583,6 +617,27 @@ def _aplicar_verificacoes_do_desafiante(decisao: Decisao) -> Decisao:
     return decisao
 
 
+def _bloquear_modelo_ja_revertido(decisao: Decisao) -> Decisao:
+    """Um modelo revertido num canário não volta como desafiante. Com o
+    pipeline determinístico, um mês sem desfecho novo depois do rollback
+    reproduziria o mesmo `model.pkl` -- que já passou neste gate uma vez e
+    passaria de novo."""
+    if not os.path.exists(MODEL_PATH):
+        return decisao
+    versao = calcular_model_version(MODEL_PATH)
+    if versao not in canario.modelos_revertidos():
+        return decisao
+    bloqueio = (
+        f"o desafiante `{versao}` já foi revertido num canário "
+        "(data/canario_historico.json) -- falhou nos guardrails de produção"
+    )
+    decisao.motivo = bloqueio if decisao.promover else f"{decisao.motivo}; {bloqueio}"
+    decisao.promover = False
+    decisao.bootstrap = False
+    decisao.codigo_saida = SAIDA_BLOQUEADO
+    return decisao
+
+
 def _dvc_repro() -> None:
     """Reexecuta o pipeline. Sem `capture_output`: a saída do DVC/Docker vai
     direto para o log do workflow, que é onde se debuga um treino que falhou."""
@@ -610,6 +665,32 @@ def main(argv: list[str] | None = None) -> int:
         help="onde gravar o comparativo em JSON (artifact do run do Actions)",
     )
     args = parser.parse_args(argv)
+
+    if canario.ativo():
+        # Antes do `dvc repro`: um treino que não vai ser usado só gastaria
+        # minutos de runner. Falha (como o código 2) porque um canário que
+        # chega ao dia do re-treino sem decisão é pendência humana -- PR de
+        # promoção ou reversão sem merge, ou canário sem tráfego.
+        registro = canario.carregar() or {}
+        decisao = Decisao(
+            promover=False,
+            codigo_saida=SAIDA_CANARIO_EM_OBSERVACAO,
+            motivo=(
+                f"há um canário em observação (`{registro.get('model_version')}`, desde "
+                f"{registro.get('iniciado_em')}): o re-treino espera ele ser promovido ou "
+                "revertido. Ver o último run do `canario.yml` e os PRs `canario/*` abertos."
+            ),
+        )
+        _publicar_resumo(formatar_resumo(decisao))
+        if args.relatorio_json:
+            _escrever_relatorio(args.relatorio_json, decisao, None)
+        return decisao.codigo_saida
+
+    # O dvc.lock de `main`, ANTES do repro reescrevê-lo: é a base que a
+    # promoção do canário confere para não apagar uma mudança feita depois.
+    lock_base = (
+        canario.sha256_de_arquivo(DVC_LOCK_PATH) if os.path.exists(DVC_LOCK_PATH) else None
+    )
 
     if args.sem_repro:
         run_id = _ler_run_id()
@@ -652,8 +733,41 @@ def main(argv: list[str] | None = None) -> int:
         champion, metricas, positivos_no_fold=positivos_no_fold_de_teste()
     )
     decisao = _aplicar_verificacoes_do_desafiante(decisao)
+    decisao = _bloquear_modelo_ja_revertido(decisao)
 
-    if decisao.promover:
+    if (
+        decisao.promover
+        and champion is not None
+        and canario.habilitado(PARAMS)
+        and calcular_model_version(MODEL_PATH) == champion.get("model_version")
+    ):
+        # Mesmo artefato do campeão: não há o que observar num canário, e os
+        # dois braços seriam indistinguíveis em `predicoes.model_version`.
+        decisao.promover = False
+        decisao.codigo_saida = SAIDA_SEM_RETREINO
+        decisao.motivo = "o desafiante é byte a byte o campeão -- nada a promover"
+    elif decisao.promover and champion is not None and canario.habilitado(PARAMS):
+        novo = montar_champion(metricas, run_id, decisao)
+        registro = canario.iniciar(
+            MODEL_PATH,
+            {
+                "mlflow_run_id": run_id,
+                "motivo": decisao.motivo,
+                "decision_threshold": novo["decision_threshold"],
+                "taxa_disparo_projetada": novo["taxa_disparo_projetada"],
+                "dataset": novo["dataset"],
+                "metricas": novo["metricas"],
+                "comparacoes": decisao.comparacoes,
+            },
+            campeao_base=str(champion.get("model_version")),
+            dvc_lock_path=DVC_LOCK_PATH,
+            dataset_dvc_path=DATASET_DVC_PATH,
+            dvc_lock_base_sha256=lock_base,
+            params=PARAMS,
+        )
+        decisao.canario = True
+        print(f"[gate] canário {registro['model_version']} criado em {canario.CANARIO_DIR}")
+    elif decisao.promover:
         caminho = escrever_champion(montar_champion(metricas, run_id, decisao))
         print(f"[gate] campeão atualizado em {caminho}")
 

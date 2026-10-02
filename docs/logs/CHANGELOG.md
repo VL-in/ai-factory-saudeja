@@ -8,6 +8,26 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
+## [v1.14] (Vanessa + Claude) - 2026-10-01
+
+### Adicionado
+- **Canário do modelo.** O modelo novo aprovado pelo re-treino mensal não substitui mais o modelo em produção de uma vez. Primeiro, ele decide 20% da fila do job diário; o modelo atual decide o resto. Os pacientes são sorteados e ficam no mesmo modelo durante todo o período. Os dois modelos são comparados na fila real pela fração de pacientes que recebe lembrete pago e pela fração de faltas entre os pacientes classificados como baixo risco. O modelo novo só passa a valer para todos depois de pelo menos 7 dias sem ser pior que o atual além da margem ([ADR-009](../adr/adr-009-canario-do-modelo.md)).
+- **Volta automática ao modelo atual (rollback).** O job diário volta a usar só o modelo atual, já na execução em que o problema aparece, quando o modelo novo manda lembrete a muito mais pacientes, deixa passar mais faltas ou não consegue avaliar parte da fila. Ele também volta se, em 21 dias, não houver evidência de que o modelo novo é tão bom quanto o atual. Não é preciso deploy.
+- Workflow `canario.yml`: avalia o canário todo dia às 09h47 e abre o pedido de promoção ou de reversão. Também pode ser disparado à mão para reverter, informando o motivo.
+- Variável do repositório `CANARIO_DESLIGADO`: com `true`, o job diário ignora o canário a partir da próxima execução, sem pedido de mudança nem deploy.
+- Tabela `canarios_revertidos` (migration `20261001000000_canarios_revertidos.sql`, aditiva), que registra cada reversão. **Aplicar no projeto remoto com `supabase db push`** (o primeiro deploy automático também o faz).
+- `data/canario_historico.json` registra cada canário encerrado, promovido ou revertido, com a evidência da decisão. Um modelo revertido nunca volta a ser aprovado pelo re-treino.
+
+### Modificado
+- O re-treino mensal, ao aprovar um modelo, abre um pedido de **canário** em vez do pedido de promoção. A promoção direta continua quando ainda não há modelo em produção registrado ou com `canario.habilitado: false` em `params.yaml`.
+- O re-treino mensal não roda enquanto houver canário em observação. Ele falha avisando (código de saída 4), porque um canário sem decisão no dia do re-treino é um pedido esperando aprovação.
+- O resumo do job diário mostra, quando há canário, quantos agendamentos cada modelo decidiu.
+- O modelo em produção (`data/champion_metrics.json`) passa a registrar, quando promovido depois de um canário, o período do canário e a evidência da promoção.
+
+### Segurança
+- O canário roda só no job diário. Ele não vai para o Space e não muda o modelo usado na interface. O sorteio usa o identificador já pseudonimizado do paciente, que não aparece em log. Nenhum dado novo é tratado.
+- Um canário com qualquer problema (modelo que não baixou, aprovado contra outro modelo, banco fora do ar) faz o job usar só o modelo atual e terminar com falha. Nenhum paciente fica sem lembrete por causa do canário.
+
 ## [v1.13] (Vanessa + Claude) - 2026-09-30
 
 ### Adicionado

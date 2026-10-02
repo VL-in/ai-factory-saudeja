@@ -402,9 +402,10 @@ docker run --rm -e APP_ENV=dev -p 7860:7860 -p 8000:8000 saudeja-app
 | Workflow | Quando | O que faz |
 |---|---|---|
 | `ci.yml` | PR para `dev`/`main`; chamado pelo deploy; `workflow_dispatch` | `ruff` → `mypy` → `dvc pull data/model.pkl` → `pytest`; build da imagem de deploy com smoke e varredura de PII no log; integração (Supabase local + pipeline de treino no container) em PR que toque banco/job/export e sempre em `main` |
-| `deploy.yml` | push em `main` (exceto `docs/**`); `workflow_dispatch` | CI → guarda do campeão → staging com lista fechada → `supabase db push` → sync para o HF Space |
+| `deploy.yml` | push em `main` (exceto `docs/**` e os arquivos do canário); `workflow_dispatch` | CI → guarda do campeão → staging com lista fechada → `supabase db push` → sync para o HF Space |
 | `job_d2.yml` | todo dia às 08h17 de São Paulo; `workflow_dispatch` | job D-2 no runner, com pré e pós-checagem e Healthchecks |
-| `retrain.yml` | dia 1 às 03h17 de São Paulo; `workflow_dispatch` | `validate_data` → treino → gate (regressão, piso de `roc_auc`, suíte de sanidade) → PR de promoção com o CI disparado nele |
+| `retrain.yml` | dia 1 às 03h17 de São Paulo; `workflow_dispatch` | `validate_data` → treino → gate (regressão, piso de `roc_auc`, suíte de sanidade) → PR do **canário** (ou de promoção direta, no bootstrap) com o CI disparado nele |
+| `canario.yml` | todo dia às 09h47 de São Paulo; `workflow_dispatch` | avalia o canário ativo e abre o PR de promoção ou de reversão; por dispatch, rollback manual |
 | `dependency-review.yml` | PR | dependência vulnerável bloqueia o PR |
 
 **O deploy nunca sobe o checkout**: monta `build/space/` só com o que a imagem precisa (Dockerfile, README do Space, `requirements/{base,api,ui}.txt`, `src/`, `params.yaml`, `entrypoint.sh`, `data/model.pkl`) e sincroniza esse diretório. Subir o repositório levaria a URL do remote do DVC e o dataset de treino para um Space público.
@@ -424,6 +425,8 @@ Secrets e variáveis que os workflows esperam (documentados em `.env.example`, n
 | `MESSAGING_PROVIDER`, `INFOBIP_REMETENTE` | variável | `job_d2` (falha se `MESSAGING_PROVIDER` não estiver definido) |
 | `INFOBIP_BASE_URL`, `INFOBIP_CHAVE_API` | secret | `job_d2` |
 | `HEALTHCHECKS_JOB_D2_URL`, `HEALTHCHECKS_RETRAIN_URL` | secret | `job_d2`, `retrain` |
+| `CANARIO_DESLIGADO` | variável (opcional; `true` desliga o canário) | `job_d2` |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `DVC_REMOTE_URL`, `AZURE_STORAGE_CONNECTION_STRING_LEITURA` | secret (os mesmos acima) | `canario` |
 
 Para validar os workflows localmente: `docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:latest`.
 
@@ -453,6 +456,54 @@ O desempenho **em produção** fica no Supabase: cada linha de `predicoes` regis
 - A avaliação de um desafiante **bloqueado** só existe no artifact, que expira (90 dias, o padrão do GitHub). Depois disso ela se perde.
 - Não há visão de tendência entre meses: para comparar, é preciso baixar os JSONs um a um.
 - Não há medida de precision/recall **reais** por `model_version`, cruzando `predicoes` com o desfecho registrado. Quando houver, ela precisa separar os pacientes que receberam lembrete (`lembrete_enviado`), porque o SMS muda o desfecho.
+
+### Canário do modelo (Passo 10.7)
+
+O modelo aprovado pelo re-treino mensal **não substitui o campeão de uma vez**. Ele entra como **canário** e decide 20% da fila do job D-2, enquanto o campeão decide o resto. Os pacientes são sorteados por hash do identificador pseudonimizado e ficam no mesmo modelo durante todo o canário. Os dois modelos são comparados no mesmo período, na fila real. Decisão e alternativas no [ADR-009](docs/adr/adr-009-canario-do-modelo.md); desenho e coerência com o CI/CD no [Passo 10.7 do plano](docs/PLANO-IMPLEMENTACAO.md).
+
+**O ciclo, sem intervenção além dos merges:**
+
+1. O `retrain.yml` aprova um desafiante e abre o PR `canario/inicio-...`, com `data/canario.json` e `data/canario/`. O CI desse PR baixa o modelo do canário e roda `canario.py verificar --sanidade`. O merge **não** rebuilda o Space nem troca o campeão.
+2. A partir do merge, o job D-2 manda a fração do canário para ele. O resumo do run mostra uma tabela "Canário ... nesta execução" com os contadores por braço.
+3. Todo dia às 09h47, o `canario.yml` avalia os guardrails e decide **aguardar**, **promover** ou **reverter**:
+
+| Guardrail | O que mede | Reverte se o canário for pior que o campeão em mais de |
+|---|---|---:|
+| `taxa_disparo` | fração da fila mandada para lembrete pago | 5 p.p. |
+| `falta_nao_avisada` | fração de faltas entre os pacientes de baixo risco com desfecho registrado | 5 p.p. |
+| `quarentena` | fração da fila que o modelo não conseguiu predizer (por execução, no job) | 2 p.p. |
+
+Promover exige pelo menos 7 dias, 300 predições e 300 desfechos de baixo risco no canário, e todos os guardrails não inferiores ao campeão com significância. Sem isso até o 21º dia, o canário é revertido. Os números ficam em `params.yaml` → `canario`. Os desfechos vêm da "Fila do dia": sem o registro de comparecimento e falta pela clínica, nenhum canário é promovido.
+
+4. **Promover** abre o PR `canario/promover-<versão>`. Ele reescreve `champion_metrics.json`, restaura o `dvc.lock` do treino do canário e remove `data/canario/`. O merge dispara o deploy, que leva o modelo novo ao Space.
+5. **Reverter** abre o PR `canario/reverter-<versão>`. Ele remove `data/canario/` e registra o modelo em `data/canario_historico.json`, e o re-treino nunca mais o aprova. O campeão não muda.
+
+**Rollback — três caminhos, do mais rápido ao mais formal:**
+
+| Como | Efeito | Quando |
+|---|---|---|
+| Automático | O job D-2 avalia os guardrails **antes** de dividir a fila. Na violação, grava `canarios_revertidos` no Supabase e manda 100% da fila para o campeão já naquela execução, com o run vermelho e `/fail` no Healthchecks | Sempre, sem ninguém fazer nada |
+| Variável `CANARIO_DESLIGADO=true` (Settings → Secrets and variables → Actions → Variables) | O job ignora o canário a partir da próxima execução. Sem PR, sem deploy, reversível apagando a variável | Suspeita que ainda não virou violação |
+| Actions → "Canario do modelo" → *Run workflow* com `acao=reverter` e um motivo | Grava `canarios_revertidos` e abre o PR de reversão | Decisão humana de encerrar o canário |
+
+**Comandos locais** (os mesmos que o `canario.yml` usa):
+
+```powershell
+python src/canario.py status                 # canário ativo, se houver
+python src/canario.py verificar --sanidade   # modelo baixado, campeão base, cópias salvas e sanidade
+python src/canario.py avaliar                # lê o Supabase do .env e mostra a decisão (se for reverter, GRAVA o rollback)
+```
+
+`promover` e `reverter` também existem no CLI. Prefira o workflow: ele confere o `dvc pull` do modelo promovido e abre o PR.
+
+**Onde consultar:** o resumo de cada run do `canario.yml` (tabela canário × campeão com z e situação), a tabela `canarios_revertidos` no Supabase, `data/canario_historico.json` (todos os canários encerrados, com a evidência da decisão) e o bloco `canario` do `champion_metrics.json` do campeão promovido.
+
+**Para desligar o canário** e voltar à promoção direta pelo gate: `canario.habilitado: false` em `params.yaml`.
+
+**Limites conhecidos:**
+- Com o volume de uma clínica só (~10 agendamentos por dia no canário), a evidência não fecha em 21 dias e o canário é revertido por prazo. Os mínimos foram dimensionados para várias clínicas.
+- Enquanto houver canário ativo, o re-treino do mês sai com o código 4 sem treinar.
+- A promoção se recusa se o `dvc.lock` de `main` mudou desde o início do canário. Nesse caso, reverter e re-treinar.
 
 ## Roadmap
 

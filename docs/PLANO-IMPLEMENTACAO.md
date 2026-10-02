@@ -1,6 +1,6 @@
 # Plano de Implementação — SaudeJá: do pipeline de treino ao produto deployável
 
-> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação; em 2026-09-29 com a revisão do Passo 10 contra o repositório e a documentação do GitHub Actions). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
+> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação; em 2026-09-29 com a revisão do Passo 10 contra o repositório e a documentação do GitHub Actions; em 2026-10-01 com o Passo 10.7 — canário do modelo com rollback automático, [ADR-009](adr/adr-009-canario-do-modelo.md)). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
 
 ## Contexto
 
@@ -695,6 +695,98 @@ alter table agendamentos
 - **Sugestão, não implementada:** um disjuntor antes do envio — se a quarentena passar de um limite no meio da fila, parar de mandar lembrete sem predição. Hoje a pós-checagem detecta a quarentena de 100%, mas depois de os SMS terem saído. Mudaria a decisão 3 da 2ª revisão, por isso fica com a autora.
 
 
+### 10.7 — Canário do modelo com rollback automático ([ADR-009](adr/adr-009-canario-do-modelo.md)) — **implementado em 2026-10-01**
+
+> **Decisão da autora (2026-10-01)**: o rollback depois da promoção é feito por **canário**. A objeção de volume (com uma clínica só, ~10 agendamentos/dia no canário não dão poder estatístico) não vale para o produto, que atende várias clínicas (BRIEFING). Blue-green no Space foi descartado (sem roteador; o proxy seria operador novo vendo PII), e a sombra fica como etapa anterior possível — ver as alternativas no ADR-009.
+
+**O problema que o passo resolve.** O gate do 9.1 mede o desafiante offline e promove direto: o merge do PR leva o modelo a 100% da fila. O "gate de rollback" do SLA §3 impede promover um modelo pior **no fold de teste**, mas não havia volta depois da promoção, e o fold não mede os dois números que pagam a conta: quantos pacientes da fila real o modelo manda para SMS pago e quantos pacientes de baixo risco faltam sem aviso.
+
+#### Plano — traçado contra o repositório
+
+O ponto de partida que orienta tudo: **a inferência que conta é a batch, no runner** (2ª revisão do Passo 10). O canário mora no job D-2; o Space, o deploy e o `data/model.pkl` não mudam de papel.
+
+| Peça | Onde | O que muda |
+|---|---|---|
+| Estado do canário | `data/canario.json` + `data/canario/` (novo) | Registro (versão, campeão base, métricas offline, fração, hash do `dvc.lock` de `main` no início) e o modelo por `.dvc` próprio. Mais as **cópias** do `dvc.lock` e do `.dvc` do dataset do treino do canário (`*.salvo`, extensão que o DVC não coleta). Em `main`, o `dvc.lock` continua sendo o do campeão — é ele que o deploy, o CI e o job leem |
+| Decisão e ciclo de vida | `src/canario.py` (novo, mypy nível 1) | Sorteio por paciente, guardrails, `iniciar`/`promover`/`reverter`/`verificar`, preparação para o job e CLI |
+| Gate | `src/retrain_gate.py` | Aprovado + campeão existente + `canario.habilitado` → `canario.iniciar` em vez de reescrever o campeão. **Código 4**: canário ativo, o re-treino nem roda o `dvc repro`. Modelo já revertido → código 1. Desafiante idêntico ao campeão → código 2 |
+| Job D-2 | `src/jobs/inferencia_diaria.py` | `main()` chama `canario.preparar_para_job` depois da pré-checagem do campeão. `processar_dia` roteia por braço e grava `predicoes.model_version` e o threshold de cada braço; o resultado ganha `por_braco`, e a pós-checagem ganha o guardrail de quarentena. A aba de dev roda só com o campeão |
+| Banco | `supabase/migrations/20261001000000_canarios_revertidos.sql` (aditiva) | Tabela `canarios_revertidos`: o estado que tira o canário da fila **já na execução seguinte**, antes de o PR chegar a `main`. Sem PII |
+| Repositório | `src/db/repositories.py` | `estatisticas_de_modelo` (contagens com `count='exact'`/`head=True`, sem o corte de 1000 linhas do PostgREST), `canario_revertido`, `registrar_canario_revertido` (idempotente) |
+| Parâmetros | `params.yaml` → `canario` | Fração, dias mínimo/máximo, pisos de amostra, z crítico e margens. Sem default no código, pelo mesmo critério das tolerâncias do gate. Nenhuma chave nova é dependência do `dvc.yaml` (`dvc status` limpo) |
+| Workflows | `retrain.yml`, `job_d2.yml`, `canario.yml` (novo), `ci.yml`, `deploy.yml` | Ver "Coerência" abaixo |
+
+**Guardrails** (decididos em `canario.decidir`, função pura):
+
+| Guardrail | Medida | Margem | Por quê |
+|---|---|---:|---|
+| `taxa_disparo` | `classe_prevista = 1` / predições, por `model_version` | 5 p.p. | O custo de mensageria do BRIEFING |
+| `falta_nao_avisada` | `no_show` / desfechos registrados, só entre os de baixo risco | 5 p.p. | O erro que custa R$ 180 e o único desfecho que o SMS não contamina |
+| `quarentena` | quarentena / agendamentos do braço, **por execução** | 2 p.p. | Quarentena não gera linha em `predicoes`. Modelo novo com mapa de especialidade diferente mandaria uma especialidade inteira para o lembrete sem predição |
+
+Teste de diferença de proporções com o ajuste de Agresti-Caffo e z unilateral de 95%. **Violado** = o canário é pior que o campeão além da margem, com significância. **Não inferior** = é pior por menos que a margem, com significância. Abaixo de 30 por braço, nenhum guardrail é avaliado. O campeão é medido a partir da **primeira predição do canário**, não da aprovação no gate: antes do merge, ele decidia a fila sozinho.
+
+| Situação | Ação |
+|---|---|
+| Algum guardrail violado (a qualquer momento) | **reverter** |
+| ≥ 7 dias, ≥ 300 predições e ≥ 300 desfechos de baixo risco no canário, todos não inferiores | **promover** |
+| ≥ 21 dias sem a condição acima | **reverter** (sem evidência; o conservador é o campeão) |
+| Demais casos | aguardar |
+
+**Ciclo de vida:**
+
+```
+retrain.yml (dia 1)  gate aprova + há campeão -> data/canario/ + dvc add + dvc push -> PR "canario/inicio-..."
+        merge ------>  job_d2.yml (diário)  pré-checagem do canário: verificar -> revertido no banco? -> guardrails
+                                            violado -> grava canarios_revertidos, fila 100% campeão, run vermelho
+                                            ok      -> 20% da fila (por paciente) no canário
+                       canario.yml (diário, 09h47)  avaliar -> aguardar | promover | reverter
+                                            promover -> PR "canario/promover-<versão>": campeão + dvc.lock restaurado
+                                                        merge -> deploy.yml (Space recebe o modelo)
+                                            reverter -> grava canarios_revertidos + PR "canario/reverter-<versão>":
+                                                        remove data/canario/, registra no histórico (o gate não o aprova de novo)
+```
+
+#### Coerência com o CI/CD e com o re-treino
+
+- **"Só o campeão vai para produção" continua literal.** `data/model.pkl` e `champion_metrics.json` em `main` são sempre o campeão. A guarda do `src/campeao.py` no deploy e no job não mudou. O canário é um segundo artefato com registro e verificação próprios (`canario.py verificar`), e só o job o carrega.
+- **O canário não entra no Space.** O staging é uma lista fechada e não o copia (há teste para isso). Os paths do canário entram no `paths-ignore` do deploy: abrir ou reverter um canário não rebuilda o Space. A promoção muda `champion_metrics.json` e `dvc.lock`, e por isso deploya. Também há teste.
+- **CI no PR do canário.** O `ci.yml` (disparado por `workflow_dispatch`, mesmo mecanismo do achado 6) baixa o modelo do canário e roda `canario.py verificar --sanidade`. O modelo tem de ter sido publicado, ser o registrado, ter sido aprovado contra o campeão atual e passar na mesma suíte de sanidade que o gate e o CI aplicam ao campeão. `src/canario.py` entrou no filtro que torna a integração obrigatória.
+- **Credenciais.** Nada novo além do que cada workflow já tinha. O `canario.yml` usa a SAS **só de leitura**: a promoção troca o ponteiro (`dvc.lock`) para um artefato que o `retrain.yml`, o único com escrita, já publicou ao abrir o canário.
+- **Re-treino.**
+  - O código 0 do gate continua significando "aprovado". O `retrain.yml` decide entre o PR do canário e o PR de promoção direta pela presença de `data/canario.json`.
+  - O PR do canário **não** leva `dvc.lock` nem o `.dvc` do dataset. Por isso o próximo re-treino reexecuta o pipeline contra o dataset exportado, como antes.
+  - Depois de um rollback, um mês sem desfecho novo reproduziria o mesmo modelo, já aprovado uma vez. A lista de revertidos o bloqueia (código 1).
+  - Depois de uma promoção, o lock restaurado é o do treino do canário. O "nenhum re-treino efetivo" (código 2) continua funcionando.
+- **Ordem no tempo.** `dias_maximos` (21) é menor que o intervalo do re-treino. Um canário que chega ao dia 1 sem decisão é pendência humana, um PR sem merge, e o código 4 a torna visível. **Interação com o SLO §5** (re-treino executado em 100% dos meses): um mês com código 4 aparece como run falho do `retrain.yml`. É proposital, para a pendência não ficar silenciosa, mas no cálculo do SLO deve ser lido como "re-treino adiado por canário pendente", e não como pipeline quebrado. Por isso o motivo vai para o resumo do run.
+- **Migration.** Aditiva, pode ir no mesmo deploy do código (regra do 10.1). Mas o job **não depende** dela para rodar sem canário: as funções novas só são chamadas com `data/canario.json` presente.
+- **Dois pontos de decisão, uma regra.** O job e o `canario.yml` chamam a mesma `canario.avaliar` com o mesmo `params.yaml`. A gravação em `canarios_revertidos` é idempotente, e a primeira decisão é a que vale.
+
+#### Verificado em 2026-10-01
+
+- `ruff check src tests scripts` e `mypy src scripts` limpos; `actionlint` sem erro nos seis workflows; `dvc status` limpo.
+- **417 testes rápidos** (eram 368): `tests/test_canario.py` (40, incluindo o job com canário e o `main()` com canário quebrado), os do gate com canário (6) e as guardas de workflow em `test_coerencia_repo.py` (3).
+- **Integração**: 23 de 24 verdes contra o Supabase local, incluindo as duas novas (contagens por braço com desfecho só de baixo risco; `canarios_revertidos` idempotente). A que falhou é anterior a este passo e está nos achados abaixo.
+- **Ensaio ponta a ponta contra o Supabase local**, com um desafiante de bytes diferentes e comportamento idêntico:
+  - o `main()` do job dividiu 145 predições em 116 do campeão e 29 do canário;
+  - com o canário mandando lembrete a 100% da fila dele, a execução seguinte gravou o rollback (`taxa_disparo` 100% x 0%, z = 27,7) e mandou a fila 100% para o campeão;
+  - a execução depois dessa só avisou ("revertido... até o PR ser mesclado");
+  - `canario.py reverter` removeu os arquivos e pôs o modelo na lista de revertidos.
+
+#### Achados ao implementar (não são do canário, mas afetam o argumento dele)
+
+1. **O job D-2 quebra com o volume que justifica o canário** (anterior a este passo). `buscar_agendamentos_d2_pendentes` filtra as predições existentes com `.in_("id_agendamento", ids)`, que manda **todos** os ids da janela na URL. Com ~300 agendamentos pendentes, o PostgREST respondeu `414 URI too long` e o job morreu antes de predizer qualquer um (reproduzido no ensaio). Com várias clínicas, isso é o caso normal. Correção sugerida, fora deste passo: consultar em lotes (ex. 100 ids) ou trocar por um `not exists` numa view/RPC. **Precisa ser resolvido antes de habilitar várias clínicas.**
+2. **Login local quebrado pelo `supabase/config.toml`** (anterior, ADR-008). `[auth.email] enable_signup = false` faz o CLI subir o GoTrue com `GOTRUE_EXTERNAL_EMAIL_ENABLED=false` ("Email logins are disabled"). O que se queria é `[auth] enable_signup = false`, mantendo o provedor de e-mail ligado. Só aparece depois de reiniciar o stack local, por isso `test_login_real_nao_troca_a_identidade_das_consultas_do_backend` passava antes. Não afeta o projeto remoto, que é configurado pelo Dashboard.
+3. **Supabase local no Windows**: as portas 54321–54324 caíram numa faixa reservada pelo Windows (`netsh interface ipv4 show excludedportrange protocol=tcp` mostra 54269–54368). Os containers subiam sem publicar as portas. Correção, em PowerShell de administrador: `net stop winnat; net start winnat` e depois `supabase start`.
+
+#### Pendências
+
+- **Variável `CANARIO_DESLIGADO`** (Settings → Variables, vazia ou `false`) e a migration `20261001000000` no projeto remoto. O primeiro deploy faz o `db push`.
+- **Ensaio real no Passo 11**: com o repositório no GitHub, rodar o `retrain.yml` por `workflow_dispatch` com um desafiante aprovado e confirmar a sequência completa: PR do canário com o check do CI, merge sem rebuild do Space, job com `por_braco` no resumo, `canario.yml` avaliando, rollback manual por `workflow_dispatch` com o PR de reversão. É evidência para o pitch.
+- **Volume**: com o piloto de uma clínica, o canário reverte por prazo. Até a segunda clínica entrar, decidir entre manter (o modelo não evolui), aumentar `fracao`/`dias_maximos` ou `canario.habilitado: false`.
+- **Contrato com a clínica**: informar que parte da fila é decidida por um modelo em observação (ADR-009, Cons).
+- O achado 1 acima, antes de qualquer cliente além do piloto.
+
 ---
 
 ## Passo 11 — Deploy no Hugging Face Space
@@ -761,7 +853,7 @@ Só depois do Passo 12 (núcleo funcional, testado e deployado). Consulta de pac
 **7. Observabilidade sem Langfuse.** Evento próprio em `eventos_app` (`origem`/`tipo` de LLM: latência, tokens, nome de classe de exceção), com a allowlist de `src/observabilidade.py` estendida. Langfuse segue fora: guardaria prompt/completion, o que é mais uma transferência internacional. A latência do LLM fica **fora** do p95 do SLO §2 (que é de predição) e medida à parte; LLM indisponível degrada só a aba, nunca a fila.
 
 **Pendências para quando o passo for executado** (não bloqueiam nada agora):
-- **ADR-009** registrando a decisão 2 e as alternativas recusadas (LLM redigindo a resposta com PII; CPF parcial persistido; busca por nome dentro do chat).
+- **ADR-010** (o 009 foi usado pelo canário do Passo 10.7) registrando a decisão 2 e as alternativas recusadas (LLM redigindo a resposta com PII; CPF parcial persistido; busca por nome dentro do chat).
 - **Transferência internacional e operador novo**: mesmo sem identificador, o que vai ao LLM inclui `especialidade` e probabilidade de falta — dado derivado de dado de saúde ([`LGPD.md` §2](LGPD.md)). Verificar região e DPA do TrueFoundry e do provedor por trás dele (Art. 33/39) e revisar `LGPD.md` §2.1 (o chat é uma porta de saída nova), §4 e §9. Deixa de valer, para esta porta, o "nenhum destinatário novo" do ADR-007.
 - **Alcance de acesso**: busca por CPF alcança o histórico inteiro do paciente, além da fila de uma data. Sem RBAC (ADR-008), avaliar uma trilha de "quem consultou qual paciente".
 - Secrets novos (chave/URL do TrueFoundry) em `.env.example` e nos secrets do Space.

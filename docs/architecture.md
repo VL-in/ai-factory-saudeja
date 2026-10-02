@@ -12,6 +12,8 @@ ai-factory-saudeja/
 │   ├── model.pkl                      # modelo treinado (saída do stage train)
 │   ├── consultas-treino.csv           # semente + desfechos reais de produção (Passo 9.0, via DVC)
 │   ├── champion_metrics.json          # métricas do modelo em produção (versionado em git, Passo 9.1)
+│   ├── canario.json / canario/        # canário em observação, só enquanto ativo (Passo 10.7, ADR-009)
+│   ├── canario_historico.json         # canários encerrados: promovidos e revertidos (Passo 10.7)
 │   ├── AVISO-DADOS-SINTETICOS.md
 │   └── AVISO-MODELO.md
 ├── docs/
@@ -47,6 +49,7 @@ ai-factory-saudeja/
 │   ├── retrain_gate.py                # gate de promoção do re-treino mensal (Passo 9.1; piso e sanidade no 10.4)
 │   ├── sanidade_modelo.py             # suíte de sanidade e casos limítrofes do modelo (Passo 10.4)
 │   ├── campeao.py                     # "só o campeão vai para produção": sha + threshold (Passos 10.4/10.5)
+│   ├── canario.py                     # canário do modelo: divisão da fila, guardrails e rollback (Passo 10.7)
 │   ├── preprocess.py                  # feature engineering + split treino/teste (stage 1)
 │   ├── train.py                       # SMOTE-NC + treino LightGBM, loga no MLflow (stage 2)
 │   ├── validate.py                    # métricas no fold de teste isolado (stage 3)
@@ -59,7 +62,7 @@ ai-factory-saudeja/
 │   ├── jobs/                          # inferencia_diaria.py: job D-2 (Passo 6)
 │   └── messaging/                     # client.py: interface + stub + InfobipClient (SMS real, Passo 7)
 ├── tests/                             # testes unitários e de integração do pipeline
-├── .github/                          # workflows/: ci.yml, deploy.yml, job_d2.yml, retrain.yml, dependency-review.yml (Passo 10); dependabot.yml
+├── .github/                          # workflows/: ci.yml, deploy.yml, job_d2.yml, retrain.yml, canario.yml, dependency-review.yml (Passo 10); dependabot.yml
 ├── .dvc/                              # configuração e cache do DVC (config versionado só com `core.remote`; URL/credencial fora do git)
 ├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
 ├── params.yaml                        # hiperparâmetros do modelo
@@ -151,6 +154,8 @@ Technologies: Python (`src/jobs/inferencia_diaria.py`)
 
 Deployment: roda **no runner do GitHub Actions** (`.github/workflows/job_d2.yml`, cron 08h17 + `workflow_dispatch`, `concurrency` obrigatório), não no Space — ver a emenda do Passo 10 no ADR-005. O caminho agendado (`main()`) acrescenta **pré-checagem** (modelo e threshold são os do campeão, banco alcançável) antes de qualquer SMS e **pós-checagem** (contabilidade da fila; quarentena de 100% falha o run) depois, com ping do Healthchecks.io em sucesso e `/fail` em falha. O modelo chega por `dvc pull data/model.pkl` com SAS só de leitura.
 
+**Canário** (Passo 10.7, [ADR-009](adr/adr-009-canario-do-modelo.md)): com `data/canario.json` em `main`, o job também baixa `data/canario/model.pkl` e manda `canario.fracao` da fila (20%, sorteio estável por `id_paciente_externo`) para o modelo em observação. Cada predição grava o `model_version` e o threshold do braço que a decidiu. Antes de rotear, `canario.preparar_para_job` confere o canário e avalia os guardrails acumulados no banco: taxa de disparo e falta não avisada, por não-inferioridade contra o campeão no mesmo período. Na violação, grava `canarios_revertidos` e a fila vai 100% para o campeão já naquela execução (rollback automático). A quarentena por braço é conferida no fim de cada execução. Qualquer problema com o canário vira falha do run, nunca fila sem lembrete. A variável `CANARIO_DESLIGADO=true` do repositório o desliga sem PR. A aba "Dev: disparo manual" roda só com o campeão.
+
 #### 3.2.3. Gate de re-treino mensal
 
 Name: Gate de promoção de modelo
@@ -161,9 +166,11 @@ Além da regressão relativa, o Passo 10.4 acrescentou um **piso absoluto** de `
 
 Quatro desfechos, distinguidos pelo código de saída porque o workflow age diferente em cada um: **0** promove (reescreve o campeão, `dvc push`, branch + PR automático, com o CI disparado no PR por `workflow_dispatch`), **1** bloqueia (regressão, piso ou sanidade — nada é publicado, o modelo anterior segue em produção por construção, não por convenção), **2** significa "nenhum re-treino efetivo" (dataset com o mesmo hash: nenhum desfecho novo registrado) e **3** "o pipeline falhou" (em geral o `validate_data` barrou o dataset). Os códigos 1, 2 e 3 falham o workflow; o comparativo campeão × desafiante vai para o `$GITHUB_STEP_SUMMARY` e para um artifact JSON, porque o MLflow daquele ciclo não sobrevive ao job. Alerta por Healthchecks.io/notificação nativa do Actions, **não** por `src/messaging` (5) — ver decisão 4 do Passo 9.
 
-Technologies: Python (`src/retrain_gate.py`), DVC (remote em Azure Blob Storage), MLflow (efêmero via `docker-compose`, só durante o workflow)
+**Aprovar deixou de ser promover** (Passo 10.7, [ADR-009](adr/adr-009-canario-do-modelo.md)). Com campeão registrado e `canario.habilitado`, o código 0 abre o **canário** em vez de reescrever o campeão. O PR do `retrain.yml` leva `data/canario.json` e `data/canario/`, mas não o `dvc.lock`, que em `main` continua sendo o do campeão. O `canario.yml` (diário, 09h47 de SP) avalia os guardrails e abre o PR de promoção, que reescreve o campeão e restaura o lock do treino do canário, ou o de reversão, que remove o canário e o registra em `data/canario_historico.json` para o gate nunca mais aprová-lo. Dois códigos novos: **4** quando há canário em observação (o re-treino nem roda) e **1** também quando o desafiante já foi revertido num canário. A promoção direta continua no bootstrap e com o canário desligado.
 
-Deployment: GitHub Actions (`.github/workflows/retrain.yml`, cron mensal + `workflow_dispatch`), sem infraestrutura própria always-on.
+Technologies: Python (`src/retrain_gate.py`, `src/canario.py`), DVC (remote em Azure Blob Storage), MLflow (efêmero via `docker-compose`, só durante o workflow)
+
+Deployment: GitHub Actions (`.github/workflows/retrain.yml`, cron mensal + `workflow_dispatch`; `.github/workflows/canario.yml`, cron diário + `workflow_dispatch` para rollback manual), sem infraestrutura própria always-on.
 
 ## 4. Data Stores
 
@@ -179,7 +186,7 @@ Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens,
 
 **CPF segue nunca persistido**: `id_paciente_externo` é o hash sha256 dele, calculado em `src/ui/logic.py::_id_paciente_externo_de_cpf`. O ADR-007 fecha sete portas de saída para o nome (log, guarda de AST, `eventos_app`, export de treino, schema da API, select do job D-2 → Infobip, e o contexto do LLM), cada uma com teste travando. `idade` também não é mais coluna: guarda-se `data_nascimento`, e a idade usada como feature de inferência é sempre calculada sob demanda (`src/features.py::calcular_idade`), nunca persistida. Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda Passo 5](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
 
-Key Schemas/Collections: `pacientes`, `agendamentos` (`lembrete_enviado` registra se o paciente foi lembrado — o re-treino precisa disso para não confundir "compareceu" com "compareceu porque foi lembrado"; desfecho só é gravado para consulta de hoje ou anterior; status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb`, `explicacao_texto` nullable — plug do LLM, Passo 13 — e `fora_do_dominio` nullable, Passo 10.3: a predição foi feita sobre um agendamento com algum campo que o modelo não viu no treino; `null` = anterior à checagem), `mensagens_disparadas` (auditoria de envio, SLA §6), `eventos_app` (observabilidade de aplicação, Passo 8.5/[ADR-006](adr/adr-006-observabilidade.md) — latência por predição, execução do job e erros; **sem nenhuma coluna de PII**, e o `detalhe jsonb` é restringido por allowlist em `src/observabilidade.py`, já que o grep de nome de coluna não alcança dentro de um jsonb). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
+Key Schemas/Collections: `pacientes`, `agendamentos` (`lembrete_enviado` registra se o paciente foi lembrado — o re-treino precisa disso para não confundir "compareceu" com "compareceu porque foi lembrado"; desfecho só é gravado para consulta de hoje ou anterior; status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb`, `explicacao_texto` nullable — plug do LLM, Passo 13 — e `fora_do_dominio` nullable, Passo 10.3: a predição foi feita sobre um agendamento com algum campo que o modelo não viu no treino; `null` = anterior à checagem), `mensagens_disparadas` (auditoria de envio, SLA §6), `eventos_app` (observabilidade de aplicação, Passo 8.5/[ADR-006](adr/adr-006-observabilidade.md) — latência por predição, execução do job e erros; **sem nenhuma coluna de PII**, e o `detalhe jsonb` é restringido por allowlist em `src/observabilidade.py`, já que o grep de nome de coluna não alcança dentro de um jsonb), `canarios_revertidos` (Passo 10.7: `model_version` de canário revertido, motivo e data — o estado que tira o canário da fila do job antes de o PR de reversão chegar a `main`, e a trilha de auditoria dos rollbacks; sem PII, sem purga). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
 
 Retenção (Passo 8, [`LGPD.md` §5](LGPD.md)): `eventos_app` 90 dias (teto do free tier, ADR-006) e `predicoes`/`mensagens_disparadas` 365 dias (`RETENCAO_DADOS_DERIVADOS_DIAS`, necessidade — Art. 6º, III), as duas purgas penduradas no job diário, sem agendador novo. `pacientes`/`agendamentos` **não** têm purga automática: são registro do atendimento, cuja exclusão é decisão do controlador (§7).
 
@@ -228,10 +235,11 @@ CI/CD Pipeline (Passo 10): GitHub Actions, com gates por camada do mais barato a
 | `ci.yml` | PR para `dev`/`main`, `workflow_dispatch`, `workflow_call` | `ruff` (com regras S) → `mypy` → `dvc pull data/model.pkl` (SAS de leitura) → `pytest` (contrato, `validate_data`, skew, suíte de sanidade do modelo). Em paralelo, build da imagem de deploy com smoke (`/_stcore/health` e `/health`) e varredura de PII no log do container. Integração (Supabase local + pipeline no container) obrigatória em PR que toque `src/jobs`, `src/db`, `src/export_treino.py` ou `supabase/`, e sempre em `main` |
 | `deploy.yml` | push em `main` (sem `docs/**`), `workflow_dispatch` | `ci` reutilizado → `dvc pull data/model.pkl` → guarda do campeão (`src/campeao.py`: sha e threshold) → **staging com lista fechada** → `supabase db push` → `huggingface/hub-sync` do staging. `environment: production`, `concurrency` sem cancelamento |
 | `job_d2.yml` | cron 08h17 SP, `workflow_dispatch` | job D-2 no runner (3.2.2) |
-| `retrain.yml` | cron dia 1 às 03h17 SP, `workflow_dispatch` | gate de re-treino (3.2.3) |
+| `retrain.yml` | cron dia 1 às 03h17 SP, `workflow_dispatch` | gate de re-treino (3.2.3); aprovado com campeão existente abre o canário |
+| `canario.yml` | cron 09h47 SP, `workflow_dispatch` (`acao=reverter` + motivo) | avalia o canário e abre o PR de promoção ou de reversão (3.2.3, [ADR-009](adr/adr-009-canario-do-modelo.md)) |
 | `dependency-review.yml` | PR | template do GitHub |
 
-O CI é o primeiro job do deploy (`workflow_call`): o SHA testado é o deployado, e falha no CI deixa o deploy pulado por construção. A migration vem **antes** do sync: o Space rebuilda sozinho ao receber os arquivos, então não há janela depois dele em que dê para migrar com segurança; nada na imagem do Space aplica migration. Ver Passo 10.1, que também fixa a regra de compatibilidade (migration aditiva pode ir junto do código que a exige; destrutiva/restritiva, nunca). O sync sobe um **diretório de staging com lista fechada** (Dockerfile, README com o front-matter do Space, `requirements/{base,api,ui}.txt`, `src/`, `params.yaml`, `entrypoint.sh`, `data/model.pkl`), nunca o checkout: a action faz `hf upload` sem git e não respeita os `.gitignore` aninhados — subiria a URL do remote do DVC e o dataset de treino para um Space público. Actions de terceiros fixadas por SHA, mantidas pelo Dependabot.
+O CI é o primeiro job do deploy (`workflow_call`): o SHA testado é o deployado, e falha no CI deixa o deploy pulado por construção. A migration vem **antes** do sync: o Space rebuilda sozinho ao receber os arquivos, então não há janela depois dele em que dê para migrar com segurança; nada na imagem do Space aplica migration. Ver Passo 10.1, que também fixa a regra de compatibilidade (migration aditiva pode ir junto do código que a exige; destrutiva/restritiva, nunca). O sync sobe um **diretório de staging com lista fechada** (Dockerfile, README com o front-matter do Space, `requirements/{base,api,ui}.txt`, `src/`, `params.yaml`, `entrypoint.sh`, `data/model.pkl`), nunca o checkout: a action faz `hf upload` sem git e não respeita os `.gitignore` aninhados — subiria a URL do remote do DVC e o dataset de treino para um Space público. Actions de terceiros fixadas por SHA, mantidas pelo Dependabot. O canário (Passo 10.7) fica fora do Space por construção: não está na lista do staging, e os paths dele estão no `paths-ignore` do deploy. Abrir ou reverter um canário não rebuilda nada; a promoção muda `champion_metrics.json` e `dvc.lock` e deploya como qualquer troca de campeão. No PR do canário, o `ci.yml` baixa o modelo dele e roda `canario.py verificar --sanidade`.
 
 Monitoring & Logging: MLflow para métricas de ML (4.2); `eventos_app` no Supabase como fonte de verdade das métricas de aplicação (4.1/ADR-006); logging estruturado JSON com redação de PII (`src/logging_config.py`, Passo 8) para a aplicação. Sem Langfuse/APM dedicado no núcleo — reservado para tracing do LLM opcional (Passo 13).
 
@@ -281,7 +289,7 @@ Repository URL: (repositório local/privado da disciplina AI Factory: Build, Dep
 
 Primary Contact/Team: Vanessa Hoysan Lin
 
-Date of Last Update: 2026-09-30 (Passo 10 — CI/CD, contrato de features, gates do modelo e job D-2 no runner)
+Date of Last Update: 2026-10-01 (Passo 10.7 — canário do modelo com rollback automático, ADR-009)
 
 ## 11. Glossary / Acronyms
 
@@ -294,6 +302,10 @@ SMOTE-NC: técnica de balanceamento de classes (SMOTE) adaptada para lidar com v
 SLA/SLO: Service Level Agreement / Service Level Objective — ver [`docs/SLA.md`](SLA.md) e [`docs/SLO.md`](SLO.md).
 
 ADR: Architecture Decision Record — ver [`docs/adr/`](adr/).
+
+Canário: modelo aprovado pelo gate que decide só uma fração da fila do job D-2, comparado ao campeão no mesmo período até ser promovido ou revertido — ver [ADR-009](adr/adr-009-canario-do-modelo.md).
+
+Campeão: o modelo em produção, registrado em `data/champion_metrics.json`.
 
 LGPD: Lei Geral de Proteção de Dados (Brasil) — ver [`docs/LGPD.md`](LGPD.md).
 

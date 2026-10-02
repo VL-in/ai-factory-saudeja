@@ -7,6 +7,7 @@ Cada função encapsula uma consulta/gravação específica que a UI (Passo 4) e
 job D-2 (Passo 6) precisam -- nada de query builder genérico aqui, só os
 acessos que o produto de fato usa (ver PLANO-IMPLEMENTACAO.md, Passo 5).
 """
+import re
 from datetime import date, datetime, timedelta
 from typing import Any, cast
 
@@ -525,3 +526,98 @@ def purgar_eventos_app(anteriores_a: datetime) -> int:
         .data
     )
     return len(removidas or [])
+
+
+# --------------------------------------------------------------------------
+# canário do modelo (Passo 10.7, ADR-009)
+# --------------------------------------------------------------------------
+def estatisticas_de_modelo(model_version: str, desde: datetime) -> dict[str, Any]:
+    """Contagens de um braço do canário (`src/canario.py`): predições,
+    disparos por risco, fora do domínio e -- entre os de baixo risco, que não
+    receberam lembrete -- quantos já têm desfecho e quantos faltaram.
+
+    O desfecho vem de `agendamentos.status`, que a clínica registra na "Fila do
+    dia" (Passo 9.0). Só baixo risco entra nesse par: quem recebeu lembrete
+    teve o desfecho alterado pela intervenção, e compará-lo entre braços
+    mediria o SMS, não o modelo.
+
+    Tudo com `count='exact'` e `head=True` -- o PostgREST devolve só o total,
+    sem trazer as linhas (o default dele corta em 1000 por resposta, o que
+    num canário com várias clínicas truncaria a contagem em silêncio)."""
+    client = obter_client()
+    inicio = desde.isoformat()
+
+    def contar(colunas: str = "id", **filtros: Any) -> int:
+        consulta = (
+            client.table("predicoes")
+            .select(colunas, count=CountMethod.exact, head=True)
+            .eq("model_version", model_version)
+            .gte("criado_em", inicio)
+        )
+        for coluna, valor in filtros.items():
+            coluna = coluna.replace("__", ".")
+            consulta = (
+                consulta.in_(coluna, list(valor))
+                if isinstance(valor, tuple)
+                else consulta.eq(coluna, valor)
+            )
+        return consulta.execute().count or 0
+
+    com_desfecho = "id, agendamentos!inner(status)"
+    primeira = _linhas(
+        client.table("predicoes")
+        .select("criado_em")
+        .eq("model_version", model_version)
+        .gte("criado_em", inicio)
+        .order("criado_em")
+        .limit(1)
+        .execute()
+        .data
+    )
+    return {
+        "predicoes": contar(),
+        "disparos": contar(classe_prevista=1),
+        "fora_do_dominio": contar(fora_do_dominio=True),
+        "desfechos_baixo_risco": contar(
+            com_desfecho, classe_prevista=0, agendamentos__status=("concluido", "no_show")
+        ),
+        "faltas_baixo_risco": contar(
+            com_desfecho, classe_prevista=0, agendamentos__status="no_show"
+        ),
+        "primeira_predicao": _ler_timestamptz(primeira[0]["criado_em"]) if primeira else None,
+    }
+
+
+def _ler_timestamptz(valor: str) -> datetime:
+    """`criado_em` vem com a fração de segundo sem os zeros finais
+    ("...T12:00:00.12345+00:00"), e o `fromisoformat` do Python 3.10 só aceita
+    3 ou 6 dígitos. Completa a fração antes de ler."""
+    return datetime.fromisoformat(
+        re.sub(r"\.(\d{1,6})(?=[+-]|$)", lambda m: "." + m.group(1).ljust(6, "0"), valor)
+    )
+
+
+def canario_revertido(model_version: str) -> Linha | None:
+    """Linha de `canarios_revertidos` do canário, se ele já foi revertido.
+    É o estado que tira o canário da fila do job imediatamente, antes de o PR
+    de reversão chegar a `main`."""
+    linhas = _linhas(
+        obter_client()
+        .table("canarios_revertidos")
+        .select("model_version, motivo, revertido_em")
+        .eq("model_version", model_version)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return linhas[0] if linhas else None
+
+
+def registrar_canario_revertido(model_version: str, motivo: str) -> None:
+    """Idempotente: o job e o `canario.yml` podem chegar à mesma decisão no
+    mesmo dia, e a primeira gravação (com o primeiro motivo) é a que vale."""
+    obter_client().table("canarios_revertidos").upsert(
+        {"model_version": model_version, "motivo": motivo},
+        on_conflict="model_version",
+        ignore_duplicates=True,
+    ).execute()

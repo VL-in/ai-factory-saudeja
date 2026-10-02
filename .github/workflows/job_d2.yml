@@ -49,6 +49,10 @@ jobs:
       INFOBIP_REMETENTE: ${{ vars.INFOBIP_REMETENTE }}
       HEALTHCHECKS_JOB_D2_URL: ${{ secrets.HEALTHCHECKS_JOB_D2_URL }}
       APP_ENV: prod
+      # Rollback manual instantaneo do canario (Passo 10.7): `true` na variavel
+      # do repositorio faz o job ignorar data/canario/ ja' na proxima execucao,
+      # sem PR nem deploy.
+      CANARIO_DESLIGADO: ${{ vars.CANARIO_DESLIGADO }}
     steps:
       - name: Provedor de mensageria declarado
         # O stub NAO e' um default inofensivo em producao: ele "envia", e o job
@@ -76,14 +80,24 @@ jobs:
         # o ferramental de desenvolvimento.
         run: pip install -r requirements/api.txt -r requirements/ui.txt -r requirements/dvc.txt
 
-      - name: Baixar o modelo (so' ele)
+      - name: Baixar o modelo (e o canario, se houver)
         run: |
           dvc remote add --local -f azure "$DVC_REMOTE_URL"
           dvc pull data/model.pkl
+          # Canario (Passo 10.7, ADR-009). Falha aqui NAO derruba o job: sem o
+          # arquivo, a pre-checagem do canario manda a fila 100% para o
+          # campeao e o run termina vermelho -- nenhum paciente fica sem
+          # lembrete por causa do canario.
+          if [ -f data/canario/model.pkl.dvc ]; then
+            dvc pull data/canario/model.pkl \
+              || echo "::warning::nao foi possivel baixar o modelo do canario -- fila 100% campeao"
+          fi
 
       - name: Rodar o job D-2
         # main() faz, nesta ordem: pre-checagem (model.pkl e threshold sao os do
-        # campeao, banco alcancavel) ANTES de qualquer SMS; a fila [amanha, D+2];
+        # campeao, banco alcancavel) ANTES de qualquer SMS; a do canario, se
+        # houver (guardrails acumulados -- violado, grava o rollback e a fila
+        # vai 100% para o campeao); a fila [amanha, D+2];
         # as purgas de retencao; e a pos-checagem (contabilidade da fila,
         # quarentena sistemica) -- que define o codigo de saida. Resumo com
         # contadores no $GITHUB_STEP_SUMMARY.

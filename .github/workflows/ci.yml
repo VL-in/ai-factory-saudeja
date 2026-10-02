@@ -61,7 +61,7 @@ jobs:
           if [ "$EVENTO" != "pull_request" ]; then
             echo "integracao=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "origin/${BASE}...HEAD" \
-              | grep -qE '^(src/jobs/|src/db/|src/export_treino\.py|supabase/)'; then
+              | grep -qE '^(src/jobs/|src/db/|src/export_treino\.py|src/canario\.py|supabase/)'; then
             echo "integracao=true" >> "$GITHUB_OUTPUT"
           else
             echo "integracao=false" >> "$GITHUB_OUTPUT"
@@ -103,6 +103,19 @@ jobs:
         run: |
           dvc remote add --local -f azure "$DVC_REMOTE_URL"
           dvc pull data/model.pkl
+
+      - name: Canario ativo -- alcancavel, coerente e sao (Passo 10.7)
+        # No PR que abre o canario (e em todo PR enquanto ele estiver ativo):
+        # o modelo foi publicado no remote, e' o registrado em canario.json,
+        # foi aprovado contra o campeao atual, as copias do lock/dataset que a
+        # promocao restaura existem, e a suite de sanidade o aprova.
+        run: |
+          if [ -f data/canario/model.pkl.dvc ]; then
+            dvc pull data/canario/model.pkl
+            python src/canario.py verificar --sanidade
+          else
+            echo "nenhum canario ativo"
+          fi
 
       - name: Testes
         run: pytest

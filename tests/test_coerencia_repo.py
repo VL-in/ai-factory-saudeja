@@ -474,3 +474,41 @@ def test_dependencias_do_dvc_estao_em_lf_no_checkout():
         f"dependências do dvc.yaml com CRLF: {com_crlf} -- converta para LF "
         "(o .gitattributes já faz isso no checkout)"
     )
+
+
+# --- canário do modelo (Passo 10.7, ADR-009) ------------------------------------
+
+
+def test_canario_nao_aciona_deploy_mas_a_promocao_aciona():
+    """Abrir ou reverter um canário não muda nada no Space (o canário não
+    entra no staging); promover muda champion_metrics.json e dvc.lock, que
+    precisam continuar disparando o deploy."""
+    conteudo = yaml.safe_load((WORKFLOWS / "deploy.yml").read_text(encoding="utf-8"))
+    # PyYAML lê a chave `on:` como o booleano True.
+    ignorados = conteudo[True]["push"]["paths-ignore"]
+    assert {"data/canario.json", "data/canario/**", "data/canario_historico.json"} <= set(
+        ignorados
+    )
+    assert not any(
+        re.fullmatch(p.replace("**", ".*").replace("*", "[^/]*"), alvo)
+        for p in ignorados
+        for alvo in ("data/champion_metrics.json", "dvc.lock", "data/consultas-treino.csv.dvc")
+    )
+
+
+def test_job_d2_nao_morre_se_o_modelo_do_canario_nao_baixar():
+    """Um canário inalcançável não pode custar o lembrete de ninguém: o job
+    segue com o campeão e falha no fim (src/canario.py::preparar_para_job)."""
+    texto = (WORKFLOWS / "job_d2.yml").read_text(encoding="utf-8")
+    linha = next(
+        i for i, t in enumerate(texto.splitlines()) if "dvc pull data/canario/model.pkl" in t
+    )
+    seguinte = texto.splitlines()[linha + 1]
+    assert "||" in texto.splitlines()[linha] or seguinte.strip().startswith("||")
+
+
+def test_canario_e_encerrado_sempre_por_pr_nunca_por_push_em_main():
+    texto = (WORKFLOWS / "canario.yml").read_text(encoding="utf-8")
+    assert "gh pr create" in texto
+    assert 'git push origin "$BRANCH"' in texto
+    assert "git push origin main" not in texto

@@ -27,8 +27,14 @@ on:
     # Mudanca so' de documentacao nao rebuilda o Space (cold start, SLO §2).
     # dvc.lock e data/champion_metrics.json NAO entram aqui: sao justamente o
     # merge do PR de promocao do re-treino (Passo 9.1).
+    # O canario tambem nao (Passo 10.7): ele vive so' no runner do job D-2 e
+    # nao entra no staging, entao abrir ou reverter um canario nao muda nada
+    # no Space. A PROMOCAO muda champion_metrics.json e dvc.lock, e deploya.
     paths-ignore:
       - "docs/**"
+      - "data/canario.json"
+      - "data/canario/**"
+      - "data/canario_historico.json"
   # Primeiro deploy (Passo 11) e reenvio manual.
   workflow_dispatch:
 

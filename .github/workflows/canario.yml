@@ -1,0 +1,205 @@
+# Canario do modelo: avaliacao diaria, promocao e rollback (Passo 10.7 do
+# PLANO-IMPLEMENTACAO.md, ADR-009).
+#
+# O canario nasce no retrain.yml (gate aprovou um desafiante e ja' existe
+# campeao: data/canario/ em vez de champion_metrics.json) e vive no job D-2,
+# que manda canario.fracao da fila para ele. Este workflow e' quem o ENCERRA,
+# sempre por PR -- o job roda com `contents: read` e nao mexe em git:
+#
+#   avaliar   -> guardrails do banco (taxa de disparo, falta nao avisada),
+#                canario x campeao no mesmo periodo; decide aguardar,
+#                promover ou reverter (src/canario.py)
+#   promover  -> PR que reescreve champion_metrics.json, restaura o dvc.lock e
+#                o .dvc do dataset do treino do canario e remove data/canario/.
+#                O merge dispara o deploy.yml, que leva o modelo ao Space
+#   reverter  -> PR que remove data/canario/ e registra o modelo em
+#                data/canario_historico.json (o gate nunca mais o aprova).
+#                O campeao nao muda: ele nunca saiu de producao
+#
+# O rollback que AGE e' anterior ao PR: a avaliacao que decide reverter grava
+# `canarios_revertidos` no banco, e o job da manha seguinte ja' manda a fila
+# 100% para o campeao -- o PR e' o registro formal. A mesma checagem roda
+# dentro do proprio job, antes de rotear a fila, entao um guardrail violado
+# tira o canario ja' na execucao em que aparece.
+#
+# Rollback manual: workflow_dispatch com acao=reverter e um motivo. Para
+# desligar o canario NA HORA, sem PR, ha' a variavel CANARIO_DESLIGADO=true
+# do repositorio (lida pelo job_d2.yml).
+name: Canario do modelo
+
+on:
+  schedule:
+    # 12:47 UTC = 09:47 em Sao Paulo: depois do job D-2 (08h17, timeout de 20
+    # min), para a avaliacao ja' contar a fila do dia. Minuto "quebrado" pelo
+    # mesmo motivo dos outros crons (achado 12 da revisao do Passo 10).
+    - cron: "47 12 * * *"
+  workflow_dispatch:
+    inputs:
+      acao:
+        description: "avaliar (decide sozinho) ou reverter (rollback manual)"
+        type: choice
+        options: [avaliar, reverter]
+        default: avaliar
+      motivo:
+        description: "motivo do rollback manual (obrigatorio com acao=reverter)"
+        type: string
+        required: false
+
+permissions:
+  contents: write        # branch do PR de promocao/reversao
+  pull-requests: write   # o PR
+  actions: write         # `gh workflow run ci.yml` no PR (achado 6, mesmo do retrain.yml)
+
+concurrency:
+  # Duas avaliacoes simultaneas abririam dois PRs para o mesmo canario.
+  group: canario
+  cancel-in-progress: false
+
+jobs:
+  canario:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      # Leitura basta: a promocao so' troca o PONTEIRO (dvc.lock) para um
+      # modelo que o retrain.yml ja' publicou no remote ao abrir o canario.
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      OBSERVABILIDADE_ATIVA: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Canario ativo?
+        id: estado
+        run: |
+          if [ -f data/canario.json ]; then
+            echo "ativo=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ativo=false" >> "$GITHUB_OUTPUT"
+            echo "Nenhum canario ativo em main." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.estado.outputs.ativo == 'true'
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Instalar dependencias
+        if: steps.estado.outputs.ativo == 'true'
+        # ui.txt traz o supabase-py (estatisticas e canarios_revertidos); dvc.txt,
+        # o `dvc pull` que confere a promocao.
+        run: pip install -r requirements/ui.txt -r requirements/dvc.txt
+
+      - name: Avaliar os guardrails
+        id: avaliacao
+        if: steps.estado.outputs.ativo == 'true'
+        # Se a decisao for reverter, o proprio comando grava canarios_revertidos:
+        # o job de amanha ja' roda 100% campeao, com ou sem o merge do PR.
+        run: |
+          python src/canario.py avaliar \
+            --relatorio-json "$RUNNER_TEMP/avaliacao.json" \
+            --resumo-md "$RUNNER_TEMP/avaliacao.md"
+
+      - name: Decidir a acao
+        id: acao
+        if: steps.estado.outputs.ativo == 'true'
+        env:
+          ACAO_MANUAL: ${{ inputs.acao }}
+          MOTIVO_MANUAL: ${{ inputs.motivo }}
+          ACAO_AVALIADA: ${{ steps.avaliacao.outputs.acao }}
+          VERSAO: ${{ steps.avaliacao.outputs.model_version }}
+        run: |
+          set -euo pipefail
+          if [ "$ACAO_MANUAL" = "reverter" ]; then
+            if [ -z "$MOTIVO_MANUAL" ]; then
+              echo "::error::rollback manual exige um motivo"; exit 1
+            fi
+            acao=reverter
+          else
+            acao="$ACAO_AVALIADA"
+          fi
+          branch="canario/${acao}-${VERSAO}"
+          existe=false
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            # PR ja' aberto num dia anterior: nao abre outro, so' avisa.
+            existe=true
+            echo "::notice::o branch $branch ja' existe -- PR pendente de merge"
+          fi
+          {
+            echo "acao=$acao"
+            echo "branch=$branch"
+            echo "existe=$existe"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Promover (reescreve o campeao a partir do canario)
+        if: steps.acao.outputs.acao == 'promover' && steps.acao.outputs.existe == 'false'
+        run: python src/canario.py promover --evidencia-json "$RUNNER_TEMP/avaliacao.json"
+
+      - name: Conferir que o lock restaurado entrega o modelo do canario
+        if: steps.acao.outputs.acao == 'promover' && steps.acao.outputs.existe == 'false'
+        # Mesma guarda do deploy.yml e do job D-2: o sha do model.pkl que o
+        # dvc.lock restaurado aponta tem de bater com o campeao recem-escrito.
+        run: |
+          dvc remote add --local -f azure "$DVC_REMOTE_URL"
+          dvc pull data/model.pkl
+          python src/campeao.py
+
+      - name: Reverter (o campeao nao muda)
+        if: steps.acao.outputs.acao == 'reverter' && steps.acao.outputs.existe == 'false'
+        env:
+          MOTIVO_MANUAL: ${{ inputs.motivo }}
+        run: |
+          set -euo pipefail
+          if [ -n "$MOTIVO_MANUAL" ]; then
+            motivo="rollback manual: $MOTIVO_MANUAL"
+          else
+            motivo=$(jq -r '.motivo' "$RUNNER_TEMP/avaliacao.json")
+          fi
+          python src/canario.py reverter \
+            --motivo "$motivo" \
+            --evidencia-json "$RUNNER_TEMP/avaliacao.json" \
+            --registrar-no-banco
+
+      - name: Abrir PR
+        if: >-
+          (steps.acao.outputs.acao == 'promover' || steps.acao.outputs.acao == 'reverter')
+          && steps.acao.outputs.existe == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACAO: ${{ steps.acao.outputs.acao }}
+          BRANCH: ${{ steps.acao.outputs.branch }}
+          VERSAO: ${{ steps.avaliacao.outputs.model_version }}
+        # PR, nunca push em main: a promocao muda o modelo em producao, e o
+        # merge humano e' o mesmo ponto de revisao do PR de promocao direta. O
+        # CI e' disparado por workflow_dispatch pelo motivo do achado 6.
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A -- data/canario data/canario.json data/canario_historico.json
+          if [ "$ACAO" = "promover" ]; then
+            git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc
+            titulo="(resultado) canario $VERSAO promovido a campeao"
+            efeito="O merge dispara o \`deploy.yml\`, que leva o modelo ao Space; o job D-2 passa a usar o novo campeao em 100% da fila."
+          else
+            titulo="(resultado) canario $VERSAO revertido"
+            efeito="O campeao nao muda. O job D-2 ja' esta' mandando 100% da fila para ele (\`canarios_revertidos\`); o merge so' formaliza a decisao e impede o gate de aprovar este modelo de novo."
+          fi
+          git commit -m "$titulo"
+          git push origin "$BRANCH"
+          {
+            echo "Decisao automatica do \`canario.yml\` (Passo 10.7, ADR-009)."
+            echo
+            cat "$RUNNER_TEMP/avaliacao.md"
+            echo
+            echo "$efeito"
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "$RUNNER_TEMP/pr-body.md"
+          gh pr create --title "$titulo" --body-file "$RUNNER_TEMP/pr-body.md" \
+            --base "${GITHUB_REF_NAME}" --head "$BRANCH"
+          gh workflow run ci.yml --ref "$BRANCH"

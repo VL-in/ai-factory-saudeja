@@ -21,6 +21,14 @@ o threshold são os do campeão, o banco responde) antes de qualquer SMS, e
 **pós-checagem** (a contabilidade da fila fecha, a quarentena não foi
 sistêmica) depois, com o código de saída que o workflow usa para avisar o
 Healthchecks.
+
+**Canário (Passo 10.7, ADR-009)**: só o caminho agendado o usa. Com
+`data/canario.json` ativo, `main()` pede a `canario.preparar_para_job` o
+contexto do canário -- que já confere os guardrails e faz o rollback
+automático se algum estiver violado -- e `processar_dia` manda a fração
+configurada da fila (por paciente) para o modelo em observação. Qualquer
+problema com o canário cai para 100% campeão, nunca para fila sem lembrete.
+A aba de dev roda só com o campeão.
 """
 import argparse
 import logging
@@ -36,6 +44,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import campeao  # noqa: E402
+import canario  # noqa: E402
 import contrato_features  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
@@ -115,24 +124,64 @@ def _payload_de_agendamento(agendamento: dict[str, Any]) -> dict[str, Any]:
 
 
 def processar_dia(
-    data_referencia: date | None = None, cliente_mensageria: MessagingClient | None = None
+    data_referencia: date | None = None,
+    cliente_mensageria: MessagingClient | None = None,
+    contexto_canario: canario.ContextoCanario | None = None,
 ) -> dict[str, Any]:
     """Roda o pipeline D-2 uma vez para `data_referencia` (default hoje na
     clínica). Devolve contagens (não levanta por agendamento individual malformado
     -- um payload ruim não pode travar a fila inteira do dia) para a aba de
-    dev/logs mostrarem o que aconteceu."""
+    dev/logs mostrarem o que aconteceu.
+
+    Com `contexto_canario`, a fração dele da fila é decidida pelo canário, e o
+    resultado ganha `por_braco` (contadores de cada modelo nesta execução)."""
     data_referencia = data_referencia or hoje_na_clinica()
     with observabilidade.medir(
         observabilidade.TIPO_JOB_D2, origem=observabilidade.ORIGEM_JOB
     ) as observado:
-        resultado = _processar_fila(data_referencia, cliente_mensageria, observado)
+        resultado = _processar_fila(
+            data_referencia, cliente_mensageria, observado, contexto_canario
+        )
     return resultado
+
+
+class _Braco:
+    """Um modelo pronto para decidir parte da fila: o campeão sempre, o
+    canário quando houver. Mesmos campos nos dois, para o laço não precisar
+    saber qual está usando."""
+
+    def __init__(
+        self,
+        nome: str,
+        model: Any,
+        mapa_especialidade: dict[str, Any],
+        explainer: Any,
+        model_version: str,
+        threshold: float,
+    ) -> None:
+        self.nome = nome
+        self.model = model
+        self.mapa_especialidade = mapa_especialidade
+        self.explainer = explainer
+        self.model_version = model_version
+        self.threshold = threshold
+
+
+def _unidade_do_canario(agendamento: dict[str, Any]) -> str | None:
+    """O paciente (`id_paciente_externo`, já pseudonimizado) é a unidade de
+    divisão: estável entre as consultas dele durante o canário. Agendamento
+    malformado sem o embed cai no campeão."""
+    paciente = agendamento.get("pacientes")
+    if not isinstance(paciente, dict) or not paciente.get("id_paciente_externo"):
+        return None
+    return str(paciente["id_paciente_externo"])
 
 
 def _processar_fila(
     data_referencia: date,
     cliente_mensageria: MessagingClient | None,
     observado: dict[str, Any],
+    contexto_canario: canario.ContextoCanario | None = None,
 ) -> dict[str, Any]:
     """Corpo do job, separado de `processar_dia` só para a instrumentação do
     Passo 8.5 (ADR-006) envolver a execução inteira -- inclusive a busca no
@@ -158,30 +207,68 @@ def _processar_fila(
 
     model_path = caminho_de_env("MODEL_PATH", "data/model.pkl")
     model, mapa_especialidade = inference.carregar_modelo(model_path)
-    explainer = construir_explicador(model)
     model_version = inference.calcular_model_version(model_path)
     observado["model_version"] = model_version
-    threshold = float(inference.PARAMS["decision"]["threshold"])
+    bracos = {
+        "campeao": _Braco(
+            "campeao",
+            model,
+            mapa_especialidade,
+            construir_explicador(model),
+            model_version,
+            float(inference.PARAMS["decision"]["threshold"]),
+        )
+    }
+    if contexto_canario is not None:
+        bracos["canario"] = _Braco(
+            "canario",
+            contexto_canario.model,
+            contexto_canario.mapa_especialidade,
+            contexto_canario.explainer,
+            contexto_canario.model_version,
+            contexto_canario.threshold,
+        )
+        resultado["por_braco"] = {
+            nome: {
+                "agendamentos": 0,
+                "predicoes_gravadas": 0,
+                "quarentena": 0,
+                "disparos_por_risco": 0,
+            }
+            for nome in bracos
+        }
     cliente = cliente_mensageria or obter_cliente_mensageria()
 
     for agendamento in pendentes:
+        braco = bracos["campeao"]
+        if contexto_canario is not None and contexto_canario.decide(
+            _unidade_do_canario(agendamento)
+        ):
+            braco = bracos["canario"]
+        contadores = resultado.get("por_braco", {}).get(braco.nome)
+        if contadores is not None:
+            contadores["agendamentos"] += 1
+
         inicio = time.perf_counter()
         try:
             linha = contrato_features.validar_payload(
-                _payload_de_agendamento(agendamento), mapa_especialidade
+                _payload_de_agendamento(agendamento), braco.mapa_especialidade
             )
-            X = inference.construir_features(linha.valores, mapa_especialidade)
-            probabilidade = float(inference.predizer(model, X)[0])
-            contribuicoes = explicar(explainer, X)
+            X = inference.construir_features(linha.valores, braco.mapa_especialidade)
+            probabilidade = float(inference.predizer(braco.model, X)[0])
+            contribuicoes = explicar(braco.explainer, X)
         except Exception as exc:
             # Quarentena: QUALQUER falha ao predizer uma linha (regra de
             # negócio do contrato, especialidade fora do mapa, nulo inesperado)
             # fica restrita àquela linha. Antes só KeyError/Especialidade eram
             # capturadas, e um TypeError abortava o resto da fila.
-            _registrar_quarentena(agendamento, exc, model_version, resultado)
+            _registrar_quarentena(agendamento, exc, braco.model_version, resultado)
+            if contadores is not None:
+                contadores["quarentena"] += 1
             _enviar_lembrete(agendamento, cliente, resultado, STATUS_ENVIADO_SEM_PREDICAO)
             continue
 
+        threshold = braco.threshold
         classe_prevista = int(probabilidade >= threshold)
         # Mede só o trecho de modelo (features + predição + SHAP), o mesmo que
         # a rota /predict executa -- a gravação no banco e o envio de SMS que
@@ -190,7 +277,7 @@ def _processar_fila(
             tipo=observabilidade.TIPO_PREDICAO,
             origem=observabilidade.ORIGEM_JOB,
             duracao_ms=round((time.perf_counter() - inicio) * 1000),
-            model_version=model_version,
+            model_version=braco.model_version,
         )
 
         repositories.gravar_predicao(
@@ -199,11 +286,14 @@ def _processar_fila(
             classe_prevista=classe_prevista,
             threshold_usado=threshold,
             explicacao_shap=contribuicoes,
-            model_version=model_version,
+            model_version=braco.model_version,
             fora_do_dominio=linha.fora_do_dominio,
         )
         resultado["predicoes_gravadas"] += 1
         resultado["fora_do_dominio"] += int(linha.fora_do_dominio)
+        if contadores is not None:
+            contadores["predicoes_gravadas"] += 1
+            contadores["disparos_por_risco"] += classe_prevista
 
         if classe_prevista:
             _enviar_lembrete(agendamento, cliente, resultado, "enviado")
@@ -438,7 +528,11 @@ def pos_checagem(resultado: dict[str, Any]) -> tuple[list[str], list[str]]:
 
 
 def _publicar_resumo(
-    resultado: dict[str, Any], falhas: list[str], avisos: list[str], model_version: str
+    resultado: dict[str, Any],
+    falhas: list[str],
+    avisos: list[str],
+    model_version: str,
+    canario_version: str | None = None,
 ) -> None:
     """Anotações (`::error::`/`::warning::`) e `$GITHUB_STEP_SUMMARY` quando
     roda no Actions; no terminal, as mesmas linhas servem de leitura. Só
@@ -471,11 +565,31 @@ def _publicar_resumo(
             )
         ),
         "",
+        *_linhas_do_canario(resultado, canario_version),
         *(f"- **falha:** {f}" for f in falhas),
         *(f"- aviso: {a}" for a in avisos),
     ]
     with open(destino, "a", encoding="utf-8") as f:
         f.write("\n".join(linhas) + "\n")
+
+
+def _linhas_do_canario(resultado: dict[str, Any], canario_version: str | None) -> list[str]:
+    """Contadores por braço no resumo do run, quando houve canário."""
+    por_braco = resultado.get("por_braco")
+    if not por_braco:
+        return []
+    linhas = [
+        f"Canário `{canario_version}` nesta execução:",
+        "",
+        "| Braço | Agendamentos | Predições | Quarentena | Disparos por risco |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for nome, c in por_braco.items():
+        linhas.append(
+            f"| {nome} | {c['agendamentos']} | {c['predicoes_gravadas']} | "
+            f"{c['quarentena']} | {c['disparos_por_risco']} |"
+        )
+    return [*linhas, ""]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -486,13 +600,23 @@ def main(argv: list[str] | None = None) -> int:
     # repositório é público (Passo 10.5): o filtro é a última barreira.
     configurar_logging()
     model_version = pre_checagem()
-    resultado = processar_dia()
+    # Depois da pré-checagem do campeão (sem campeão válido não há fila) e
+    # antes de qualquer SMS. Nunca levanta: um canário com problema vira falha
+    # do run e a fila vai 100% para o campeão.
+    preparacao = canario.preparar_para_job(model_version, params=inference.PARAMS)
+    resultado = processar_dia(contexto_canario=preparacao.contexto)
     purgados = purgar_eventos_antigos()
     derivados_purgados = purgar_dados_derivados_antigos()
     # Processo curto: sem o flush, os eventos enfileirados morreriam junto com
     # o processo antes de o worker daemon gravá-los (ver observabilidade.flush).
     observabilidade.flush()
     falhas, avisos = pos_checagem(resultado)
+    falhas += preparacao.falhas
+    avisos += preparacao.avisos
+    if preparacao.contexto is not None:
+        falhas += canario.avaliar_execucao(
+            preparacao.contexto, resultado.get("por_braco", {}), params=inference.PARAMS
+        )
     # Uma linha JSON: no Actions a única saída que sobra é stdout, e o resumo
     # precisa ser grep-ável junto do resto do log. Contadores, nunca a lista de
     # erros: ela carrega `motivo` por agendamento.
@@ -514,9 +638,17 @@ def main(argv: list[str] | None = None) -> int:
             "erros": len(resultado["erros"]),
             "eventos_purgados": purgados,
             "derivados_purgados": derivados_purgados,
+            "canario": preparacao.contexto.model_version if preparacao.contexto else None,
+            "por_braco": resultado.get("por_braco"),
         },
     )
-    _publicar_resumo(resultado, falhas, avisos, model_version)
+    _publicar_resumo(
+        resultado,
+        falhas,
+        avisos,
+        model_version,
+        canario_version=preparacao.contexto.model_version if preparacao.contexto else None,
+    )
     return SAIDA_FALHA if falhas else SAIDA_OK
 
 
