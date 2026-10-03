@@ -8,6 +8,17 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
+## [Não publicado] (Vanessa + Claude) - 2026-10-02
+
+### Modificado
+- A imagem de deploy roda como usuário não-root (uid 1000), a mesma condição do Space, e já traz o código compilado.
+- **O deploy só termina verde quando o Space está no ar com a versão nova.** Antes, o workflow terminava logo depois de enviar os arquivos, mesmo que o build do Space falhasse. Agora ele espera o Space buildar o commit enviado e responder na URL pública, e falha se o build ou a inicialização quebrarem.
+- O CI builda e testa a imagem a partir dos mesmos arquivos que vão para o Space, e não do repositório inteiro.
+
+### Corrigido
+- O CI do GitHub falharia na primeira execução: quatro testes de observabilidade dependiam de uma variável que o próprio CI desliga.
+- Os pedidos de mudança abertos pelo re-treino e pelo canário ficam presos a este repositório e não podem cair no repositório de origem do fork.
+
 ## [v1.14] (Vanessa + Claude) - 2026-10-01
 
 ### Adicionado

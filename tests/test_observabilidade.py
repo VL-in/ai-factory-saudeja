@@ -33,10 +33,16 @@ MODEL_PATH = "data/model.pkl"
 
 
 @pytest.fixture
-def eventos_capturados():
+def eventos_capturados(monkeypatch):
     """Substitui o destino de gravação por um espião em memória -- prova o que
     é registrado sem precisar de Supabase de pé (mesma ideia do cliente de
-    mensageria espião de test_job_inferencia.py)."""
+    mensageria espião de test_job_inferencia.py).
+
+    Liga a observabilidade explicitamente: o ci.yml exporta
+    `OBSERVABILIDADE_ATIVA=false` no workflow inteiro (CI não é tráfego de
+    produto), e sem isto o espião nunca recebe nada no runner -- os testes
+    passavam na máquina local e quebravam no primeiro CI real."""
+    monkeypatch.setenv("OBSERVABILIDADE_ATIVA", "true")
     capturados = []
 
     def _escritor(**evento):
@@ -51,9 +57,11 @@ def eventos_capturados():
 
 
 @pytest.fixture
-def escritor_que_falha():
+def escritor_que_falha(monkeypatch):
     """Destino permanentemente quebrado: o caminho principal (predição, job)
-    tem que continuar funcionando por cima dele."""
+    tem que continuar funcionando por cima dele. Liga a observabilidade pelo
+    mesmo motivo de `eventos_capturados`."""
+    monkeypatch.setenv("OBSERVABILIDADE_ATIVA", "true")
     chamadas = []
 
     def _escritor(**evento):
@@ -258,6 +266,37 @@ def test_payload_invalido_registra_erro_com_status_http(eventos_capturados):
     evento = eventos_capturados[0]
     assert evento["status"] == observabilidade.STATUS_ERRO
     assert evento["detalhe"]["status_http"] == 422
+
+
+def test_excecao_no_predict_vira_500_e_evento_so_com_a_classe(eventos_capturados, monkeypatch):
+    """O ramo de exceção do middleware não tinha teste: é ele que alimenta o
+    SLO §1 (5xx) quando a predição quebra de verdade. A mensagem da exceção
+    pode carregar dado do payload, então só o nome da classe entra no evento."""
+    from api.main import app
+
+    def predizer_quebrado(model, X):
+        raise RuntimeError("falha com 11987654321 na mensagem")
+
+    monkeypatch.setattr(inference, "predizer", predizer_quebrado)
+    _, mapa_especialidade = inference.carregar_modelo(MODEL_PATH)
+    payload = {
+        "idade": 45,
+        "sexo": "F",
+        "especialidade": sorted(mapa_especialidade)[0],
+        "distancia_km": 5.5,
+        "dias_entre_agendamento_consulta": 14,
+        "historico_noshow": 1,
+        "data_hora_agendada": "2026-01-05T09:00:00",
+    }
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resposta = client.post("/predict", json=payload)
+    observabilidade.flush()
+
+    assert resposta.status_code == 500
+    evento = next(e for e in eventos_capturados if e["origem"] == observabilidade.ORIGEM_API)
+    assert evento["status"] == observabilidade.STATUS_ERRO
+    assert evento["detalhe"] == {"rota": "/predict", "excecao": "RuntimeError"}
 
 
 # --- round-trip contra o Supabase local (integracao) ---------------------------

@@ -830,6 +830,16 @@ Vai num PR para `dev` **antes** do PR `dev` → `main`, para que o primeiro depl
 | A4 | Smoke do CI também com `docker run --user 1000` e, se falhar, um usuário 1000 com `HOME` gravável no `infra/deploy/dockerfile` | O Space roda o container como uid 1000, não como root. O smoke atual roda como root e não veria, por exemplo, o cache do numba (via `shap`) ou o `~/.streamlit` sem permissão de escrita. É a "checagem de usuário não-root" do texto acima, transformada em gate |
 | A5 | `GH_REPO: ${{ github.repository }}` nos passos com `gh` do `retrain.yml` e do `canario.yml` | Seguro barato por causa do fork: o PR automático nunca pode cair no upstream |
 
+**Estado da Fase A: implementada em 2026-10-02** (ainda não enviada; vai no PR para `dev`). O que mudou em relação à tabela acima:
+
+- **A1** foi feito no CI, não como segundo build no `deploy.yml`. A lista fechada saiu dos `cp` do YAML para `scripts/montar_staging_space.py`, e o job `imagem` do `ci.yml` builda **a partir do staging**. Como o `deploy.yml` chama o CI no mesmo SHA antes de migrar, a garantia é a mesma, e cada deploy economiza um `docker build`.
+- **A2** está em `scripts/smoke_deploy.py space`, último passo do `deploy.yml`. Ele espera o `sha` do runtime igualar o do repositório do Space (logo depois do sync o runtime ainda está `RUNNING` no commit anterior), falha em `BUILD_ERROR`/`RUNTIME_ERROR` e consulta `/_stcore/health` na URL pública. A `model_version` continua dependendo da decisão da porta única. O mesmo script, no modo `local`, substitui o laço de `curl` do CI e confere que a API serve o `model.pkl` empacotado.
+- **A3** está em `tests/test_deploy.py`, que monta o staging de verdade e confere as origens dos `COPY`.
+- **A4**: a imagem já nasce com `USER` uid 1000 e `HOME` gravável, e o smoke do CI roda com `--user 1000`. Junto vieram `compileall` de `src/` no build (com `/app` só de leitura, o Python não grava `__pycache__` em runtime), `PYTHONUNBUFFERED=1` e as camadas reordenadas (dependências → modelo → `src/`). O COPY dos requirements passou a ser arquivo a arquivo, então mudar `train.txt`/`dev.txt` não invalida o cache do pip.
+- **A5**: `GH_REPO` nos dois passos que abrem PR.
+- **Avaliado e não feito:** tirar `mlflow` e `pytest` de `requirements/base.txt`. Nenhum módulo servido pelo Space os importa, e a imagem perderia 36 pacotes (cerca de 56 MB de wheels: Flask, SQLAlchemy, alembic, gunicorn, docker, matplotlib). A mudança foi revertida a pedido da autora porque `base.txt` e `train.txt` são dependências dos quatro stages do `dvc.yaml`: qualquer edição neles reexecuta o pipeline inteiro no próximo `dvc repro`. `tests/test_deploy.py` continua conferindo que cada ambiente importa o que executa só com os `requirements/` que instala.
+- **Fora da tabela, bug do CI:** o `ci.yml` exporta `OBSERVABILIDADE_ATIVA=false` no workflow inteiro, e quatro testes de `test_observabilidade.py` dependiam dela ligada. Na máquina local passavam, e no primeiro CI real o job `lint, tipos e testes` falharia. As fixtures agora ligam a variável explicitamente.
+
 #### Fase B — contas e configuração (autora)
 
 Nesta ordem, porque cada item destrava o seguinte:

@@ -9,6 +9,8 @@ são cobertas por tests/test_ui_logic.py -- aqui o que se testa é a tela.
 """
 from datetime import datetime, timedelta, timezone
 
+import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from ui import logic
@@ -242,3 +244,105 @@ def test_sessao_inativa_volta_para_o_login_com_aviso(monkeypatch):
     assert not at.exception
     assert not at.tabs
     assert any("sem uso" in info.value for info in at.info)
+
+
+# --- caminhos felizes das abas que dependem do banco ----------------------------
+# Os testes acima cobrem essas abas só SEM Supabase (o erro amigável). O que a
+# clínica vê em produção -- a fila com dados, o painel com números, o job que
+# rodou -- não tinha nenhum smoke. O banco é trocado por funções falsas em
+# `ui.logic`, o mesmo módulo que o app importa.
+
+
+@pytest.fixture
+def caches_do_streamlit_limpos():
+    """`_resumo_observabilidade` e `_status_banco` usam `st.cache_data`, que
+    vive no processo inteiro: um resumo falso cacheado aqui apareceria no
+    teste "sem Supabase" seguinte."""
+    st.cache_data.clear()
+    yield
+    st.cache_data.clear()
+
+
+def _item_fila(n, probabilidade, classe, **kwargs):
+    return logic.ItemFila(
+        id_agendamento=f"ag-{n}",
+        id_paciente_externo=f"{n:064x}",
+        especialidade="cardiologia",
+        data_hora_agendada=datetime(2026, 10, 2, 9 + n, 0),
+        probabilidade=probabilidade,
+        classe_prevista=classe,
+        explicacao=[{"feature": "historico_noshow", "valor": 3, "contribuicao": 0.8}],
+        model_version="abc123",
+        **kwargs,
+    )
+
+
+def test_fila_do_dia_com_agendamentos_mostra_os_contadores(monkeypatch, caches_do_streamlit_limpos):
+    fila = [
+        _item_fila(0, 0.81, 1, nome_completo="Paciente Teste Um"),
+        _item_fila(1, 0.12, 0, fora_do_dominio=True),
+        logic.ItemFila(
+            id_agendamento="ag-2",
+            id_paciente_externo="f" * 64,
+            especialidade="dermatologia",
+            data_hora_agendada=datetime(2026, 10, 2, 15, 0),
+            probabilidade=None,
+            classe_prevista=None,
+        ),
+    ]
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", lambda dia: fila)
+
+    at = _rodar(monkeypatch)
+
+    assert not at.exception
+    contadores = {m.label: m.value for m in at.metric}
+    assert contadores["Agendamentos"] == "3"
+    assert contadores["Alto risco"] == "1"
+    assert contadores["Sem predição"] == "1"
+    assert not [e for e in at.error if "fila" in e.value.lower()]
+
+
+def test_observabilidade_com_numeros_acusa_violacao_de_slo(monkeypatch, caches_do_streamlit_limpos):
+    """p95 acima de 2 s e predição sem explicação são as duas violações que o
+    painel tem de gritar -- testadas com o resumo no formato de
+    `logic.resumo_observabilidade`."""
+    resumo = {
+        "janela_horas": 24,
+        "predicoes": 40,
+        "p50_ms": 900.0,
+        "p95_ms": 2500.0,
+        "erros": 2,
+        "por_origem": {"job": 30, "processo": 10},
+        "cobertura_explicacao": {"predicoes": 30, "com_explicacao": 29, "percentual": 29 / 30},
+        "ultimo_job_d2": datetime(2026, 10, 2, 8, 17, tzinfo=timezone.utc),
+        "truncado": True,
+    }
+    monkeypatch.setattr(logic, "resumo_observabilidade", lambda janela_horas: resumo)
+
+    at = _rodar(monkeypatch)
+
+    assert not at.exception
+    contadores = {m.label: m.value for m in at.metric}
+    assert contadores["p95 de latência"] == "2500 ms"
+    assert contadores["Cobertura de explicação (SLO §4)"] == "97%"
+    erros = " ".join(e.value for e in at.error)
+    assert "SLO §2" in erros and "SLO §4" in erros
+    assert any("truncada" in w.value for w in at.warning)
+
+
+def test_aba_dev_com_job_bem_sucedido_mostra_os_contadores(monkeypatch, caches_do_streamlit_limpos):
+    resultado = {
+        "agendamentos_encontrados": 5,
+        "predicoes_gravadas": 5,
+        "mensagens_disparadas": 2,
+        "erros": [],
+    }
+    monkeypatch.setattr(logic, "disparar_job_diario", lambda dia=None: resultado)
+    at = _rodar(monkeypatch)
+
+    _botao(at, "Disparar job D-2 agora").click().run()
+
+    assert not at.exception
+    contadores = {m.label: m.value for m in at.metric}
+    assert contadores["Mensagens disparadas"] == "2"
+    assert any("sem erros" in s.value for s in at.success)

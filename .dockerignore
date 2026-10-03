@@ -1,11 +1,18 @@
 # Contexto de build enxuto -- as tres imagens (dockerfile, infra/api/,
 # infra/deploy/) copiam so o que precisam, mas o contexto inteiro e enviado ao
-# daemon a cada build. data/model.pkl NAO entra aqui: a imagem combinada de
-# deploy o empacota.
+# daemon a cada build. Vale para o build local (docker compose); no CI e no
+# Space a imagem de deploy builda o staging de lista fechada
+# (scripts/montar_staging_space.py), que nem chega a ter o resto.
 .git/
 .dvc/cache/
 mlruns/
-data/mlflow.db
+# data/: nenhuma imagem copia dataset (o treino o monta por volume, ver
+# docker-compose.yml) -- so' o model.pkl, que a imagem de deploy empacota.
+data/*
+!data/model.pkl
+build/
+.mypy_cache/
+.deepeval/
 docs/
 notebooks/
 .venv/

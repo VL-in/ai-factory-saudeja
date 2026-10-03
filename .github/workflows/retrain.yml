@@ -159,6 +159,9 @@ jobs:
         if: steps.gate.outputs.codigo == '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fork publico (Passo 11.1, A5): sem isto o `gh` pode resolver o
+          # upstream como repositorio padrao, e o PR automatico cairia la'.
+          GH_REPO: ${{ github.repository }}
         # So' o que e' de fato versionado em git: champion_metrics.json (a
         # fonte de verdade do campeao), dvc.lock (qual codigo+dado gerou qual
         # modelo) e o .dvc do dataset. O model.pkl NAO vai no commit -- e' out

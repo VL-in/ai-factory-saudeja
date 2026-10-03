@@ -180,3 +180,54 @@ def test_montar_dataset_treino_sem_producao_reproduz_so_a_semente(tmp_path):
     )
 
     pd.testing.assert_frame_equal(dataset.reset_index(drop=True), semente)
+
+
+# --- smoke do ponto de entrada do retrain.yml ------------------------------------
+
+
+def test_main_do_retrain_grava_o_csv_e_publica_quarentena_e_completude(
+    tmp_path, monkeypatch, capsys
+):
+    """`python src/export_treino.py` é o primeiro passo do re-treino mensal e
+    só tinha as funções internas testadas. Smoke do `main()` com o banco
+    trocado por um falso: grava o CSV que o `dvc add` seguinte versiona e
+    publica no summary as duas coisas que a autora precisa ver no run -- a
+    quarentena e o alerta de completude de rótulo."""
+    semente = tmp_path / "consultas-historicas.csv"
+    pd.DataFrame(
+        {
+            "id_consulta": [1],
+            "id_paciente": ["P1057"],
+            "idade": [52],
+            "sexo": ["F"],
+            "especialidade": ["cardiologia"],
+            "distancia_km": [7.4],
+            "dias_entre_agendamento_consulta": [14],
+            "historico_noshow": [2],
+            "no_show": [0],
+            "data_hora_agendada": ["2026-01-09 14:00:00"],
+        }
+    ).to_csv(semente, index=False)
+    agendamentos = [
+        _agendamento("A1", "P1", "1990-01-01", "2026-01-05 10:00:00", "concluido"),
+        _agendamento("A2", "P1", "1990-01-01", "2026-02-01 10:00:00", "no_show"),  # domingo
+    ]
+    monkeypatch.setattr(export_treino, "CONSULTAS_HISTORICAS_PATH", str(semente))
+    monkeypatch.setattr(
+        export_treino.repositories, "buscar_agendamentos_com_desfecho", lambda: agendamentos
+    )
+    monkeypatch.setattr(
+        export_treino.repositories, "contar_consultas_sem_desfecho", lambda hoje: 2
+    )
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    saida = tmp_path / "consultas-treino.csv"
+
+    linhas = export_treino.main(str(saida))
+
+    assert linhas == 2  # semente + A1; A2 ficou em quarentena
+    assert len(pd.read_csv(saida)) == 2
+    publicado = summary.read_text(encoding="utf-8")
+    assert publicado.strip() == capsys.readouterr().out.strip()
+    assert "fora do contrato" in publicado
+    assert "alerta de completude" in publicado and "50%" in publicado  # 2 de 2+2

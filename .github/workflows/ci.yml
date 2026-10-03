@@ -146,24 +146,30 @@ jobs:
           dvc remote add --local -f azure "$DVC_REMOTE_URL"
           dvc pull data/model.pkl
 
+      - name: Staging de lista fechada (o mesmo do deploy)
+        # Build a partir do staging, nao do checkout (Passo 11.1, A1): e' o
+        # contexto exato que o Space builda. O deploy.yml roda este job no
+        # mesmo SHA antes de sincronizar, entao um COPY que dependa de arquivo
+        # fora da lista falha aqui -- antes de migrar o banco.
+        run: python scripts/montar_staging_space.py
+
       - name: Build da imagem que vai para o Space
-        run: docker build -t saudeja-app -f infra/deploy/dockerfile .
+        run: docker build -t saudeja-app build/space
 
       - name: Smoke -- UI e API de pe, do jeito que o Space as sobe
         # Sem Supabase de proposito: a UI tem de subir e responder saude mesmo
         # sem banco (as abas que dependem dele mostram o erro, nao derrubam).
+        # --user 1000 (A4): o Space roda o container com esse uid, nao como
+        # root; explicito aqui para o smoke continuar valendo mesmo que o USER
+        # do Dockerfile mude. O script confere tambem que a API serve o
+        # model.pkl do staging.
         run: |
-          docker run -d --name saudeja-app -e APP_ENV=prod -p 7860:7860 -p 8000:8000 saudeja-app
-          for i in $(seq 1 60); do
-            if curl -fsS http://localhost:7860/_stcore/health \
-               && curl -fsS http://localhost:8000/health; then
-              echo; echo "UI e API saudaveis em ${i}x2s"; exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::a imagem de deploy nao ficou saudavel em 120s"
-          docker logs saudeja-app
-          exit 1
+          docker run -d --name saudeja-app --user 1000 -e APP_ENV=prod \
+            -p 7860:7860 -p 8000:8000 saudeja-app
+          if ! python scripts/smoke_deploy.py local --modelo build/space/data/model.pkl; then
+            docker logs saudeja-app
+            exit 1
+          fi
 
       - name: Nenhuma PII no log do container
         # scripts/auditoria_lgpd.py sai 1 se achar algo (Passo 8). O log do

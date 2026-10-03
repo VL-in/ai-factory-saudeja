@@ -3,7 +3,8 @@
 # Ordem, num workflow so':
 #
 #   ci (reutilizado) -> dvc pull do modelo -> guarda do campeao -> staging
-#     -> supabase db push -> sync do staging para o Space
+#     -> supabase db push -> sync do staging para o Space -> espera o Space
+#     buildar e responder
 #
 # - O CI e' o primeiro job (workflow_call): o SHA testado e' o deployado, e
 #   falha no CI deixa o deploy PULADO por construcao (achado 3).
@@ -19,6 +20,11 @@
 #   (achado 1): a action faz `hf upload` por HTTP, sem git, e nao respeita os
 #   .gitignore aninhados -- subiria .dvc/config.local (URL do remote), o cache
 #   do DVC e o dataset de treino para um Space publico fora do Brasil.
+# - A lista fechada e' de scripts/montar_staging_space.py, e o job `imagem` do
+#   CI ja' buildou e testou (como uid 1000) a imagem a partir do mesmo staging
+#   neste SHA -- nao ha segundo docker build aqui (Passo 11.1, A1).
+# - O sync nao e' o fim: o ultimo passo espera o Space buildar no commit novo
+#   e responder na URL publica (A2).
 name: Deploy (HF Space)
 
 on:
@@ -49,7 +55,8 @@ jobs:
   deploy:
     needs: ci
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 20 min de ate' o sync + ate' 25 de espera pelo build do Space (A2).
+    timeout-minutes: 45
     # Historico de deploys na aba Environments do GitHub (evidencia para o
     # pitch) e o HF_TOKEN guardado so' aqui, nao no repositorio inteiro.
     environment: production
@@ -92,45 +99,13 @@ jobs:
         run: python src/campeao.py
 
       - name: Staging com lista fechada
-        # Derivada dos COPY de infra/deploy/dockerfile. Arquivo novo no
-        # repositorio nao vai para producao sem alguem acrescenta-lo aqui --
-        # mesmo principio da allowlist de `eventos_app` (Passo 8.5).
-        run: |
-          set -euo pipefail
-          rm -rf build/space
-          mkdir -p build/space/requirements build/space/infra/deploy build/space/data
-          cp infra/deploy/dockerfile build/space/Dockerfile
-          cp requirements/base.txt requirements/api.txt requirements/ui.txt build/space/requirements/
-          cp -r src build/space/src
-          find build/space/src -name '__pycache__' -prune -exec rm -rf {} +
-          cp params.yaml build/space/
-          cp infra/deploy/entrypoint.sh build/space/infra/deploy/
-          cp data/model.pkl build/space/data/
-          # README proprio do Space: o SDK Docker le o front-matter dele. Nao
-          # vai no README do GitHub, que renderizaria o bloco YAML como tabela.
-          cat > build/space/README.md <<'README'
-          ---
-          title: SaudeJa
-          sdk: docker
-          app_port: 7860
-          pinned: false
-          ---
-
-          Classificador de no-show do SaudeJa -- espelho de deploy gerado pelo
-          `.github/workflows/deploy.yml`. Nao edite aqui: o proximo deploy
-          sobrescreve este Space inteiro.
-          README
-
-      - name: Conferir o staging
-        # Defesa contra a lista fechada ser alargada sem querer: nada de dado
-        # de treino, config do DVC ou ambiente pode estar no que sobe.
-        run: |
-          set -euo pipefail
-          find build/space -type f | sort
-          if find build/space -type f | grep -E '\.(csv|env|dvc|db)$|/\.dvc/|config\.local'; then
-            echo "::error::o staging contem arquivo que nao pode ir para o Space"
-            exit 1
-          fi
+        # A lista mora em scripts/montar_staging_space.py, o mesmo script que o
+        # job `imagem` do CI usou para buildar e testar a imagem neste SHA
+        # (Passo 11.1, A1). Arquivo novo no repositorio nao vai para producao
+        # sem alguem acrescenta-lo la' -- mesmo principio da allowlist de
+        # `eventos_app` (Passo 8.5). O script tambem recusa dado de treino,
+        # config do DVC ou ambiente no que sobe, e lista o que entrou.
+        run: python scripts/montar_staging_space.py
 
       - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
         with:
@@ -156,3 +131,16 @@ jobs:
           private: "false"
           subdirectory: build/space
           hf_version: "2.0.0" # fixa: a action instalaria a ultima por padrao (achado 14)
+
+      - name: Esperar o Space buildar e responder (Passo 11.1, A2)
+        # Sem isto o workflow terminava verde no sync, mesmo com o build do
+        # Space quebrado. Espera o runtime chegar no commit que acabou de subir
+        # (sha do runtime == sha do repositorio do Space), falha em
+        # BUILD_ERROR/RUNTIME_ERROR e bate em /_stcore/health na URL publica.
+        # A model_version nao e' conferida aqui: a API (8000) nao e' publica
+        # enquanto a decisao da porta unica do Passo 11 estiver aberta.
+        timeout-minutes: 25
+        env:
+          HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python scripts/smoke_deploy.py space --space-id "$HF_SPACE_ID" --timeout 1200

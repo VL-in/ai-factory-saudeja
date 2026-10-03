@@ -310,6 +310,83 @@ def test_cli_avaliar_sem_canario_escreve_nenhum_no_output(repo_falso, monkeypatc
     assert "acao=nenhum" in saida.read_text(encoding="utf-8")
 
 
+# Smoke dos comandos exatamente como os workflows os chamam (canario.yml e o
+# passo "Canario ativo" do ci.yml): as funções estavam testadas, o `main()`
+# que as liga às saídas do Actions não.
+def test_cli_status_com_e_sem_canario(repo_falso, capsys):
+    assert canario.main(["status"]) == 0
+    assert "nenhum canário ativo" in capsys.readouterr().out
+
+    registro = _iniciar(repo_falso)
+    assert canario.main(["status"]) == 0
+    assert json.loads(capsys.readouterr().out)["model_version"] == registro["model_version"]
+
+
+def test_cli_verificar_com_sanidade_aprova_canario_coerente(repo_falso, capsys):
+    registro = _iniciar(repo_falso)
+
+    assert canario.main(["verificar", "--sanidade"]) == 0
+    assert f"canário {registro['model_version']} coerente" in capsys.readouterr().out
+
+
+def test_cli_verificar_com_modelo_trocado_devolve_1(repo_falso, capsys):
+    _iniciar(repo_falso)
+    (repo_falso / "canario" / canario.MODELO).write_bytes(b"outro modelo")
+
+    assert canario.main(["verificar"]) == 1
+    assert capsys.readouterr().out.startswith("::error::")
+
+
+def test_cli_avaliar_com_canario_publica_decisao_relatorio_e_resumo(
+    repo_falso, banco, monkeypatch, tmp_path
+):
+    falso = banco()
+    registro = _iniciar(repo_falso)
+    saida, summary = tmp_path / "github_output", tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(saida))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    relatorio, resumo = tmp_path / "avaliacao.json", tmp_path / "avaliacao.md"
+
+    codigo = canario.main(
+        ["avaliar", "--relatorio-json", str(relatorio), "--resumo-md", str(resumo)]
+    )
+
+    assert codigo == 0
+    outputs = dict(
+        linha.split("=", 1) for linha in saida.read_text(encoding="utf-8").splitlines()
+    )
+    # Sem tráfego nenhum, o único desfecho possível é esperar.
+    assert outputs == {"acao": canario.ACAO_AGUARDAR, "model_version": registro["model_version"]}
+    assert json.loads(relatorio.read_text(encoding="utf-8"))["acao"] == canario.ACAO_AGUARDAR
+    assert resumo.read_text(encoding="utf-8") in summary.read_text(encoding="utf-8")
+    assert falso.revertidos_gravados == []  # só a decisão de reverter grava no banco
+
+
+def test_cli_promover_le_a_evidencia_e_reescreve_o_campeao(repo_falso, tmp_path):
+    registro = _iniciar(repo_falso)
+    evidencia = tmp_path / "avaliacao.json"
+    evidencia.write_text(json.dumps({"acao": "promover"}), encoding="utf-8")
+
+    assert canario.main(["promover", "--evidencia-json", str(evidencia)]) == 0
+
+    campeao_gravado = json.loads((repo_falso / "champion_metrics.json").read_text("utf-8"))
+    assert campeao_gravado["model_version"] == registro["model_version"]
+    assert not canario.ativo()
+
+
+def test_cli_reverter_registra_no_banco_antes_de_encerrar(repo_falso, banco):
+    """`--registrar-no-banco` é o rollback que age antes do merge do PR: o
+    job da manhã seguinte já lê `canarios_revertidos`."""
+    falso = banco()
+    registro = _iniciar(repo_falso)
+
+    argumentos = ["reverter", "--motivo", "rollback manual: teste", "--registrar-no-banco"]
+    assert canario.main(argumentos) == 0
+
+    assert falso.revertidos_gravados == [(registro["model_version"], "rollback manual: teste")]
+    assert canario.modelos_revertidos() == {registro["model_version"]}
+
+
 # --------------------------------------------------------------------------
 # preparação no job: nunca levanta, na dúvida 100% campeão
 # --------------------------------------------------------------------------
@@ -641,15 +718,19 @@ def test_resumo_do_job_mostra_os_bracos(tmp_path, monkeypatch):
     assert "| canario | 1 | 1 | 0 | 1 |" in texto
 
 
-def test_staging_do_deploy_nao_leva_o_canario_ao_space():
-    """O canário vive só no runner do job: o Space roda o campeão."""
+def test_staging_do_deploy_nao_leva_o_canario_ao_space(tmp_path):
+    """O canário vive só no runner do job: o Space roda o campeão. A lista
+    fechada mora em scripts/montar_staging_space.py desde o Passo 11.1, então
+    o teste monta o staging de verdade em vez de ler o YAML."""
+    import sys
     from pathlib import Path
 
-    deploy = (Path(__file__).resolve().parents[1] / ".github/workflows/deploy.yml").read_text(
-        encoding="utf-8"
-    )
-    staging = deploy[deploy.index("Staging com lista fechada") : deploy.index("Conferir o staging")]
-    assert "canario" not in staging
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import montar_staging_space
+
+    conteudo = montar_staging_space.montar(tmp_path / "space")
+    assert not [c for c in conteudo if c.startswith("data/") and c != "data/model.pkl"]
+    assert not [c for c in conteudo if "canario" in c and not c.startswith("src/")]
 
 
 def test_copia_do_modelo_real_para_o_canario_tem_a_mesma_versao(tmp_path):

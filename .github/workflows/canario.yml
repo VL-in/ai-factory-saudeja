@@ -169,6 +169,9 @@ jobs:
           && steps.acao.outputs.existe == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fork publico (Passo 11.1, A5): sem isto o `gh` pode resolver o
+          # upstream como repositorio padrao, e o PR automatico cairia la'.
+          GH_REPO: ${{ github.repository }}
           ACAO: ${{ steps.acao.outputs.acao }}
           BRANCH: ${{ steps.acao.outputs.branch }}
           VERSAO: ${{ steps.avaliacao.outputs.model_version }}
