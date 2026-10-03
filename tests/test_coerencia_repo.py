@@ -548,7 +548,7 @@ def test_jobs_com_secret_de_ambiente_declaram_o_environment():
 
 def test_workflows_usam_sas_do_azure_e_so_o_retreino_escreve():
     """A account key lê, grava e apaga na conta inteira e gera SAS novas:
-    nenhum workflow a recebe. A SAS de escrita (rlc) fica só no re-treino, o
+    nenhum workflow a recebe. A SAS de escrita (rlcw) fica só no re-treino, o
     único que faz `dvc push`; os demais leem com a SAS `rl`."""
     for arquivo in sorted(WORKFLOWS.glob("*.yml")):
         texto = arquivo.read_text(encoding="utf-8")

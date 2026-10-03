@@ -911,7 +911,7 @@ Juntam as verificações já descritas no corpo deste passo, no 10.1, nas revis�
 |---|---|:-:|:-:|:-:|---|
 | `DVC_REMOTE_URL` | secret | ✅ | | | `.env` local |
 | `AZURE_STORAGE_CONNECTION_STRING_LEITURA` | secret | ✅ | | | SAS `rl` do container, assinada com a `key1` (comando no `.env.example`) |
-| `AZURE_STORAGE_CONNECTION_STRING_ESCRITA` | secret | | | ✅ | SAS `rlc` do container, assinada com a `key2`; só o re-treino usa. A account key não vai para o GitHub |
+| `AZURE_STORAGE_CONNECTION_STRING_ESCRITA` | secret | | | ✅ | SAS `rlcw` do container, assinada com a `key2`; só o re-treino usa. A account key não vai para o GitHub |
 | `HF_TOKEN` | secret | | ✅ | ✅ | token *fine-grained* com escrita **só** no Space daquele ambiente |
 | `HF_SPACE_ID` | variável | | ✅ | ✅ | `<usuário>/<space>` de cada ambiente |
 | `SUPABASE_ACCESS_TOKEN` | secret | | ✅ | ✅ | token pessoal do CLI; gerar dois (`github-dev`, `github-prod`) para revogar um sem afetar o outro |
@@ -939,8 +939,8 @@ gh secret list; gh secret list --env dev; gh secret list --env production; gh va
 
 1. **Azure (bloqueante).** Em *Storage account → Networking*, deixe *Public network access* em "Enabled from all networks". Runner do GitHub não tem IP fixo, então a proteção passa a ser a SAS. Se essa opção já estiver ligada, a chave do `.env` foi rotacionada, e é preciso copiar de novo a connection string da `key1`.
    - O pronto é `dvc status -c` responder "in sync".
-   - Em seguida, gere as duas SAS do container (comandos no `.env.example`): a `rl` com a `key1` e a `rlc` com a `key2`, as duas com a mesma expiração, **anotada na agenda**.
-   - Teste a `rlc` antes de cadastrá-la, numa sessão em que `$env:AZURE_STORAGE_CONNECTION_STRING` seja ela, e não a account key. Faça o teste num diretório temporário, fora do repositório: `dvc init --no-scm`, `dvc remote add -d azure <url>`, `dvc add` de um arquivo de texto qualquer, `dvc push`, e então apague o cache local e rode `dvc pull`. Um push no repositório não testa nada se o remote já estiver em dia, porque não há objeto novo para subir. Ainda não está confirmado que o `adlfs` sobe blob só com *create*. Se o push falhar por permissão, gere a SAS com `rlcw`: ela passa a sobrescrever, mas continua sem apagar e restrita ao container.
+   - Em seguida, gere as duas SAS do container (comandos no `.env.example`): a `rl` com a `key1` e a `rlcw` com a `key2`, as duas com a mesma expiração, **anotada na agenda**.
+   - Teste a `rlcw` antes de cadastrá-la, numa sessão em que `$env:AZURE_STORAGE_CONNECTION_STRING` seja ela, e não a account key. Faça o teste num diretório temporário, fora do repositório: `dvc init --no-scm`, `dvc remote add -d azure <url>`, `dvc add` de um arquivo de texto qualquer, `dvc push`, e então apague o cache local e rode `dvc pull`. Um push no repositório não testa nada se o remote já estiver em dia, porque não há objeto novo para subir. Só `rlc` não basta: o `adlfs` sobe com `overwrite=True` e o Azure responde `AuthorizationPermissionMismatch` sem o `w`. Com `rlcw` a SAS sobrescreve, mas continua sem apagar e restrita ao container. No teste, deixe só ela como credencial: sem `az login` e sem `account_name` no `.dvc/config.local`, senão o `adlfs` usa outra credencial e o teste não prova nada.
 2. **Supabase de produção.**
    - Crie um *New project* na região **South America (São Paulo)**, a mesma do dev (ADR-005, LGPD), e guarde a senha do banco num gerenciador de senhas.
    - Em *Authentication → Sign In / Providers*, desligue "Allow new users to sign up" e suba a senha mínima para 8. Confira que o projeto de dev está igual.
