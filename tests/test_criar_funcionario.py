@@ -2,7 +2,7 @@
 SaúdeJá — smoke de `scripts/criar_funcionario.py` (ADR-008).
 
 É a única porta de entrada de conta da equipe e roda uma vez por funcionário,
-na Fase B do primeiro deploy (Passo 11.1) -- contra o projeto de produção, sem
+na configuração do primeiro deploy -- contra o projeto de produção, sem
 ensaio. Sem teste até aqui. O Supabase Auth é trocado por um falso: o que se
 trava é o contrato do script (senha nunca por argumento, mínimo de 8, e-mail
 normalizado, conta já confirmada) e que toda recusa do Supabase vira mensagem

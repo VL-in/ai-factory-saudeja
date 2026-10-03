@@ -300,7 +300,7 @@ Versão só de documentação, sem mudança de comportamento: o [ADR-006](../adr
 
 ### Adicionado
 - `src/tune.py`: busca de hiperparâmetros por GridSearchCV sobre o Pipeline SMOTENC+LightGBM, com SMOTENC recalculado a cada fold para não vazar sintéticos entre treino e validação. Script exploratório, fora do `dvc.yaml`.
-- Documentação: ADR-004 propõe a stack de produto e o `PLANO-IMPLEMENTACAO.md` detalha os passos até o produto deployável.
+- Documentação: ADR-004 propõe a stack de produto e o roteiro de implementação até o produto deployável.
 
 ### Modificado
 - Os hiperparâmetros de `params.yaml` não mudaram: os encontrados pelo GridSearch saíram piores no fold de teste isolado (f1_1 0,372 contra 0,419). O dataset atual (~380 linhas) é pequeno demais para o tuning fino generalizar.

@@ -63,7 +63,7 @@ def test_dvc_yaml_deps_e_outs_existem_no_repo():
             if dep in outs_de_outros_stages:
                 continue
             # Dataset versionado por DVC (`<arquivo>.dvc` no git, conteúdo no
-            # remote): no CI só o model.pkl é baixado (Passo 10.5), e o que
+            # remote): no CI só o model.pkl é baixado, e o que
             # garante a existência do dado é o próprio `.dvc`.
             if (REPO_ROOT / f"{dep}.dvc").exists():
                 continue
@@ -89,7 +89,7 @@ def test_dvc_lock_consistente_com_dvc_yaml():
 
 def test_requirements_nao_tem_pacotes_duplicados():
     """requirements.txt foi dividido em requirements/{base,train,api}.txt
-    (Passo 3) -- cada arquivo próprio (ignorando linhas "-r ...", que só
+    -- cada arquivo próprio (ignorando linhas "-r ...", que só
     referenciam outro arquivo) não deve ter pacote repetido dentro de si."""
     for caminho in (REPO_ROOT / "requirements").glob("*.txt"):
         linhas = caminho.read_text(encoding="utf-8").splitlines()
@@ -106,7 +106,8 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
     """O elo dvc.yaml -> dockerfile deixou de ser direto (`docker build -f
     dockerfile`) e passou a ter o compose no meio: os stages rodam
     `docker compose run ... train`, e é o serviço `train` que aponta para o
-    dockerfile (Passo 9, decisão 5 -- `%cd%` não expandia no runner Linux).
+    dockerfile (`%cd%`, que o mount antigo usava, não expandia no runner
+    Linux).
     A checagem segue a mesma: o dockerfile que o pipeline usa existe de fato,
     agora percorrendo os dois saltos."""
     dvc_yaml = yaml.safe_load((REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8"))
@@ -119,7 +120,7 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
     for nome, stage in dvc_yaml["stages"].items():
         assert "docker compose run" in stage["cmd"], (
             f"stage '{nome}' não usa `docker compose run` -- um `docker run` com mount "
-            "montado à mão volta a quebrar no runner Linux (Passo 9, decisão 5)"
+            "montado à mão volta a quebrar no runner Linux"
         )
         # Sem estas deps, mudar a imagem ou o mount não invalidaria o stage.
         for dep in ("dockerfile", "docker-compose.yml"):
@@ -132,7 +133,7 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
 # `nome_completo` em outra tabela sem ninguém notar -- o que é exatamente o
 # tipo de drift que esta guarda existe para pegar.
 COLUNAS_DE_PII_PERMITIDAS_POR_MIGRATION = {
-    # Passo 7: sem contato de envio não existe lembrete pago, que é o produto.
+    # Sem contato de envio não existe lembrete pago, que é o produto.
     "telefone": "20260920020000_telefone_paciente.sql",
     # 2026-09-28 (ADR-007): a fila do dia é operada por uma pessoa, que precisa
     # chamar o paciente pelo nome -- o hash sha256 não serve para isso.
@@ -157,7 +158,7 @@ def test_migrations_sql_sem_coluna_proibida_de_pii():
     escapa)."""
     colunas_proibidas = ("nome", "cpf", "email", "telefone")
     migrations_dir = REPO_ROOT / "supabase" / "migrations"
-    assert migrations_dir.exists(), "supabase/migrations/ não existe (Passo 5)"
+    assert migrations_dir.exists(), "supabase/migrations/ não existe"
 
     for migration in migrations_dir.glob("*.sql"):
         linhas_sem_comentario = (
@@ -196,15 +197,15 @@ def test_excecoes_de_pii_apontam_para_migrations_que_existem():
 
 
 def test_export_treino_sem_coluna_proibida_de_pii():
-    """`src/export_treino.py` (Passo 9.0) monta um CSV a partir de dados reais
+    """`src/export_treino.py` monta um CSV a partir de dados reais
     de produção -- mesmo critério de PII do schema (`test_migrations_sql_...`),
     aplicado agora ao código que gera o dataset de treino. `telefone` é a
-    exceção deliberada no schema (Passo 7, contato de envio), mas o export
+    exceção deliberada no schema (contato de envio), mas o export
     nunca deveria emiti-la -- por isso ela some da lista de proibidas do
     schema e volta a ser proibida aqui."""
     colunas_proibidas = ("nome", "cpf", "email", "telefone")
     caminho = REPO_ROOT / "src" / "export_treino.py"
-    assert caminho.exists(), "src/export_treino.py não existe (Passo 9.0)"
+    assert caminho.exists(), "src/export_treino.py não existe"
 
     texto = caminho.read_text(encoding="utf-8").lower()
     # COLUNAS_SAIDA é a lista literal de colunas que o CSV final carrega --
@@ -391,14 +392,14 @@ def test_a_guarda_de_log_realmente_detecta_pii():
 def test_architecture_md_sem_placeholder_generico():
     """docs/architecture.md é um template genérico -- este teste falha se algum
     placeholder tipo '[e.g., ...]' ainda não foi preenchido com conteúdo real
-    do projeto (ver Passo 0 do PLANO-IMPLEMENTACAO.md)."""
+    do projeto."""
     texto = (REPO_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
     assert "[e.g.," not in texto, (
         "docs/architecture.md ainda contém placeholder(s) '[e.g., ...]' não preenchido(s)"
     )
 
 
-# --- workflows do GitHub Actions (Passo 10.5) ----------------------------------
+# --- workflows do GitHub Actions ----------------------------------------------
 
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
@@ -409,7 +410,7 @@ def _passos(workflow: str) -> list[dict]:
 
 
 def test_actions_de_terceiros_fixadas_por_sha():
-    """Achado 14: a action de deploy recebe o HF_TOKEN; uma tag pode ser
+    """A action de deploy recebe o HF_TOKEN; uma tag pode ser
     movida para outro código, um SHA não. O Dependabot atualiza os SHAs."""
     soltas = [
         f"{arquivo.name}: {passo['uses']}"
@@ -423,7 +424,7 @@ def test_actions_de_terceiros_fixadas_por_sha():
 
 
 def test_dvc_pull_sempre_com_alvo_fora_do_re_treino():
-    """Achado 1: `dvc pull` sem alvo traria o dataset de treino -- e, no
+    """`dvc pull` sem alvo traria o dataset de treino -- e, no
     deploy, ele iria para o Space junto. Só o re-treino precisa do dado."""
     sem_alvo = [
         f"{arquivo.name}: {linha.strip()}"
@@ -442,7 +443,7 @@ def test_deploy_sobe_o_staging_e_nao_o_checkout():
 
 
 def test_deploy_migra_o_banco_antes_do_sync_e_depois_da_guarda_do_campeao():
-    """Passo 10.1: migration antes do sync (o Space rebuilda ao receber os
+    """Migration antes do sync (o Space rebuilda ao receber os
     arquivos). Guarda do campeão antes da migration: deploy que não vai
     acontecer não deixa o banco migrado."""
     nomes = [p.get("name", p.get("uses", "")) for p in _passos("deploy.yml")]
@@ -456,7 +457,7 @@ def test_dependencias_do_dvc_estao_em_lf_no_checkout():
     """O DVC 3 hasheia os BYTES das dependências dos stages. Com CRLF no
     checkout de Windows e LF no runner Linux, o md5 do dvc.lock nunca batia
     no GitHub Actions -- o re-treino reexecutava tudo mesmo sem dado novo e o
-    código 2 do gate não disparava (achado ao implementar o Passo 10.5). O
+    código 2 do gate não disparava. O
     `.gitattributes` força LF no checkout; este teste pega o arquivo novo que
     um editor de Windows tenha gravado com CRLF antes de ele virar commit."""
     dvc_yaml = yaml.safe_load((REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8"))
@@ -476,7 +477,7 @@ def test_dependencias_do_dvc_estao_em_lf_no_checkout():
     )
 
 
-# --- canário do modelo (Passo 10.7, ADR-009) ------------------------------------
+# --- canário do modelo (ADR-009) ------------------------------------------------
 
 
 def test_canario_nao_aciona_deploy_mas_a_promocao_aciona():

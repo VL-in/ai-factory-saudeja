@@ -1,19 +1,19 @@
 """
-SaúdeJá — job de inferência diária D-2 (Passo 6 do plano de implementação).
+SaúdeJá — job de inferência diária D-2.
 
 Busca no Supabase os agendamentos de amanhã até D+2 ainda sem predição (via
 `db.repositories.buscar_agendamentos_d2_pendentes` -- a janela de três dias
 recupera sozinha um dia em que o cron não rodou), aplica o contrato de
-features (`src/contrato_features.py`, Passo 10.3), roda a predição+
+features (`src/contrato_features.py`), roda a predição+
 explicação reaproveitando `src/inference.py`/`src/explain.py` -- os mesmos
-módulos que a API (Passo 3) usa, sem lógica de predição duplicada --, grava
+módulos que a API usa, sem lógica de predição duplicada --, grava
 o resultado em `predicoes` e decide o disparo de lembrete pago conforme o
 threshold de `params.yaml`, sempre registrando a decisão (enviado ou não)
 em `mensagens_disparadas` para auditoria (SLA §6).
 
 Importa o modelo em processo (decisão do ADR-005 b), não via HTTP à API. Roda
-no runner do GitHub Actions (`.github/workflows/job_d2.yml`, Passo 10.5), não
-no Space -- ver a emenda do Passo 10 no ADR-005.
+no runner do GitHub Actions (`.github/workflows/job_d2.yml`), não
+no Space -- ver a emenda de 2026-09-30 no ADR-005.
 
 `main()` é o caminho agendado e acrescenta o que a aba "Dev: disparo manual"
 (que chama `processar_dia()` direto) não precisa: **pré-checagem** (o modelo e
@@ -22,7 +22,7 @@ o threshold são os do campeão, o banco responde) antes de qualquer SMS, e
 sistêmica) depois, com o código de saída que o workflow usa para avisar o
 Healthchecks.
 
-**Canário (Passo 10.7, ADR-009)**: só o caminho agendado o usa. Com
+**Canário (ADR-009)**: só o caminho agendado o usa. Com
 `data/canario.json` ativo, `main()` pede a `canario.preparar_para_job` o
 contexto do canário -- que já confere os guardrails e faz o rollback
 automático se algum estiver violado -- e `processar_dia` manda a fração
@@ -68,7 +68,7 @@ from messaging.client import (  # noqa: E402
 logger = logging.getLogger(__name__)
 
 # Lembrete enviado a um paciente que NÃO pôde ser predito (dado inválido,
-# falha do modelo). Decisão da autora na revisão do Passo 10: a falta custa
+# falha do modelo). Decisão da autora (2026-09-29): a falta custa
 # R$ 180 e o SMS custa centavos, então na dúvida o paciente é lembrado -- mas
 # como exceção rastreável, com status próprio em `mensagens_disparadas`, e não
 # confundida com o disparo normal por risco.
@@ -85,7 +85,7 @@ class ProvedorMensageriaDesconhecido(Exception):
 
 
 def obter_cliente_mensageria() -> MessagingClient:
-    """`stub` (default) nunca faz rede; `infobip` (Passo 7) envia SMS de
+    """`stub` (default) nunca faz rede; `infobip` envia SMS de
     verdade via `InfobipClient`, lendo `INFOBIP_BASE_URL`/`INFOBIP_CHAVE_API`
     do ambiente."""
     provedor = (os.environ.get("MESSAGING_PROVIDER") or "stub").strip().lower()
@@ -107,7 +107,7 @@ def _payload_de_agendamento(agendamento: dict[str, Any]) -> dict[str, Any]:
     Só monta; a coerção de tipo e as regras são do contrato de features
     (`_processar_fila` o aplica logo em seguida)."""
     paciente = agendamento["pacientes"]
-    # Hora da clínica, não a UTC que o Postgres devolve (revisão do Passo 10):
+    # Hora da clínica, não a UTC que o Postgres devolve:
     # sem isto o modelo via `horario` 3h adiantado e o SMS dizia 21:00 para
     # uma consulta das 18:00.
     data_hora_agendada = para_horario_da_clinica(agendamento["data_hora_agendada"])
@@ -183,8 +183,8 @@ def _processar_fila(
     observado: dict[str, Any],
     contexto_canario: canario.ContextoCanario | None = None,
 ) -> dict[str, Any]:
-    """Corpo do job, separado de `processar_dia` só para a instrumentação do
-    Passo 8.5 (ADR-006) envolver a execução inteira -- inclusive a busca no
+    """Corpo do job, separado de `processar_dia` só para a instrumentação de
+    `eventos_app` (ADR-006) envolver a execução inteira -- inclusive a busca no
     banco e uma falha antes do primeiro agendamento -- sem indentar a lógica
     de negócio dentro de um `with`. `observado` é o dicionário cedido por
     `observabilidade.medir`: o que for escrito em `observado["detalhe"]` vira
@@ -349,7 +349,7 @@ def _registrar_quarentena(
         model_version=model_version,
         detalhe=detalhe,
     )
-    # `id_agendamento` no log de propósito (Passo 8): é uuid interno, não PII,
+    # `id_agendamento` no log de propósito: é uuid interno, não PII,
     # e sem ele o diagnóstico de "por que este paciente não tem predição" não
     # sai do lugar.
     logger.warning(
@@ -430,7 +430,7 @@ def purgar_eventos_antigos() -> int:
 
 
 def purgar_dados_derivados_antigos() -> dict[str, int]:
-    """Retenção de `predicoes`/`mensagens_disparadas` (Passo 8, `docs/LGPD.md`
+    """Retenção de `predicoes`/`mensagens_disparadas` (`docs/LGPD.md`
     §5) -- LGPD Art. 6º, III: dado derivado não fica guardado indefinidamente
     só porque o banco aguenta.
 
@@ -451,11 +451,11 @@ def purgar_dados_derivados_antigos() -> dict[str, int]:
 
 
 # --------------------------------------------------------------------------
-# pré e pós-checagem do caminho agendado (Passo 10.5)
+# pré e pós-checagem do caminho agendado
 # --------------------------------------------------------------------------
 def pre_checagem() -> str:
     """Antes de qualquer SMS: o `model.pkl` e o `decision.threshold` são os do
-    campeão (`champion_metrics.json`, Passo 10.4) e o banco responde com o
+    campeão (`champion_metrics.json`, ver `src/campeao.py`) e o banco responde com o
     schema esperado. Levanta na primeira divergência; devolve a
     `model_version` conferida.
 
@@ -536,7 +536,7 @@ def _publicar_resumo(
 ) -> None:
     """Anotações (`::error::`/`::warning::`) e `$GITHUB_STEP_SUMMARY` quando
     roda no Actions; no terminal, as mesmas linhas servem de leitura. Só
-    contadores: a lista `erros` fica de fora, como no log (Passo 8)."""
+    contadores: a lista `erros` fica de fora, como no log (LGPD)."""
     for falha in falhas:
         print(f"::error::{falha}")
     for aviso in avisos:
@@ -594,10 +594,10 @@ def _linhas_do_canario(resultado: dict[str, Any], canario_version: str | None) -
 
 def main(argv: list[str] | None = None) -> int:
     argparse.ArgumentParser(description="Job de inferência diária D-2").parse_args(argv)
-    # Antes de tudo (Passo 8): o job é o único processo que toca telefone de
+    # Antes de tudo (blindagem LGPD do log): o job é o único processo que toca telefone de
     # paciente (`enviar_lembrete`), então nenhuma linha dele pode sair antes de
     # o filtro de redação estar instalado -- e o log do Actions deste
-    # repositório é público (Passo 10.5): o filtro é a última barreira.
+    # repositório é público: o filtro é a última barreira.
     configurar_logging()
     model_version = pre_checagem()
     # Depois da pré-checagem do campeão (sem campeão válido não há fila) e

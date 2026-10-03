@@ -1,8 +1,8 @@
 """
-SaúdeJá — "só o campeão vai para produção" (Passos 10.4/10.5).
+SaúdeJá — "só o campeão vai para produção".
 
-`data/champion_metrics.json` é a fonte de verdade do modelo em produção
-(Passo 9.1): o sha do `model.pkl` que o gate promoveu e o threshold em que as
+`data/champion_metrics.json` é a fonte de verdade do modelo em produção:
+o sha do `model.pkl` que o gate promoveu e o threshold em que as
 métricas dele foram medidas. Este módulo confere as duas coisas contra o que
 está de fato no disco, e é chamado nos dois pontos por onde produção muda de
 comportamento:
@@ -13,7 +13,7 @@ comportamento:
   campeão deixam de descrever o que roda -- o job se recusa a rodar;
 - **deploy** (`.github/workflows/deploy.yml`, antes do sync): um `dvc repro`
   manual commitado mudaria o `dvc.lock` e levaria ao Space um modelo que nunca
-  passou pelo gate (achado 7 da revisão do Passo 10).
+  passou pelo gate.
 
 Só biblioteca padrão no topo, de propósito: o job de deploy instala o mínimo
 (DVC) e roda este arquivo como script. O PyYAML, necessário só para ler o

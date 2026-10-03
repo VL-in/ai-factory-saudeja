@@ -1,5 +1,5 @@
 """
-SaúdeJá — testes da observabilidade de aplicação (Passo 8.5, ADR-006).
+SaúdeJá — testes da observabilidade de aplicação (ADR-006).
 
 Três propriedades são as que realmente importam aqui, e cada uma tem teste
 próprio:
@@ -7,8 +7,7 @@ próprio:
 1. o p95 publicado no pitch (SLO §2) bate com um conjunto de latências
    conhecidas -- um percentil errado é pior que nenhum, porque parece medição;
 2. falha ao gravar evento **não derruba** a predição nem o job (observabilidade
-   quebrada degrada, não interrompe -- mesma filosofia do `ErroEnvioInfobip` do
-   Passo 7);
+   quebrada degrada, não interrompe -- mesma filosofia do `ErroEnvioInfobip`);
 3. nenhum dado de paciente entra em `eventos_app`. O grep de `nome de coluna`
    de `test_coerencia_repo.py` não alcança um jsonb livre, então a guarda tem
    que ser aqui, sobre a allowlist de `detalhe` e sobre os call sites de `src/`.

@@ -13,7 +13,7 @@ decision:
 features:
   temporais: true       # true | false -- inclui dia_de_semana e horario
 
-# Gate de promoção do re-treino mensal (Passo 9.1, src/retrain_gate.py).
+# Gate de promoção do re-treino mensal (src/retrain_gate.py).
 # Tolerância de REGRESSÃO relativa ao campeão (data/champion_metrics.json),
 # não alvo absoluto -- os alvos do SLO §3 (recall_1>=0.75, f1_1>=0.65) o
 # modelo vigente já viola, e se fossem critério de promoção nada jamais
@@ -23,14 +23,14 @@ features:
 # positivos, um único paciente move recall_1 em 1/21 ~= 0.048 -- tolerância
 # menor que isso bloquearia/promoveria por ruído de amostragem. roc_auc é
 # contínua e não sofre desse salto. Revisar quando o dataset crescer
-# (Passo 9.0): com >=50 positivos no fold cai para 0.02 -- o gate avisa
+# com desfechos reais: com >=50 positivos no fold cai para 0.02 -- o gate avisa
 # quando esse ponto chegar.
 gate:
   tolerancia:
     recall_1: 0.05
     f1_1: 0.05
     roc_auc: 0.02
-  # Piso ABSOLUTO (Passo 10.4), alem da comparacao relativa: sem ele, cada
+  # Piso ABSOLUTO, alem da comparacao relativa: sem ele, cada
   # promocao pode regredir ate' a tolerancia em relacao ao campeao da vez e,
   # somadas, as regressoes pequenas levam o modelo para perto do acaso (efeito
   # catraca). 0.60 e' decisao da autora; o campeao vigente mede 0.643.
@@ -42,7 +42,7 @@ gate:
   # campeao vigente marca 22 de 76 (29%).
   taxa_disparo_alerta: 0.30
 
-# Contrato de dados (Passo 10.3, src/contrato_features.py e src/validate_data.py).
+# Contrato de dados (src/contrato_features.py e src/validate_data.py).
 # Especialidades que o cadastro oferece -- a lista vem daqui, e nao do mapa do
 # modelo, para o que a clinica atende ser configuracao e nao efeito colateral do
 # ultimo treino. tests/test_contrato_features.py trava que ela esta' contida no
@@ -72,7 +72,7 @@ dados:
   # re-treino, sem bloquear. 0.2 e' o corte usual de "mudanca relevante".
   psi_alerta: 0.2
 
-# Canario do modelo (Passo 10.7, ADR-009, src/canario.py). O desafiante que
+# Canario do modelo (ADR-009, src/canario.py). O desafiante que
 # passa no gate nao substitui o campeao de uma vez: decide `fracao` da fila do
 # job D-2 (sorteio estavel por paciente) e e' comparado ao campeao no MESMO
 # periodo, na fila real. Os guardrails sao de NAO-INFERIORIDADE: o canario pode

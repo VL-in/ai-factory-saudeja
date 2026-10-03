@@ -9,10 +9,10 @@ tinha em conflito:
 
 - ADR-005 (b): "Streamlit e o job chamam o modelo em processo; a API FastAPI
   é para integrações externas" -- daí ClientePredicaoEmProcesso ser o DEFAULT:
-  em produção (Passo 11, Streamlit e API no mesmo container do HF Space) a UI
+  em produção (Streamlit e API no mesmo container do HF Space) a UI
   não depende de a API estar de pé nem paga round-trip HTTP interno.
-- Passo 4 / architecture.md §3.1: a UI como harness de teste visual da API do
-  Passo 3 -- daí ClientePredicaoAPI (PREDICT_BACKEND=api), que exercita
+- architecture.md §3.1: a UI como harness de teste visual da API FastAPI --
+  daí ClientePredicaoAPI (PREDICT_BACKEND=api), que exercita
   POST /predict de verdade, do formulário até a resposta.
 
 Os dois caminhos convergem para o MESMO src/inference.py (a API também o usa),
@@ -67,7 +67,7 @@ class ErroIndisponivel(ErroPredicao):
 
 
 class ErroValidacaoCadastro(Exception):
-    """Dado do formulário de cadastro (Passo 5) recusado antes de chegar ao
+    """Dado do formulário de cadastro recusado antes de chegar ao
     banco -- CPF com dígito verificador inválido, horário fora da grade de
     funcionamento da clínica (agenda_clinica). Mesma filosofia de
     ErroValidacao para a predição: culpa do preenchimento, não do sistema."""
@@ -115,7 +115,7 @@ def listar_especialidades() -> list[str]:
     """Especialidades que o cadastro e o formulário de teste oferecem
     (selectbox em vez de texto livre).
 
-    Vêm de `params.yaml` (`cadastro.especialidades`, Passo 10.3), não mais do
+    Vêm de `params.yaml` (`cadastro.especialidades`), não mais do
     mapa do modelo: o que a clínica atende é configuração, e não efeito
     colateral do último treino. O teste de coerência trava que a lista está
     contida no mapa do modelo em produção -- uma especialidade que o modelo não
@@ -155,7 +155,7 @@ class ClientePredicaoEmProcesso:
 
     def predizer(self, payload: dict) -> ResultadoPredicao:
         self._carregar()
-        # Instrumentado (Passo 8.5) tanto quanto a rota /predict da API: o
+        # Instrumentado (ADR-006) tanto quanto a rota /predict da API: o
         # ADR-005 (b) faz deste o caminho DEFAULT de produção -- medir só o
         # middleware do FastAPI calcularia o p95 do SLO §2 sobre uma rota que,
         # no Space, quase não recebe tráfego, enquanto a predição que o
@@ -187,7 +187,7 @@ class ClientePredicaoEmProcesso:
 
 
 class ClientePredicaoAPI:
-    """Backend REST (PREDICT_BACKEND=api): fala com a API do Passo 3 por HTTP.
+    """Backend REST (PREDICT_BACKEND=api): fala com a API FastAPI por HTTP.
     `cliente_http` é injetável para os testes passarem um TestClient do próprio
     app FastAPI -- serviço real, sem subir servidor nem mockar a resposta
     (mesma filosofia de tests/test_api.py)."""
@@ -292,7 +292,7 @@ class ItemFila:
     model_version: str | None = None
     status: str = "agendado"
     nome_completo: str | None = None
-    # Passo 10.3: a predição foi feita sobre um agendamento com algum campo
+    # Contrato de features: a predição foi feita sobre um agendamento com algum campo
     # que o modelo não viu no treino -- a probabilidade é extrapolação. `None`
     # = predição anterior à checagem, ou ainda sem predição.
     fora_do_dominio: bool | None = None
@@ -331,7 +331,7 @@ def _relatar_falha_persistencia(exc: Exception, acao: str) -> NoReturn:
         # falta, mas não o que fazer. A distinção vale código porque não é um
         # erro de uso nem indisponibilidade: é ambiente fora de sincronia, e a
         # mesma situação volta a cada migration nova, inclusive no deploy do
-        # Passo 11.
+        # HF Space.
         raise ErroPersistencia(
             f"{acao}: o banco está desatualizado em relação às migrations do "
             f"repositório ({exc}). Aplique com `supabase db push` (projeto remoto) "
@@ -342,8 +342,7 @@ def _relatar_falha_persistencia(exc: Exception, acao: str) -> NoReturn:
 
 def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
     """Fila do dia ordenada por risco (probabilidade desc, ver
-    repositories.buscar_fila_do_dia) -- Passo 5, liga a aba antes placeholder
-    de app.py."""
+    repositories.buscar_fila_do_dia)."""
     try:
         linhas = repositories.buscar_fila_do_dia(dia or hoje_na_clinica())
     except Exception as exc:
@@ -379,7 +378,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
 
 # Espelham db.repositories.STATUSES_DESFECHO -- rótulos que a aba "Fila do
 # dia" oferece para a clínica registrar o desfecho real de um agendamento
-# (Passo 9.0). Sem isto o re-treino mensal (Passo 9.1) nunca teria dado real
+# Sem isto o re-treino mensal nunca teria dado real
 # para aprender: agendamentos.status nunca sairia de 'agendado'.
 STATUS_CONCLUIDO = "concluido"
 STATUS_NO_SHOW = "no_show"
@@ -391,7 +390,7 @@ class ErroDesfechoForaDePrazo(Exception):
 
 
 def pode_registrar_desfecho(data_hora_agendada: datetime, hoje: date | None = None) -> bool:
-    """Desfecho só para consulta de hoje ou anterior (revisão do Passo 10):
+    """Desfecho só para consulta de hoje ou anterior:
     no-show marcado numa consulta futura é rótulo que não aconteceu -- entra
     no re-treino e infla o `historico_noshow` dos próximos cadastros. A data é
     a da clínica, não a UTC do banco."""
@@ -404,7 +403,7 @@ def atualizar_status_agendamento(
     id_agendamento: str, status: str, data_hora_agendada: datetime | None = None
 ) -> None:
     """Registra o desfecho real de um agendamento, acionado pela aba "Fila
-    do dia" (Passo 9.0). A regra do prazo vale nos dois lados: aqui, quando a
+    do dia". A regra do prazo vale nos dois lados: aqui, quando a
     tela informa a data, e no próprio UPDATE do repositório, que filtra por
     data e não depende de quem chama."""
     if data_hora_agendada is not None and not pode_registrar_desfecho(data_hora_agendada):
@@ -469,7 +468,7 @@ def _id_paciente_externo_de_cpf(cpf: str) -> str:
 
 
 def normalizar_telefone(telefone: str) -> str:
-    """Mantém só os dígitos e garante o código do país (Passo 7): a Infobip
+    """Mantém só os dígitos e garante o código do país: a Infobip
     espera o telefone em formato internacional sem "+" (ex. "5511987654321").
     O formulário só atende clínicas brasileiras, então um número com DDD
     (10-11 dígitos) sem "55" na frente recebe o prefixo automaticamente --
@@ -556,7 +555,7 @@ def cadastrar_paciente_e_agendamento(
     hora_consulta: time,
     nome_completo: str | None = None,
 ) -> dict:
-    """Cadastro do paciente (visão Paciente, Passo 5 + ajuste de realismo) --
+    """Cadastro do paciente (visão Paciente) --
     upsert do paciente seguido do agendamento.
 
     `nome_completo` passou a ser parâmetro em 2026-09-28 (ADR-007) e **é
@@ -568,7 +567,7 @@ def cadastrar_paciente_e_agendamento(
     (ver `repositories.inserir_paciente`).
 
     **CPF segue não sendo gravado**: vira só o hash que identifica o paciente
-    (`_id_paciente_externo_de_cpf`). `telefone` (Passo 7) é a primeira exceção
+    (`_id_paciente_externo_de_cpf`). `telefone` é a primeira exceção
     deliberada à minimização de PII -- é gravado (normalizado), porque sem
     contato o job D-2 não tem para onde mandar o lembrete real via Infobip.
 
@@ -626,7 +625,7 @@ def cadastrar_paciente_e_agendamento(
 
 
 def disparar_job_diario(dia: date | None = None) -> dict:
-    """Aciona o job D-2 (`src/jobs/inferencia_diaria.py`, Passo 6) a partir da
+    """Aciona o job D-2 (`src/jobs/inferencia_diaria.py`) a partir da
     aba "Dev: disparo manual" -- a mesma função que o cron real chamaria,
     disparada manualmente para acompanhar agendamentos encontrados/predições
     gravadas/mensagens disparadas sem precisar de CLI/cron separados."""
@@ -654,9 +653,9 @@ LIMITE_EVENTOS_OBSERVABILIDADE = 5000
 
 
 def resumo_observabilidade(janela_horas: int = 24) -> dict:
-    """Números do SLO §2/§4/§5 lidos de `eventos_app`/`predicoes` (Passo 8.5,
-    ADR-006) -- é daqui que sai a aba "Observabilidade" e, no Passo 12, os
-    valores da coluna "medido" do SLA/SLO.
+    """Números do SLO §2/§4/§5 lidos de `eventos_app`/`predicoes` (ADR-006)
+    -- é daqui que sai a aba "Observabilidade" e, na validação final para o
+    pitch, os valores da coluna "medido" do SLA/SLO.
 
     `truncado` não é detalhe de implementação: o p95 é calculado em Python
     sobre as linhas lidas (o PostgREST não expõe `percentile_cont`), então uma

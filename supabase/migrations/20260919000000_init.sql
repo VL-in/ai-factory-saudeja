@@ -1,4 +1,4 @@
--- SaudeJa - Passo 5: schema inicial (pacientes, agendamentos, predicoes, mensagens_disparadas)
+-- SaudeJa - schema inicial (pacientes, agendamentos, predicoes, mensagens_disparadas)
 --
 -- Minimizacao de PII por design (BRIEFING.md / architecture.md 4.1): `pacientes`
 -- guarda so `id_paciente_externo` (referencia ao sistema core da clinica) e
@@ -44,7 +44,7 @@ create table predicoes (
     classe_prevista smallint not null check (classe_prevista in (0, 1)),
     threshold_usado numeric not null check (threshold_usado >= 0 and threshold_usado <= 1),
     explicacao_shap jsonb not null,
-    -- Plug do LLM (Passo 2/13): fica NULL ate ExplicadorLLMTrueFoundry ser ativado.
+    -- Plug do LLM (src/explain.py): fica NULL ate ExplicadorLLMTrueFoundry ser ativado.
     explicacao_texto text,
     model_version text not null,
     criado_em timestamptz not null default now()

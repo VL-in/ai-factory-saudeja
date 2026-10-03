@@ -13,7 +13,7 @@ COPY params.yaml .
 
 # data/model.pkl não é copiado aqui -- montado via volume em dev (mesmo
 # padrão dos containers de treino, ver dvc.yaml) e empacotado direto na
-# imagem combinada de deploy (infra/deploy/, Passo 11), não nesta imagem.
+# imagem combinada de deploy (infra/deploy/, HF Space), não nesta imagem.
 ENV MODEL_PATH=/app/data/model.pkl
 
 EXPOSE 8000

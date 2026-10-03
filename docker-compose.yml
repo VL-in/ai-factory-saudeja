@@ -9,7 +9,7 @@ services:
       context: .
       dockerfile: infra/deploy/dockerfile
     container_name: saudeja-app
-    # SUPABASE_URL/SUPABASE_SECRET_KEY (Passo 5) vêm do .env local -- nunca
+    # SUPABASE_URL/SUPABASE_SECRET_KEY vêm do .env local -- nunca
     # hardcoded aqui. Sem .env na raiz, "Fila do dia"/cadastro de paciente
     # falham com ErroPersistencia (ver src/ui/logic.py), o resto da UI segue
     # funcionando.
@@ -41,8 +41,8 @@ services:
   # dvc.yaml -- porque o compose resolve "./data" relativo a ESTE arquivo,
   # nos dois sistemas operacionais. O mount antigo usava "%cd%", sintaxe do
   # cmd.exe que nao expande no runner Linux do GitHub Actions, o que tornava
-  # "dvc repro" no CI (Passo 9) impossivel. Ver PLANO-IMPLEMENTACAO.md,
-  # Passo 9, decisao 5.
+  # "dvc repro" no CI (re-treino mensal) impossivel: o Docker criava um
+  # diretorio com o nome literal "%cd%" em vez de montar o data/.
   #
   # Sem container_name: "docker compose run" cria um container por execucao,
   # e um nome fixo impediria duas etapas de rodarem em sequencia/paralelo.

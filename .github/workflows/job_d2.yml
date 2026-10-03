@@ -1,7 +1,6 @@
-# Job de inferencia diaria D-2 (Passos 6 e 10.5 do PLANO-IMPLEMENTACAO.md).
+# Job de inferencia diaria D-2.
 #
-# Roda NO RUNNER, nao no Space (decisao 2 da 2a revisao do Passo 10, emenda
-# no ADR-005 a): o job ja' e' em processo (ADR-005 b), entao roda igual fora
+# Roda NO RUNNER, nao no Space (emenda no ADR-005 a): o job ja' e' em processo (ADR-005 b), entao roda igual fora
 # do Space; o Space hiberna, nao tem endpoint de job e so' publica uma porta;
 # e um endpoint publico que dispara SMS pago exigiria autenticacao propria.
 #
@@ -15,9 +14,9 @@ name: Job D-2 (inferencia diaria)
 
 on:
   schedule:
-    # 11:17 UTC = 08:17 em Sao Paulo (decisao 2: job unico de manha -- de
+    # 11:17 UTC = 08:17 em Sao Paulo (job unico de manha -- de
     # madrugada o SMS chegaria as 3h). Minuto "quebrado" de proposito: o GitHub
-    # atrasa e pode descartar eventos agendados no inicio da hora (achado 12).
+    # atrasa e pode descartar eventos agendados no inicio da hora.
     # Workflow agendado so' roda a partir do branch padrao.
     - cron: "17 11 * * *"
   workflow_dispatch:
@@ -49,7 +48,7 @@ jobs:
       INFOBIP_REMETENTE: ${{ vars.INFOBIP_REMETENTE }}
       HEALTHCHECKS_JOB_D2_URL: ${{ secrets.HEALTHCHECKS_JOB_D2_URL }}
       APP_ENV: prod
-      # Rollback manual instantaneo do canario (Passo 10.7): `true` na variavel
+      # Rollback manual instantaneo do canario (ADR-009): `true` na variavel
       # do repositorio faz o job ignorar data/canario/ ja' na proxima execucao,
       # sem PR nem deploy.
       CANARIO_DESLIGADO: ${{ vars.CANARIO_DESLIGADO }}
@@ -84,7 +83,7 @@ jobs:
         run: |
           dvc remote add --local -f azure "$DVC_REMOTE_URL"
           dvc pull data/model.pkl
-          # Canario (Passo 10.7, ADR-009). Falha aqui NAO derruba o job: sem o
+          # Canario (ADR-009). Falha aqui NAO derruba o job: sem o
           # arquivo, a pre-checagem do canario manda a fila 100% para o
           # campeao e o run termina vermelho -- nenhum paciente fica sem
           # lembrete por causa do canario.

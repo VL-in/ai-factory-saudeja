@@ -1,5 +1,5 @@
 """
-SaúdeJá — canário do modelo com rollback automático (Passo 10.7, ADR-009).
+SaúdeJá — canário do modelo com rollback automático (ADR-009).
 
 O gate do re-treino (`src/retrain_gate.py`) mede o desafiante **offline**, no
 fold de teste isolado. Este módulo cobre o que o fold não mede: como o modelo
@@ -10,7 +10,7 @@ aprovado pelo gate vira **canário**: decide uma fração da fila do job D-2
 mesmo período.
 
 **Onde o canário roda -- e onde não roda.** Só no job D-2, no runner do
-GitHub Actions. A inferência que importa é a batch (2ª revisão do Passo 10), e
+GitHub Actions. A inferência que importa é a batch (a UI só lê predições gravadas), e
 dividir a fila dentro do job dispensa roteador, proxy ou segundo Space: o
 `data/model.pkl` continua sendo o campeão em toda parte (deploy, Space, CI,
 guarda do `src/campeao.py`), e o canário vive em `data/canario/`, que o
@@ -134,7 +134,7 @@ class ErroCanario(RuntimeError):
 # --------------------------------------------------------------------------
 def habilitado(params: dict[str, Any] | None = None) -> bool:
     """Se o gate deve abrir canário ao aprovar um desafiante. Sem o bloco
-    `canario` em `params.yaml`, o comportamento é o anterior ao Passo 10.7:
+    `canario` em `params.yaml`, o comportamento é o anterior ao canário:
     promoção direta."""
     bloco = (params if params is not None else carregar_params()).get("canario") or {}
     return bool(bloco.get("habilitado", False))
@@ -205,7 +205,7 @@ def carregar_historico() -> dict[str, Any]:
     if not caminho.exists():
         return {
             "_comentario": (
-                "Histórico dos canários (Passo 10.7, ADR-009): cada canário encerrado, "
+                "Histórico dos canários (ADR-009): cada canário encerrado, "
                 "promovido ou revertido. Reescrito só por src/canario.py. O gate de "
                 "re-treino lê os revertidos para nunca reabrir canário com um modelo que "
                 "já falhou em produção."
@@ -283,7 +283,7 @@ def iniciar(
 
     canario = {
         "_comentario": (
-            "Canário em observação (Passo 10.7, ADR-009). Existe só enquanto o canário "
+            "Canário em observação (ADR-009). Existe só enquanto o canário "
             "está ativo: o job D-2 manda canario.fracao da fila para este modelo e o "
             "resto para o campeão. Criado por src/retrain_gate.py; removido por "
             "src/canario.py ao promover ou reverter."
@@ -336,9 +336,9 @@ def promover(evidencia: dict[str, Any] | None = None) -> dict[str, Any]:
     agora = _agora().isoformat(timespec="seconds")
     novo = {
         "_comentario": (
-            "Campeão em produção (Passo 9.1). Reescrito SOMENTE por src/retrain_gate.py "
-            "(promoção direta) ou por src/canario.py (promoção depois do canário, Passo "
-            "10.7). Versionado em git porque o MLflow deste repo é efêmero e não "
+            "Campeão em produção. Reescrito SOMENTE por src/retrain_gate.py "
+            "(promoção direta) ou por src/canario.py (promoção depois do canário, "
+            "ADR-009). Versionado em git porque o MLflow deste repo é efêmero e não "
             "sobrevive entre execuções do workflow mensal."
         ),
         "model_version": registro["model_version"],
@@ -364,7 +364,8 @@ def promover(evidencia: dict[str, Any] | None = None) -> dict[str, Any]:
         "excecao_slo_documentada": (
             "recall_1/f1_1 abaixo dos alvos absolutos do SLO §3 (0.75/0.65). O gate "
             "protege contra regressão relativa; o gap absoluto é limite do dataset "
-            "(ADR-003) e fecha no Passo 12 -- não é critério de promoção (SLO §3.1)."
+            "(ADR-003) e será decidido na validação final para o pitch -- não é "
+            "critério de promoção (SLO §3.1)."
         ),
     }
     _escrever_json(CHAMPION_PATH, novo)
@@ -763,7 +764,7 @@ def preparar_para_job(
     except Exception as exc:
         # Só a classe: a mensagem de uma exceção do supabase-py ou do joblib
         # pode carregar URL ou caminho de infraestrutura, e o log do Actions é
-        # público (Passo 10.5).
+        # público.
         prep.falhas.append(
             f"canário {versao} ignorado ({exc.__class__.__name__}) -- fila 100% campeão"
         )
@@ -863,7 +864,7 @@ def _saida_do_workflow(chave: str, valor: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Canário do modelo (Passo 10.7, ADR-009)")
+    parser = argparse.ArgumentParser(description="Canário do modelo (ADR-009)")
     sub = parser.add_subparsers(dest="comando", required=True)
     sub.add_parser("status", help="mostra o canário ativo, se houver")
     p_verificar = sub.add_parser(

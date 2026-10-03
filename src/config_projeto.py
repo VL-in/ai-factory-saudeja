@@ -58,7 +58,7 @@ def para_horario_da_clinica(valor: str | datetime) -> datetime:
     para uma consulta das 18h em São Paulo). Lido sem conversão, o `horario`
     que o modelo vê fica 3h adiantado (21, que o treino nunca viu), o export
     grava a hora UTC no dataset de treino e o SMS informa o horário errado ao
-    paciente (revisão do Passo 10, 2026-09-29). Valor **sem** fuso é tratado
+    paciente (bug corrigido em 2026-09-29). Valor **sem** fuso é tratado
     como já local: é o formato do dataset histórico e dos testes."""
     if isinstance(valor, str):
         convertido = datetime.fromisoformat(valor)

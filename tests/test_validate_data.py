@@ -1,5 +1,5 @@
 """
-SaúdeJá — gate de dados do re-treino (Passo 10.3, stage `validate_data`).
+SaúdeJá — gate de dados do re-treino (stage `validate_data`).
 
 Cada camada bloqueante tem um teste que a dispara de propósito e confere a
 mensagem; o caminho feliz roda sobre um dataset no formato da semente. O

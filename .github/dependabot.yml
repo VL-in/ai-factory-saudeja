@@ -1,8 +1,8 @@
-# Dependabot (Passo 10.5, achado 13): as actions ficam fixadas por SHA, entao
+# Dependabot: as actions ficam fixadas por SHA, entao
 # atualiza-las a mao seria trabalho recorrente; e os requirements/ sao pinados
 # com ==. PR do Dependabot nao recebe os secrets do repositorio -- o CI dele
-# falha no `dvc pull` ate' os mesmos secrets existirem em "Dependabot secrets"
-# (aceito no achado 4).
+# falha no `dvc pull` ate' os mesmos secrets existirem em "Dependabot secrets".
+# Aceito: pular os testes sem modelo esconderia o teste de paridade UI x API.
 version: 2
 updates:
   - package-ecosystem: github-actions

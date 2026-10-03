@@ -1,12 +1,12 @@
 """
-SaúdeJá — smoke do caminho de deploy (Passo 11.1).
+SaúdeJá — smoke do caminho de deploy.
 
 O que vai para o Hugging Face Space passa por três peças que nenhum outro
 teste exercitava: o staging de lista fechada, a imagem que o builda e a espera
-pelo Space depois do sync. Antes do Passo 11.1 a coerência entre elas era
+pelo Space depois do sync. Antes destes testes a coerência entre elas era
 convenção. Aqui ela vira teste, sem Docker e sem rede:
 
-- **staging x Dockerfile** (A3): toda origem de `COPY` do
+- **staging x Dockerfile**: toda origem de `COPY` do
   `infra/deploy/dockerfile` está no staging, e nada proibido (dataset, config
   do DVC, `.env`) entra nele;
 - **ambientes enxutos**: cada workflow instala só uma parte de
@@ -14,7 +14,7 @@ convenção. Aqui ela vira teste, sem Docker e sem rede:
   executa tem de importar sem os pacotes que ele não instala -- um import
   de dependência que o ambiente não tem aparece aqui, e não no build do Space
   ou no meio do job;
-- **espera pelo Space** (A2) e **smoke local**: a lógica de
+- **espera pelo Space** e **smoke local**: a lógica de
   `scripts/smoke_deploy.py` com um HTTP falso, inclusive os caminhos de falha
   (build quebrado, runtime parado no commit anterior, modelo errado servido).
 

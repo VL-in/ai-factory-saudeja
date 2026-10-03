@@ -1,5 +1,5 @@
 """
-SaúdeJá — testes da lógica da interface (Passo 4). Não sobem o runtime do
+SaúdeJá — testes da lógica da interface. Não sobem o runtime do
 Streamlit: src/ui/logic.py existe justamente para ser testável assim.
 
 Filosofia do repositório (sem mock pesado): o backend em processo usa o
@@ -67,7 +67,7 @@ def test_payload_da_ui_satisfaz_o_schema_da_api(payload):
 
 
 def test_listar_especialidades_vem_da_configuracao_do_cadastro():
-    """Passo 10.3: o que a clínica atende é configuração (params.yaml), não
+    """O que a clínica atende é configuração (params.yaml), não
     efeito colateral do último treino."""
     assert logic.listar_especialidades() == sorted(
         inference.PARAMS["cadastro"]["especialidades"]
@@ -93,7 +93,7 @@ def test_em_processo_retorna_probabilidade_e_explicacao(payload):
         resultado.probabilidade >= resultado.threshold_usado
     )
     assert resultado.explicacao  # SLO §4 -- 100% das predições com explicação
-    assert resultado.explicacao_texto is None  # plug do LLM inativo (Passo 13)
+    assert resultado.explicacao_texto is None  # plug do LLM inativo
     assert resultado.model_version
 
 
@@ -208,7 +208,7 @@ def test_backends_produzem_a_mesma_predicao(payload):
     assert via_api.explicacao == em_processo.explicacao
 
 
-# --- fila do dia e cadastro (Passo 5), sem tocar no banco ----------------------
+# --- fila do dia e cadastro, sem tocar no banco ---------------------------------
 
 
 def _item(
@@ -317,7 +317,7 @@ def test_cadastro_repassa_o_nome_ao_repositorio(monkeypatch):
     monkeypatch.setattr(logic.repositories, "inserir_paciente", _inserir_paciente)
     monkeypatch.setattr(logic.repositories, "contar_no_shows_anteriores", lambda _id: 0)
     monkeypatch.setattr(logic.repositories, "inserir_agendamento", lambda **kw: {"id": "a1"})
-    # Data fixa da consulta exige "hoje" fixo: desde a revisão do Passo 10 o
+    # Data fixa da consulta exige "hoje" fixo: o
     # cadastro recusa consulta no passado.
     monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
 
@@ -355,7 +355,7 @@ def test_banco_sem_a_migration_diz_o_que_fazer(monkeypatch):
     o dicionário cru do PostgREST -- que diz o que falta, mas não o que fazer.
 
     Não é erro de uso nem indisponibilidade: é ambiente fora de sincronia, e
-    volta a cada migration nova, inclusive no deploy do Passo 11."""
+    volta a cada migration nova, inclusive no deploy do HF Space."""
 
     def _coluna_inexistente(_dia):
         raise _ErroDeSchema("42703", "column pacientes_1.nome_completo does not exist")
@@ -405,7 +405,7 @@ def test_dias_ate_consulta_deriva_da_data_escolhida():
     assert logic.dias_ate_consulta(date(2026, 9, 19), hoje=date(2026, 9, 19)) == 0
 
 
-# --- registro de desfecho (Passo 9.0), sem tocar no banco -----------------------
+# --- registro de desfecho, sem tocar no banco -----------------------------------
 
 
 def test_atualizar_status_agendamento_delega_ao_repositorio(monkeypatch):
@@ -482,7 +482,7 @@ def test_backend_desconhecido_falha_alto_em_vez_de_cair_num_default(monkeypatch)
         logic.obter_cliente()
 
 
-# --- CPF: identificador automático do cadastro (Passo 5, ajuste de realismo) ---
+# --- CPF: identificador automático do cadastro -----------------------------------
 
 
 @pytest.mark.parametrize(
@@ -518,7 +518,7 @@ def test_id_paciente_externo_de_cpf_e_deterministico_e_nao_e_o_cpf_em_si():
     assert len(hash1) == 64  # sha256 em hexadecimal
 
 
-# --- telefone: contato de envio real do lembrete (Passo 7) -------------------
+# --- telefone: contato de envio real do lembrete ----------------------------
 
 
 @pytest.mark.parametrize(
@@ -721,7 +721,7 @@ def test_registrar_uso_zera_o_relogio_de_inatividade():
     assert renovada.email == sessao.email
 
 
-# --- revisão do Passo 10 (2026-09-29): prazo do agendamento e do desfecho -----
+# --- prazo do agendamento e do desfecho (2026-09-29) ----------------------------
 
 
 def _cadastrar(data_consulta):

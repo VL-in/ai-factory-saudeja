@@ -1,5 +1,5 @@
 """
-SaúdeJá — gate de promoção do re-treino mensal (Passo 9.1).
+SaúdeJá — gate de promoção do re-treino mensal.
 
 O que este módulo decide: se o modelo recém-treinado (*desafiante*) pode
 substituir o que está em produção (*campeão*). A fonte de verdade do campeão
@@ -16,10 +16,10 @@ dentro daquilo que ele mede.
 tolerancia`, justificadas no SLO §3.1). Os alvos absolutos do SLO §3
 (`recall_1` >= 0.75, `f1_1` >= 0.65) **não** são critério de promoção: o
 modelo vigente já os viola (0.429 / 0.419) e, se fossem, nada jamais seria
-promovido. O gap absoluto é exceção documentada, com fechamento previsto
-para o Passo 12.
+promovido. O gap absoluto é exceção documentada, com decisão prevista
+para a validação final do pitch.
 
-**Além da regressão relativa** (Passo 10.4): um **piso absoluto** de
+**Além da regressão relativa**: um **piso absoluto** de
 `roc_auc` (`gate.piso`, contra o efeito catraca de promoções que regridem um
 pouco cada) e a **suíte de sanidade** do desafiante (`src/sanidade_modelo.py`:
 saída em [0, 1], não constante, SHAP aditivo, política do contrato nos casos
@@ -42,7 +42,7 @@ No código 0, o campeão só é reescrito direto no bootstrap (sem campeão para
 o canário enfrentar) ou com `canario.habilitado: false`. O workflow faz
 `dvc push` + PR nos dois casos.
 
-**Canário (Passo 10.7, ADR-009).** Aprovar no gate deixou de ser promover:
+**Canário (ADR-009).** Aprovar no gate deixou de ser promover:
 o fold de teste mede o modelo offline, e o canário mede o mesmo modelo na
 fila real, numa fração dela, contra o campeão no mesmo período
 (`src/canario.py`). Por isso, com campeão registrado, o código 0 grava o
@@ -52,7 +52,7 @@ confirmam. O código 4 existe porque dois desafiantes ao mesmo tempo
 dividiriam a fila em três braços e nenhum teria amostra para decidir.
 
 O código 2 existe porque `RANDOM_STATE`/`TEST_SIZE` são fixos: sem desfecho
-novo registrado pela clínica (Passo 9.0), reexecutar o treino reproduziria a
+novo registrado pela clínica na "Fila do dia", reexecutar o treino reproduziria a
 mesma métrica e geraria um `model.pkl` novo — trocando a `model_version` em
 produção sem nenhuma mudança real. Por decisão da autora (2026-09-21) esse
 caso **falha** o workflow em vez de sair em silêncio: um mês sem desfecho
@@ -162,7 +162,7 @@ def tolerancias(params: dict[str, Any] | None = None) -> dict[str, float]:
 
 
 def pisos(params: dict[str, Any] | None = None) -> dict[str, float]:
-    """Pisos absolutos (`gate.piso`, Passo 10.4). Diferente da tolerância, a
+    """Pisos absolutos (`gate.piso`). Diferente da tolerância, a
     ausência aqui não é erro: o piso é uma proteção a mais sobre a comparação
     relativa, não o critério principal."""
     config = (params or PARAMS).get("gate", {}).get("piso", {}) or {}
@@ -382,16 +382,16 @@ def montar_champion(
     model_path: str | None = None,
 ) -> dict[str, Any]:
     """O conteúdo de `champion_metrics.json`. `metricas` guarda tudo que a
-    run logou (accuracy/pr_auc/classe 0 servem ao pitch do Passo 12), mas só
+    run logou (accuracy/pr_auc/classe 0 servem ao pitch), mas só
     `METRICAS_DO_GATE` é critério. `decision_threshold` entra porque
     `recall_1`/`f1_1` são medidos a um threshold específico: comparar
     métricas de thresholds diferentes seria comparar outra coisa."""
     caminho_modelo = model_path or MODEL_PATH
     return {
         "_comentario": (
-            "Campeão em produção (Passo 9.1). Reescrito SOMENTE por "
+            "Campeão em produção. Reescrito SOMENTE por "
             "src/retrain_gate.py (promoção direta) ou por src/canario.py (promoção "
-            "depois do canário, Passo 10.7). Versionado em git porque o MLflow deste "
+            "depois do canário, ADR-009). Versionado em git porque o MLflow deste "
             "repo é efêmero e não sobrevive entre execuções do workflow mensal."
         ),
         "model_version": calcular_model_version(caminho_modelo),
@@ -405,7 +405,8 @@ def montar_champion(
         "excecao_slo_documentada": (
             "recall_1/f1_1 abaixo dos alvos absolutos do SLO §3 (0.75/0.65). O gate "
             "protege contra regressão relativa; o gap absoluto é limite do dataset "
-            "(ADR-003) e fecha no Passo 12 -- não é critério de promoção (SLO §3.1)."
+            "(ADR-003) e será decidido na validação final para o pitch -- não é "
+            "critério de promoção (SLO §3.1)."
         ),
     }
 
@@ -496,7 +497,7 @@ def formatar_resumo(
         linhas += [
             "O desafiante **não** substituiu o campeão: ele entra como canário "
             "(`data/canario/`) e decide só uma fração da fila do job D-2 até os "
-            "guardrails de produção confirmarem a promoção (`canario.yml`, Passo 10.7). "
+            "guardrails de produção confirmarem a promoção (`canario.yml`, ADR-009). "
             "`data/champion_metrics.json` e o `dvc.lock` de `main` seguem sendo os do "
             "campeão.",
             "",
@@ -557,7 +558,7 @@ def _escrever_relatorio(
 # orquestração
 # --------------------------------------------------------------------------
 def ler_relatorio_de_dados(path: str | None = None) -> dict[str, Any] | None:
-    """Relatório do stage `validate_data` (Passo 10.3), se existir. Escrito
+    """Relatório do stage `validate_data`, se existir. Escrito
     inclusive quando o dataset é barrado -- que é quando ele mais importa."""
     caminho = path or RELATORIO_DADOS_PATH
     if not os.path.exists(caminho):
@@ -712,7 +713,7 @@ def main(argv: list[str] | None = None) -> int:
                 motivo=(
                     "`dvc repro` não reexecutou o treino: o dataset está com o mesmo "
                     "hash do ciclo anterior (nenhum desfecho novo registrado pela "
-                    "clínica na aba 'Fila do dia', Passo 9.0). Não há desafiante para "
+                    "clínica na aba 'Fila do dia'). Não há desafiante para "
                     "comparar -- o campeão segue intacto."
                 ),
             )

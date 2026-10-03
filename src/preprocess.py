@@ -42,7 +42,7 @@ def carregar_dados(path):
 
 
 def aplicar_contrato(df):
-    """Contrato de features (Passo 10.3) no caminho de treino: coerção
+    """Contrato de features (`src/contrato_features.py`) no caminho de treino: coerção
     explícita de tipo e regra de negócio de cada linha.
 
     O stage `validate_data` do dvc.yaml já barra o dataset antes daqui, e com

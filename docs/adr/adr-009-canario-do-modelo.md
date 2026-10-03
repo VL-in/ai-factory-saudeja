@@ -1,7 +1,7 @@
 # ADR-009: Canário do modelo com rollback automático no job D-2
 
 ## Status
-Aceito — 2026-10-01. Complementa o gate de promoção do re-treino (Passo 9.1, [`src/retrain_gate.py`](../../src/retrain_gate.py)): aprovar no gate deixa de ser promover. Implementado no Passo 10.7 do [`PLANO-IMPLEMENTACAO.md`](../PLANO-IMPLEMENTACAO.md).
+Aceito — 2026-10-01. Complementa o gate de promoção do re-treino ([`src/retrain_gate.py`](../../src/retrain_gate.py)): aprovar no gate deixa de ser promover.
 
 ## Contexto
 O gate do re-treino mensal mede o desafiante **offline**, no fold de teste isolado (~76 linhas, 21 positivos), e, se não houver regressão além da tolerância, promove direto: o PR reescreve `data/champion_metrics.json` e o `dvc.lock`, e o merge leva o modelo a 100% da fila no dia seguinte. Não existia caminho de volta depois da promoção — o "gate de rollback" do SLA §3 impede promover um modelo pior, mas não desfaz um modelo que passou no gate e se comporta mal em produção.
@@ -13,7 +13,7 @@ A SaúdeJá atende várias clínicas particulares do Brasil (BRIEFING). Com o vo
 Forças em jogo:
 - Orçamento de US$ 100/mês e o princípio do ADR-006 de não acrescentar peça de infraestrutura.
 - O HF Space publica uma porta só e não tem roteador ou divisão de tráfego.
-- A inferência que conta é a batch, no job D-2, que roda no runner do GitHub Actions (emenda do Passo 10 no ADR-005). A UI só lê predições já gravadas.
+- A inferência que conta é a batch, no job D-2, que roda no runner do GitHub Actions (emenda de 2026-09-30 no ADR-005). A UI só lê predições já gravadas.
 - O job roda com `contents: read`: ele não consegue mexer no git sozinho.
 - LGPD: o canário não pode abrir uma porta de saída de dado nova.
 

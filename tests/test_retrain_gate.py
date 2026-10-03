@@ -1,5 +1,5 @@
 """
-Testes do gate de promoção do re-treino mensal (Passo 9.1).
+Testes do gate de promoção do re-treino mensal.
 
 O gate decide se um modelo novo substitui o que está em produção — errar
 para o lado permissivo publica um modelo pior, e errar para o restritivo
@@ -21,7 +21,7 @@ O que cada bloco protege:
 - **sem re-treino efetivo**: mês sem desfecho novo falha (decisão de
   2026-09-21), em vez de reproduzir a mesma métrica e trocar a
   `model_version` em produção à toa.
-- **canário** (Passo 10.7): com campeão registrado, aprovar abre o canário
+- **canário** (ADR-009): com campeão registrado, aprovar abre o canário
   e não toca no campeão nem no `dvc.lock`; canário ativo impede o re-treino
   (código 4); modelo já revertido num canário é bloqueado.
 
@@ -83,7 +83,7 @@ def ambiente(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "TEST_PATH", str(test_path))
     monkeypatch.setattr(gate, "DATASET_DVC_PATH", str(dvc_path))
     monkeypatch.setattr(gate, "RELATORIO_DADOS_PATH", str(tmp_path / "relatorio_dados.json"))
-    # Canário (Passo 10.7) inteiramente dentro de tmp_path -- nada do teste
+    # Canário inteiramente dentro de tmp_path -- nada do teste
     # pode escrever em data/canario/ do repositório.
     lock_path = tmp_path / "dvc.lock"
     lock_path.write_text("schema: '2.0'\nstages: {}\n", encoding="utf-8")
@@ -93,7 +93,7 @@ def ambiente(tmp_path, monkeypatch):
     monkeypatch.setattr(canario, "HISTORICO_PATH", str(tmp_path / "canario_historico.json"))
     monkeypatch.setitem(gate.PARAMS, "canario", {**gate.PARAMS["canario"], "habilitado": False})
     # O model.pkl daqui são bytes quaisquer: a suíte de sanidade e a taxa de
-    # disparo (Passo 10.4) têm testes próprios abaixo, com modelo de verdade.
+    # disparo têm testes próprios abaixo, com modelo de verdade.
     monkeypatch.setattr(gate, "verificar_sanidade", lambda *_: ResultadoSanidade())
     monkeypatch.setattr(gate, "taxa_de_disparo_projetada", lambda *_: 0.29)
 
@@ -162,7 +162,7 @@ def test_promove_e_reescreve_o_campeao_quando_melhora(ambiente):
     champion = json.loads(ambiente.champion_path.read_text(encoding="utf-8"))
     assert champion["metricas"]["recall_1"] == pytest.approx(0.5714)
     assert champion["mlflow_run_id"] == run_id
-    # métricas fora do gate viajam junto (servem ao pitch do Passo 12),
+    # métricas fora do gate viajam junto (servem ao pitch),
     # mesmo sem serem critério de promoção
     assert champion["metricas"]["pr_auc"] == pytest.approx(0.48)
     # o threshold em que as métricas foram medidas fica registrado: comparar
@@ -380,7 +380,7 @@ def test_champion_do_repositorio_e_legivel_pelo_gate():
 
 
 # --------------------------------------------------------------------------
-# Passo 10.4: piso absoluto, suíte de sanidade, taxa de disparo, pipeline
+# Piso absoluto, suíte de sanidade, taxa de disparo, pipeline
 # --------------------------------------------------------------------------
 PISO = {"roc_auc": 0.60}
 TOL = {"recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02}
@@ -491,7 +491,7 @@ def test_dataset_barrado_pelo_validate_data_vira_codigo_3_com_o_motivo(ambiente,
 
 
 # --------------------------------------------------------------------------
-# Passo 10.7: canário
+# Canário (ADR-009)
 # --------------------------------------------------------------------------
 @pytest.fixture
 def com_canario(ambiente, monkeypatch):

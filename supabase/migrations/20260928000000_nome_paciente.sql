@@ -13,7 +13,7 @@
 -- fila mostrava o hash sha256 de 64 caracteres -- inutil para o funcionario,
 -- que precisa chamar a pessoa pelo nome. A partir do momento em que a fila e'
 -- operada por uma pessoa, o nome passa a ser dado NECESSARIO, exatamente como
--- o telefone passou a ser no Passo 7 (20260920020000_telefone_paciente.sql).
+-- o telefone passou a ser (20260920020000_telefone_paciente.sql).
 -- O funcionario e' preposto da clinica, que e' a CONTROLADORA (docs/LGPD.md
 -- Sec1) e ja' detem o prontuario: a base legal nao muda (Art. 11, II, "f").
 --
@@ -29,7 +29,7 @@
 --   - eventos_app           -> allowlist fechada de `detalhe` (ADR-006)
 --   - export de treino      -> COLUNAS_SAIDA de src/export_treino.py
 --   - resposta da API       -> nao esta' em src/api/schemas.py
---   - LLM (Passo 13)        -> src/explain.py sanitiza o `contexto` do prompt
+--   - LLM (opcional)        -> src/explain.py sanitiza o `contexto` do prompt
 --   - SMS via Infobip       -> select do job D-2 nao traz a coluna
 --
 -- NULLABLE de proposito, ao contrario do telefone. A migration do telefone

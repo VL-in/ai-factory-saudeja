@@ -1,7 +1,7 @@
 """
-SaúdeJá — testes do job de inferência diária D-2 (Passo 6 do plano de
-implementação). Mesma filosofia de tests/test_db.py: Supabase CLI local
-(`supabase start`), sem mock pesado, marcado `integracao` (pytest.ini).
+SaúdeJá — testes do job de inferência diária D-2. Mesma filosofia de
+tests/test_db.py: Supabase CLI local (`supabase start`), sem mock pesado,
+marcado `integracao` (pytest.ini).
 
 Usa o data/model.pkl real (já versionado via DVC, sem re-treinar -- mesma
 filosofia de tests/test_inference.py/test_api.py) e um cliente de mensageria
@@ -96,7 +96,7 @@ def _probabilidade_real(payload: dict) -> float:
 
 
 def _telefone_de_teste(id_externo: str) -> str:
-    """Telefone sintético determinístico (Passo 7) -- só precisa satisfazer
+    """Telefone sintético determinístico -- só precisa satisfazer
     o formato que `InfobipClient`/o schema esperam, não corresponder a um
     número real."""
     return "5511" + str(abs(hash(id_externo)) % 10**9).zfill(9)
@@ -161,7 +161,7 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
     por_agendamento = {p["id_agendamento"]: p for p in predicoes}
     # A probabilidade GRAVADA tem de ser a do payload local. Comparar só a
     # ordem entre os dois pacientes (como este teste fazia) deixava passar o
-    # bug de fuso da revisão do Passo 10: lido do banco em UTC, o `horario`
+    # bug de fuso corrigido em 2026-09-29: lido do banco em UTC, o `horario`
     # dos dois deslocava 3h junto, e a ordem se mantinha com a probabilidade
     # errada.
     assert float(por_agendamento[agendamento_alto["id"]]["probabilidade"]) == pytest.approx(
@@ -174,7 +174,7 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
     assert por_agendamento[agendamento_baixo["id"]]["classe_prevista"] == 0
     assert por_agendamento[agendamento_alto["id"]]["explicacao_shap"]
     assert por_agendamento[agendamento_baixo["id"]]["explicacao_shap"]
-    # Passo 10.3: os dois payloads estão no domínio do treino, e a marca é
+    # Contrato de features: os dois payloads estão no domínio do treino, e a marca é
     # gravada explicitamente como `false` -- `null` ficou para "não verificado".
     assert por_agendamento[agendamento_alto["id"]]["fora_do_dominio"] is False
     assert por_agendamento[agendamento_baixo["id"]]["fora_do_dominio"] is False

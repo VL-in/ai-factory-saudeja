@@ -1,5 +1,5 @@
 """
-SaúdeJá — contrato de features (Passo 10.3): o que um dado cru precisa
+SaúdeJá — contrato de features: o que um dado cru precisa
 satisfazer para virar feature do modelo, e o que acontece quando não satisfaz.
 
 Antes deste módulo as proteções estavam espalhadas e incompletas: Pydantic só
@@ -32,7 +32,7 @@ recusados -- nunca viram 0.
 **A mensagem de erro não carrega o valor.** `ViolacaoDoContrato` diz o campo e
 a regra, nunca o dado: ela vai para o resultado do job, para o log e para a
 aba de dev, e um valor cru de `data_nascimento` ou `telefone` ali seria PII
-fora do lugar (Passo 8).
+fora do lugar (LGPD).
 """
 import math
 import numbers

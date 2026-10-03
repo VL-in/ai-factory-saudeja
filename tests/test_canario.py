@@ -1,5 +1,5 @@
 """
-SaúdeJá — canário do modelo com rollback automático (Passo 10.7, ADR-009).
+SaúdeJá — canário do modelo com rollback automático (ADR-009).
 
 Sem banco: o repositório é trocado por um falso em memória e o modelo é o
 `data/model.pkl` real (como em `tests/test_job_d2_unitario.py`). O que se
@@ -720,7 +720,7 @@ def test_resumo_do_job_mostra_os_bracos(tmp_path, monkeypatch):
 
 def test_staging_do_deploy_nao_leva_o_canario_ao_space(tmp_path):
     """O canário vive só no runner do job: o Space roda o campeão. A lista
-    fechada mora em scripts/montar_staging_space.py desde o Passo 11.1, então
+    fechada mora em scripts/montar_staging_space.py desde 2026-10-02, então
     o teste monta o staging de verdade em vez de ler o YAML."""
     import sys
     from pathlib import Path

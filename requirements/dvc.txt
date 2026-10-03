@@ -1,5 +1,5 @@
-# DVC -- pipeline de treino (dvc.yaml), gate de re-treino (Passo 9.1) e o
-# `dvc pull data/model.pkl` do CI, do deploy e do job D-2 (Passo 10.5).
+# DVC -- pipeline de treino (dvc.yaml), gate de re-treino e o
+# `dvc pull data/model.pkl` do CI, do deploy e do job D-2.
 # Arquivo proprio para esses tres workflows instalarem so' isto, e nao o
 # requirements/dev.txt inteiro (jupyter, matplotlib...), com o pin num lugar so'.
 #

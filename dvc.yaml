@@ -1,5 +1,5 @@
 stages:
-  # Gate de dados (Passo 10.3): barra o dataset ANTES de treinar -- schema,
+  # Gate de dados: barra o dataset ANTES de treinar -- schema,
   # regra de negocio do contrato de features e distribuicao. O `preprocess`
   # depende do selo (dados_validados.json), que e' o que garante a ordem entre
   # os dois stages; o selo so' carrega o que depende do dado, entao mudar uma

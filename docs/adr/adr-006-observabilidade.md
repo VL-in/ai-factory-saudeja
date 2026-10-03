@@ -41,11 +41,11 @@ Adotamos **três camadas gratuitas**, organizadas por um princípio único: **o 
 
 O dead-man's-switch é a peça que resolve o risco 1 acima: ele alerta **pelo silêncio**, não pela falha. Se o workflow for desativado ou simplesmente não rodar, não há nada "caído" para um monitor convencional observar — mas o ping que não chega denuncia.
 
-**A garantia de zero-PII vira controle preventivo, não detectivo.** Em consequência do risco 2, o SLO §6 passa a ser garantido por teste automatizado sobre o código (no mesmo espírito do `tests/test_coerencia_repo.py`, que já bloqueia coluna proibida nas migrations), e não por varredura posterior de log. `scripts/auditoria_lgpd.py` (Passo 8) continua útil em execução local, mas deixa de ser a evidência principal.
+**A garantia de zero-PII vira controle preventivo, não detectivo.** Em consequência do risco 2, o SLO §6 passa a ser garantido por teste automatizado sobre o código (no mesmo espírito do `tests/test_coerencia_repo.py`, que já bloqueia coluna proibida nas migrations), e não por varredura posterior de log. `scripts/auditoria_lgpd.py` continua útil em execução local, mas deixa de ser a evidência principal.
 
-**Alerta reaproveita `src/messaging`** (Passo 7), já construído para o gate de re-treino do Passo 9 — não entra canal de alerta novo.
+**Alerta reaproveita `src/messaging`** (a mensageria da Infobip), já construído, para o gate de re-treino — não entra canal de alerta novo.
 
-> **Emenda (2026-09-21, ao especificar o Passo 9)**: o canal reaproveitado passa a ser o **Healthchecks.io/GitHub Actions**, não `src/messaging`. A intenção original — nenhum canal de alerta novo, nenhum custo — fica intacta; o que mudou é a constatação de que `src/messaging` não serve ao caso: `enviar_lembrete(telefone, mensagem)` foi desenhada para paciente, por SMS pago na conta trial da Infobip, `mensagens_disparadas` é auditoria de envio a paciente (SLA §6) e não existe destinatário de equipe cadastrado. Gate bloqueado falha o workflow (notificação nativa do GitHub), escreve o comparativo no `$GITHUB_STEP_SUMMARY` e deixa de pingar o check de sucesso — o dead-man's-switch vira o alerta.
+> **Emenda (2026-09-21, ao especificar o gate de re-treino)**: o canal reaproveitado passa a ser o **Healthchecks.io/GitHub Actions**, não `src/messaging`. A intenção original — nenhum canal de alerta novo, nenhum custo — fica intacta; o que mudou é a constatação de que `src/messaging` não serve ao caso: `enviar_lembrete(telefone, mensagem)` foi desenhada para paciente, por SMS pago na conta trial da Infobip, `mensagens_disparadas` é auditoria de envio a paciente (SLA §6) e não existe destinatário de equipe cadastrado. Gate bloqueado falha o workflow (notificação nativa do GitHub), escreve o comparativo no `$GITHUB_STEP_SUMMARY` e deixa de pingar o check de sucesso — o dead-man's-switch vira o alerta.
 
 **Custo total: US$0/mês**, preservando a margem inteira para a Infobip.
 
@@ -66,13 +66,13 @@ Cons:
 
 O que esta decisão **impede**: tracing distribuído e correlação automática entre serviços. É um custo aceito conscientemente porque hoje não há "entre serviços" — a aplicação é um container único, com a UI chamando o modelo em processo ([ADR-005](adr-005-integracoes-implicitas.md) b).
 
-## Emenda (2026-09-21) — o que a implementação do Passo 8.5 mudou na decisão
+## Emenda (2026-09-21) — o que a implementação mudou na decisão
 
 A decisão acima foi mantida; três pontos dela não sobreviveram ao contato com o código e ficam corrigidos aqui.
 
 **1. A tabela sozinha não garante ausência de PII.** O texto dizia que a guarda existente (`tests/test_coerencia_repo.py`, grep por coluna proibida nas migrations) já cobria `eventos_app` e não precisaria ser estendida. Não cobre: aquela guarda lê *nome de coluna*, e `detalhe` é `jsonb` — qualquer chave cabe lá dentro sem que nenhum grep de schema perceba. O caso concreto que fecharia o buraco tarde demais é o `str(exc)` de uma falha da Infobip, que ecoa o payload enviado com o telefone do paciente. A garantia passou a ser uma **allowlist fechada** em `src/observabilidade.py` (contadores, rota, status HTTP e *nome de classe* de exceção; nunca mensagem de erro), aplicada antes de o evento entrar na fila, com teste de runtime e checagem estática sobre os call sites de `src/`.
 
-**2. Medir só o middleware da API mediria o caminho errado.** O SLO §2 fala de latência de predição, mas o [ADR-005](adr-005-integracoes-implicitas.md) (b) já decidiu que UI e job chamam o modelo **em processo** — no Space, `/predict` pode ficar com tráfego perto de zero, e ainda está em aberto (Passo 11) se ela terá endereço público. Um p95 calculado sobre essa rota seria um número honesto sobre algo que ninguém usa. A instrumentação cobre os três caminhos (`api`, `processo`, `job`), separados pela coluna `origem`.
+**2. Medir só o middleware da API mediria o caminho errado.** O SLO §2 fala de latência de predição, mas o [ADR-005](adr-005-integracoes-implicitas.md) (b) já decidiu que UI e job chamam o modelo **em processo** — no Space, `/predict` pode ficar com tráfego perto de zero, e ainda está em aberto (porta única do Space) se ela terá endereço público. Um p95 calculado sobre essa rota seria um número honesto sobre algo que ninguém usa. A instrumentação cobre os três caminhos (`api`, `processo`, `job`), separados pela coluna `origem`.
 
 **3. `/health` não é instrumentada.** A sonda externa bate nela de minutos em minutos por desenho; registrar cada batida encheria a tabela de linhas que nada dizem sobre latência e consumiria o free tier que este ADR se comprometeu a não gastar. Disponibilidade continua sendo medida de fora, que é o princípio do documento.
 

@@ -1,5 +1,5 @@
 """
-SaúdeJá — testes de src/messaging/client.py (Passo 7).
+SaúdeJá — testes de src/messaging/client.py.
 
 Filosofia igual à do resto do repositório (tests/conftest.py): sem mock
 pesado do zero -- `httpx.MockTransport` é a própria biblioteca simulando a
@@ -100,15 +100,15 @@ def test_infobip_client_levanta_erro_proprio_em_falha_http():
 
 
 def test_mensagem_de_erro_nao_carrega_o_corpo_da_resposta():
-    """Blindagem LGPD do Passo 8. A Infobip ecoa o payload enviado no corpo de
-    erro -- com o `to`, que é o telefone do paciente. Até o Passo 7 essa string
+    """Blindagem LGPD do log. A Infobip ecoa o payload enviado no corpo de
+    erro -- com o `to`, que é o telefone do paciente. Antes da blindagem essa string
     ia inteira para a mensagem da exceção, de onde seguia para
     `resultado["erros"]` do job, para o `st.json` da aba de dev e para qualquer
     log futuro.
 
     O que a mensagem carrega agora é o par (status HTTP, `messageId`), que é o
     que de fato identifica a causa: foi assim que se diagnosticou
-    `EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL` na validação real do Passo 7."""
+    `EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL` na validação contra a conta real."""
     telefone = "5511987654321"
     corpo_com_telefone = {
         "requestError": {

@@ -1,5 +1,5 @@
 """
-SaúdeJá — testes da API FastAPI (Passo 3 do plano de implementação).
+SaúdeJá — testes da API FastAPI.
 Usa o data/model.pkl real (já versionado via DVC, sem re-treinar) --
 mesma filosofia de tests/test_inference.py e tests/test_explain.py: serviço
 real e barato em vez de mock pesado.
@@ -54,7 +54,7 @@ def test_predict_valido_retorna_probabilidade_e_explicacao(payload_valido):
     assert 0.0 <= corpo["probabilidade"] <= 1.0
     assert corpo["classe_prevista"] in (0, 1)
     assert corpo["explicacao"]  # SLO §4 -- 100% das predições com explicação
-    assert corpo["explicacao_texto"] is None  # plug do LLM ainda inativo (Passo 13)
+    assert corpo["explicacao_texto"] is None  # plug do LLM ainda inativo
     assert corpo["model_version"]
 
 

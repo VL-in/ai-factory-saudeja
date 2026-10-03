@@ -26,7 +26,8 @@ def test_horario_descarta_minutos_de_proposito():
     not Path("data/consultas-historicas.csv").exists(),
     reason=(
         "dataset versionado por DVC, fora do git -- o CI baixa só o model.pkl "
-        "(Passo 10.5). No re-treino, a mesma regra é checada pelo stage validate_data."
+        "(regra: nunca `dvc pull` sem alvo). No re-treino, a mesma regra é checada "
+        "pelo stage validate_data."
     ),
 )
 def test_dia_de_semana_e_horario_respeitam_grade_de_negocio_no_dataset_real():

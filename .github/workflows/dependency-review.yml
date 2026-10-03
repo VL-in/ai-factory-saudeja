@@ -1,4 +1,4 @@
-# Dependency review (Passo 10.5): template do GitHub, sem adaptacao alem do
+# Dependency review: template do GitHub, sem adaptacao alem do
 # pin por SHA. Gratuito em repositorio publico; bloqueia PR que traz
 # dependencia com vulnerabilidade conhecida -- inclusive as dos workflows.
 name: Dependency review

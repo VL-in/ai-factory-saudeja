@@ -1,4 +1,4 @@
--- SaudeJa - revisao do Passo 10 (2026-09-29): registrar no agendamento se o
+-- SaudeJa - 2026-09-29: registrar no agendamento se o
 -- paciente recebeu lembrete.
 --
 -- Por que no agendamento: o SMS e' uma intervencao que muda o desfecho. O
@@ -11,7 +11,8 @@
 -- tres dias (amanha ate D+2), e um paciente em quarentena que ja recebeu o
 -- lembrete sem predicao nao pode recebe-lo de novo no dia seguinte.
 --
--- ADITIVA (regra do Passo 10.1): `not null default false` nao quebra o codigo
+-- ADITIVA (migration aditiva pode ir no mesmo deploy do codigo; restritiva
+-- so' num deploy posterior): `not null default false` nao quebra o codigo
 -- antigo -- ele nao le a coluna e os inserts dele recebem o default. Pode ir
 -- no mesmo deploy do codigo que a usa, aplicada antes do sync.
 --

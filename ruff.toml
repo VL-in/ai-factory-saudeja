@@ -22,7 +22,7 @@ select = [
     "SIM",  # flake8-simplify
     "C4",   # flake8-comprehensions
     "RUF",  # regras do proprio ruff (ex.: RUF013 Optional implicito)
-    # flake8-bandit (Passo 10.5): a camada "script" dos gates do CI. Cobre o que
+    # flake8-bandit: a camada "script" dos gates do CI. Cobre o que
     # o template Bandit do GitHub cobriria (subprocess, hash fraco, bind em
     # 0.0.0.0, SQL montado por string, segredo hardcoded), sem workflow a mais.
     "S",

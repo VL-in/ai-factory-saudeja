@@ -1,5 +1,5 @@
 """
-SaúdeJá — regras de funcionamento da clínica (Passo 4/5: cadastro do
+SaúdeJá — regras de funcionamento da clínica (o cadastro do
 paciente precisa oferecer só datas/horários que a clínica de fato atende).
 
 Fonte de verdade das regras: scripts/gerar_timestamp_sintetico.py, que gerou
@@ -19,8 +19,8 @@ from datetime import date, time, timedelta
 DIA_SABADO = 5  # date.weekday(): 0=segunda ... 6=domingo
 DIA_DOMINGO = 6
 
-# Antecedência máxima de um agendamento (regra de negócio decidida na revisão
-# do Passo 10, 2026-09-29). Vale para o cadastro inteiro, não só para o
+# Antecedência máxima de um agendamento (regra de negócio decidida em
+# 2026-09-29). Vale para o cadastro inteiro, não só para o
 # modelo -- que, vale registrar, só viu até 90 dias no treino: entre 91 e 180
 # ele extrapola, e o contrato de features marca a linha como fora do domínio.
 PRAZO_MAXIMO_AGENDAMENTO_DIAS = 180
@@ -62,8 +62,8 @@ def horario_valido(dia: date, hora: time) -> bool:
 
 
 def data_de_consulta_valida(dia: date, hoje: date) -> bool:
-    """Nem no passado, nem além de `PRAZO_MAXIMO_AGENDAMENTO_DIAS`. Antes da
-    revisão do Passo 10 nenhum dos dois limites existia: dava para agendar no
+    """Nem no passado, nem além de `PRAZO_MAXIMO_AGENDAMENTO_DIAS`. Antes desta
+    regra nenhum dos dois limites existia: dava para agendar no
     passado, e a antecedência negativa virava 0 sem aviso."""
     return hoje <= dia <= hoje + timedelta(days=PRAZO_MAXIMO_AGENDAMENTO_DIAS)
 

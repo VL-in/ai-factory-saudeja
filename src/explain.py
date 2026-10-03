@@ -1,6 +1,5 @@
 """
-SaúdeJá — explicabilidade das predições via SHAP (Passo 2 do plano de
-implementação). Cumpre SLO §4 (100% das predições com explicação).
+SaúdeJá — explicabilidade das predições via SHAP. Cumpre SLO §4 (100% das predições com explicação).
 
 Cálculo SÍNCRONO, dentro do módulo de inferência: volume baixo (fila diária
 de uma clínica) e TreeExplainer sobre LightGBM é da ordem de milissegundos,
@@ -11,9 +10,9 @@ O valor numérico do SHAP (contribuição por feature, em log-odds/margem) é a
 fonte de verdade auditável e testável por aditividade
 (soma(contribuicoes) + expected_value ≈ margem prevista, ver
 tests/test_explain.py). Este módulo também define um plug INATIVO para
-tradução dessas contribuições em texto via LLM (Passo 13) -- o
+tradução dessas contribuições em texto via LLM (integração opcional, ainda não ligada) -- o
 ExplicadorLLMDesativado nunca chama rede; ele só existe para
-API/job (Passo 3/6) e o schema de `predicoes` (Passo 5) já reservarem o
+API/job e o schema de `predicoes` já reservarem o
 formato (`explicacao_texto: str | None`) sem exigir migração depois.
 
 Este plug é também a **fronteira de PII para fora do sistema** (ADR-007): é o
@@ -61,9 +60,9 @@ def explicar(explainer, X):
     """Retorna a explicação da única linha de X: lista de
     {"feature", "contribuicao"} ordenada por abs(contribuicao) desc.
     JSON-serializável (valores nativos float, não np.floatXX) -- vai
-    trafegar na API e ser persistido em coluna jsonb (Passo 5).
+    trafegar na API e ser persistido em coluna jsonb (`predicoes.explicacao_shap`).
 
-    Exige exatamente 1 linha: o job diário (Passo 6) processa uma fila e
+    Exige exatamente 1 linha: o job diário processa uma fila e
     precisa de uma explicação POR agendamento (SLO §4). Aceitar X com n
     linhas e devolver só a explicação da primeira gravaria a explicação do
     paciente errado nas demais predições, sem erro visível -- use
@@ -120,8 +119,8 @@ def contexto_sem_pii(contexto: dict | None) -> dict:
 
 class ExplicadorLLM(ABC):
     """Interface para tradução das contribuições SHAP em texto. O SHAP
-    continua sendo a fonte de verdade numérica; o LLM, quando ligado
-    (Passo 13), só traduz contribuições já calculadas em uma frase -- nunca
+    continua sendo a fonte de verdade numérica; o LLM, quando ligado,
+    só traduz contribuições já calculadas em uma frase -- nunca
     recalcula nem substitui a explicação.
 
     `explicar_em_texto` é **concreta de propósito** e o que as implementações
@@ -137,11 +136,11 @@ class ExplicadorLLM(ABC):
     @abstractmethod
     def _gerar_texto(self, contribuicoes: list, contexto: dict) -> str | None:
         """Recebe o contexto **já sem PII**. É aqui que a implementação real
-        (Passo 13) monta o prompt e chama o provedor."""
+        (TrueFoundry, quando ligada) monta o prompt e chama o provedor."""
 
 
 class ExplicadorLLMDesativado(ExplicadorLLM):
-    """Plug inativo (default até o Passo 13). Nunca faz chamada de rede."""
+    """Plug inativo (default enquanto o LLM não for ligado). Nunca faz chamada de rede."""
 
     def _gerar_texto(self, contribuicoes: list, contexto: dict) -> str | None:
         return None

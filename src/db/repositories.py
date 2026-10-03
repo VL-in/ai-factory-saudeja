@@ -1,11 +1,11 @@
 """
-SaúdeJá — acesso a dados (Passo 5), sobre o schema de
+SaúdeJá — acesso a dados, sobre o schema de
 `supabase/migrations/20260919000000_init.sql` (pacientes, agendamentos,
 predicoes, mensagens_disparadas).
 
-Cada função encapsula uma consulta/gravação específica que a UI (Passo 4) e o
-job D-2 (Passo 6) precisam -- nada de query builder genérico aqui, só os
-acessos que o produto de fato usa (ver PLANO-IMPLEMENTACAO.md, Passo 5).
+Cada função encapsula uma consulta/gravação específica que a UI e o
+job D-2 precisam -- nada de query builder genérico aqui, só os
+acessos que o produto de fato usa.
 """
 import re
 from datetime import date, datetime, timedelta
@@ -72,7 +72,7 @@ def inserir_paciente(
     `ui/logic.py::_id_paciente_externo_de_cpf`), nunca o CPF em si -- esta
     função só persiste o que recebe. `data_nascimento` substitui `idade`
     (Sec4.1/cadastro realista): a idade em si é calculada sob demanda por
-    `features.calcular_idade`, nunca gravada. `telefone` (Passo 7, migration
+    `features.calcular_idade`, nunca gravada. `telefone` (migration
     `20260920020000_telefone_paciente.sql`) já chega normalizado
     (`ui/logic.py::normalizar_telefone`) -- é a exceção deliberada à
     minimização de PII: sem contato, o job D-2 não tem para onde mandar o
@@ -156,9 +156,9 @@ _COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
 
 def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[Linha]:
     """Agendamentos ainda `agendado`, **de amanhã até D+2**, sem predição
-    gravada e sem lembrete já enviado -- a fila do job diário (Passo 6).
+    gravada e sem lembrete já enviado -- a fila do job diário.
 
-    A janela era exatamente D+2 até a revisão do Passo 10 (2026-09-29), e isso
+    A janela era exatamente D+2 até 2026-09-29, e isso
     tinha dois buracos: (a) se o cron falhasse ou fosse descartado num dia, os
     pacientes daquele dia nunca eram preditos -- no dia seguinte já estavam em
     D+1, fora da janela; (b) um agendamento feito com menos de dois dias de
@@ -202,8 +202,8 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[Linha]:
 
 
 def marcar_lembrete_enviado(id_agendamento: str) -> None:
-    """Grava no próprio agendamento que o paciente recebeu lembrete (revisão
-    do Passo 10). Em `agendamentos`, e não só em `mensagens_disparadas`, por
+    """Grava no próprio agendamento que o paciente recebeu lembrete. Em
+    `agendamentos`, e não só em `mensagens_disparadas`, por
     dois motivos: `mensagens_disparadas` é purgada em 365 dias (LGPD §5), e o
     re-treino precisa do dado enquanto o agendamento existir -- o SMS é uma
     intervenção que muda o desfecho (feedback loop); e é o filtro que impede
@@ -223,7 +223,7 @@ def gravar_predicao(
     explicacao_texto: str | None = None,
     fora_do_dominio: bool | None = None,
 ) -> Linha:
-    """`fora_do_dominio` (Passo 10.3, migration
+    """`fora_do_dominio` (contrato de features, migration
     `20260930000000_fora_do_dominio.sql`): o agendamento tinha algum campo que
     o modelo não viu no treino (distância > 50 km, antecedência > 90 dias...).
     A predição é gravada mesmo assim -- o contrato manda marcar, nunca
@@ -251,7 +251,7 @@ def gravar_predicao(
 
 def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> Linha:
     """Auditoria de disparo (SLA §6) -- uma linha por agendamento processado
-    pelo job D-2 (Passo 6), enviado ou não: `status_envio` distingue
+    pelo job D-2, enviado ou não: `status_envio` distingue
     'enviado' (probabilidade acima do threshold, lembrete pago disparado) de
     'nao_enviado' (abaixo do threshold, nenhum custo de mensageria), então a
     tabela sempre reflete a decisão tomada, não só os envios reais."""
@@ -274,11 +274,11 @@ class DesfechoForaDePrazo(Exception):
 def atualizar_status_agendamento(
     id_agendamento: str, status: str, hoje: date | None = None
 ) -> Linha:
-    """Registra o desfecho real de um agendamento (Passo 9.0), acionado pela
+    """Registra o desfecho real de um agendamento, acionado pela
     aba "Fila do dia". É a fonte do `historico_noshow` automático do cadastro
-    e, via `export_treino.py`, do dataset real do re-treino mensal (Passo 9.1).
+    e, via `export_treino.py`, do dataset real do re-treino mensal.
 
-    **Só para consulta de hoje ou anterior** (revisão do Passo 10): marcar
+    **Só para consulta de hoje ou anterior**: marcar
     no-show numa consulta futura gravaria um rótulo que não aconteceu no
     dataset de treino e ainda inflaria o `historico_noshow` dos próximos
     cadastros do paciente. A UI já desabilita os botões; aqui é a defesa em
@@ -312,7 +312,7 @@ _COLUNAS_AGENDAMENTO_PARA_EXPORT = (
 
 def buscar_agendamentos_com_desfecho() -> list[Linha]:
     """Agendamentos com desfecho real conhecido (`concluido` ou `no_show`,
-    Passo 9.0) -- fonte de dado real de `src/export_treino.py`. Sem
+    registrado na "Fila do dia") -- fonte de dado real de `src/export_treino.py`. Sem
     `telefone` no select, mesma minimização de PII de
     `buscar_agendamentos_d2_pendentes`: o export nunca deve ter como emitir
     essa coluna, mesmo por acidente."""
@@ -330,7 +330,7 @@ def buscar_agendamentos_com_desfecho() -> list[Linha]:
 def contar_consultas_sem_desfecho(antes_de: date) -> int:
     """Consultas de antes de `antes_de` (dia civil da clínica) ainda
     `agendado`: o desfecho não foi registrado. Completude de rótulo do
-    re-treino (Passo 10.3), medida no export porque só o banco a enxerga."""
+    re-treino, medida no export porque só o banco a enxerga."""
     inicio, _ = _intervalo_do_dia(antes_de)
     resposta = (
         obter_client()
@@ -388,7 +388,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[Linha]:
     return sorted(agendamentos, key=_probabilidade, reverse=True)
 
 
-# --- observabilidade de aplicação (Passo 8.5, ADR-006) -------------------------
+# --- observabilidade de aplicação (ADR-006) -----------------------------------
 
 
 def inserir_evento_app(
@@ -486,7 +486,7 @@ def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
 
 def purgar_dados_derivados(anteriores_a: datetime) -> dict[str, int]:
     """Retenção das tabelas **derivadas** (`predicoes`,
-    `mensagens_disparadas`), política do Passo 8 / `docs/LGPD.md` §5.
+    `mensagens_disparadas`), política de `docs/LGPD.md` §5.
 
     Pendurada na mesma purga diária de `eventos_app` pelo mesmo motivo do
     ADR-006: o job já roda uma vez por dia, e agendador novo é peça de infra a
@@ -529,7 +529,7 @@ def purgar_eventos_app(anteriores_a: datetime) -> int:
 
 
 # --------------------------------------------------------------------------
-# canário do modelo (Passo 10.7, ADR-009)
+# canário do modelo (ADR-009)
 # --------------------------------------------------------------------------
 def estatisticas_de_modelo(model_version: str, desde: datetime) -> dict[str, Any]:
     """Contagens de um braço do canário (`src/canario.py`): predições,
@@ -537,7 +537,7 @@ def estatisticas_de_modelo(model_version: str, desde: datetime) -> dict[str, Any
     receberam lembrete -- quantos já têm desfecho e quantos faltaram.
 
     O desfecho vem de `agendamentos.status`, que a clínica registra na "Fila do
-    dia" (Passo 9.0). Só baixo risco entra nesse par: quem recebeu lembrete
+    dia". Só baixo risco entra nesse par: quem recebeu lembrete
     teve o desfecho alterado pela intervenção, e compará-lo entre braços
     mediria o SMS, não o modelo.
 

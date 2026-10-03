@@ -1,5 +1,5 @@
 """
-Smoke da imagem de deploy e do Space publicado (Passo 11.1, itens A1/A2).
+Smoke da imagem de deploy e do Space publicado.
 
 Dois modos, um para cada lado do sync:
 
@@ -14,7 +14,8 @@ Dois modos, um para cada lado do sync:
   do runtime igual ao `sha` do repositório do Space) e bate em
   `/_stcore/health` na URL pública. A `model_version` não é conferida neste
   modo: o Space publica uma porta só (`app_port: 7860`, a UI) e a API em 8000
-  não é pública -- depende da decisão da porta única do Passo 11.
+  não é pública -- depende da decisão, ainda em aberto, sobre expor a API pública
+  (proxy reverso na frente das duas portas, ou API em outro endereço).
 
 Só biblioteca padrão, como `src/campeao.py`: o job de deploy instala o mínimo.
 

@@ -1,6 +1,7 @@
 """
-SaúdeJá — export dos desfechos reais registrados pela clínica (Passo 9.0)
-para o dataset de treino que alimenta o gate de re-treino mensal (Passo 9.1).
+SaúdeJá — export dos desfechos reais registrados pela clínica
+na aba "Fila do dia" para o dataset de treino que alimenta o gate de
+re-treino mensal.
 
 Pré-requisito que este módulo resolve: `data/consultas-historicas.csv` é
 fixo em ~380 linhas e `RANDOM_STATE`/`TEST_SIZE` são fixos em
@@ -11,7 +12,7 @@ registrar o desfecho de cada agendamento na aba "Fila do dia"
 lê esses desfechos e monta `data/consultas-treino.csv` = semente herdada da
 Camila (intocada, para preservar rastreabilidade de origem) + produção real.
 
-**`historico_noshow` é o valor GRAVADO no cadastro** (Passo 10.3), não
+**`historico_noshow` é o valor GRAVADO no cadastro**, não
 recalculado. Até aqui ele era recontado ponto a ponto, com os no-shows
 anteriores à própria consulta -- sem vazar futuro, mas também sem bater com o
 que o modelo viu: o job D-2 prediz com o valor gravado quando o paciente
@@ -32,7 +33,7 @@ bloqueio -- mas, se a clínica registra só as faltas e esquece as presenças, o
 dataset fica enviesado para o no-show, e isso precisa aparecer no resumo.
 
 Nunca inclui `telefone` (PII): `id_paciente` é `pacientes.id_paciente_externo`
-(hash sha256 do CPF, já gerado no cadastro, Passo 5), nunca o CPF em si --
+(hash sha256 do CPF, já gerado no cadastro), nunca o CPF em si --
 guardado automaticamente por
 `tests/test_coerencia_repo.py::test_export_treino_sem_coluna_proibida_de_pii`.
 """
@@ -69,7 +70,7 @@ COLUNAS_SAIDA = [
     "historico_noshow",
     "no_show",
     "data_hora_agendada",
-    # Se o paciente recebeu lembrete antes da consulta (revisão do Passo 10):
+    # Se o paciente recebeu lembrete antes da consulta:
     # o SMS é uma intervenção, e sem este registro o re-treino aprenderia que
     # o perfil de alto risco "comparece" justamente porque foi lembrado
     # (feedback loop). Não é feature -- `preprocess.py` não o seleciona --, é o
@@ -144,10 +145,11 @@ def montar_dataset_treino(
     agendamentos: list[dict[str, Any]] | None = None,
     producao: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Semente (intocada, herdada da Camila) + produção real (Passo 9.0).
+    """Semente (intocada, herdada da Camila) + produção real.
     Enquanto o volume de produção for pequeno, o resultado continua dominado
-    pela semente sintética -- esperado, não um bug (ver PLANO-IMPLEMENTACAO,
-    Passo 9.0). `producao` já montada dispensa `agendamentos`."""
+    pela semente sintética -- esperado, não um bug: o que o gate mede segue
+    sendo ruído até a clínica acumular desfechos reais. `producao` já
+    montada dispensa `agendamentos`."""
     semente = pd.read_csv(caminho_semente or CONSULTAS_HISTORICAS_PATH)
     if producao is None:
         producao = montar_dataset_producao(agendamentos)

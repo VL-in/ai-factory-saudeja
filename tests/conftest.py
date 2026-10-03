@@ -19,7 +19,7 @@ def _descartar_evento(**evento):
 
 @pytest.fixture(autouse=True)
 def observabilidade_sem_destino_real():
-    """Nenhum teste grava em `eventos_app` de verdade (Passo 8.5).
+    """Nenhum teste grava em `eventos_app` de verdade (ADR-006).
 
     Sem isto, qualquer teste que faça uma predição enfileira um evento e o
     worker de `src/observabilidade.py` cai no destino default -- que resolve
@@ -86,7 +86,7 @@ def df_consultas_smote():
             "historico_noshow": [i % 4 for i in range(n)],
             "no_show": [1 if i % 3 == 0 else 0 for i in range(n)],
             # Seg a sex (05-09/01/2026) e só horários da grade da clínica: o
-            # contrato de features (Passo 10.3) recusa domingo e o almoço, e o
+            # contrato de features recusa domingo e o almoço, e o
             # `preprocess` o aplica como defesa em profundidade.
             "data_hora_agendada": [
                 f"2026-01-{5 + (i % 5):02d} {_HORAS_DA_GRADE[i % len(_HORAS_DA_GRADE)]:02d}:00:00"

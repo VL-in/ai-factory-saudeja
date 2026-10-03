@@ -1,5 +1,4 @@
-# Canario do modelo: avaliacao diaria, promocao e rollback (Passo 10.7 do
-# PLANO-IMPLEMENTACAO.md, ADR-009).
+# Canario do modelo: avaliacao diaria, promocao e rollback (ADR-009).
 #
 # O canario nasce no retrain.yml (gate aprovou um desafiante e ja' existe
 # campeao: data/canario/ em vez de champion_metrics.json) e vive no job D-2,
@@ -31,7 +30,8 @@ on:
   schedule:
     # 12:47 UTC = 09:47 em Sao Paulo: depois do job D-2 (08h17, timeout de 20
     # min), para a avaliacao ja' contar a fila do dia. Minuto "quebrado" pelo
-    # mesmo motivo dos outros crons (achado 12 da revisao do Passo 10).
+    # mesmo motivo dos outros crons: o GitHub atrasa e pode descartar eventos
+    # agendados no inicio da hora.
     - cron: "47 12 * * *"
   workflow_dispatch:
     inputs:
@@ -48,7 +48,7 @@ on:
 permissions:
   contents: write        # branch do PR de promocao/reversao
   pull-requests: write   # o PR
-  actions: write         # `gh workflow run ci.yml` no PR (achado 6, mesmo do retrain.yml)
+  actions: write         # `gh workflow run ci.yml` no PR (mesmo motivo do retrain.yml)
 
 concurrency:
   # Duas avaliacoes simultaneas abririam dois PRs para o mesmo canario.
@@ -169,7 +169,7 @@ jobs:
           && steps.acao.outputs.existe == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Fork publico (Passo 11.1, A5): sem isto o `gh` pode resolver o
+          # Fork publico: sem isto o `gh` pode resolver o
           # upstream como repositorio padrao, e o PR automatico cairia la'.
           GH_REPO: ${{ github.repository }}
           ACAO: ${{ steps.acao.outputs.acao }}
@@ -177,7 +177,8 @@ jobs:
           VERSAO: ${{ steps.avaliacao.outputs.model_version }}
         # PR, nunca push em main: a promocao muda o modelo em producao, e o
         # merge humano e' o mesmo ponto de revisao do PR de promocao direta. O
-        # CI e' disparado por workflow_dispatch pelo motivo do achado 6.
+        # CI e' disparado por workflow_dispatch porque PR aberto com o
+        # GITHUB_TOKEN nao dispara outros workflows.
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -195,7 +196,7 @@ jobs:
           git commit -m "$titulo"
           git push origin "$BRANCH"
           {
-            echo "Decisao automatica do \`canario.yml\` (Passo 10.7, ADR-009)."
+            echo "Decisao automatica do \`canario.yml\` (ADR-009)."
             echo
             cat "$RUNNER_TEMP/avaliacao.md"
             echo

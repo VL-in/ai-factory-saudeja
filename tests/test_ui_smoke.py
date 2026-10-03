@@ -1,5 +1,5 @@
 """
-SaúdeJá — smoke test da interface Streamlit (Passo 4), via
+SaúdeJá — smoke test da interface Streamlit, via
 streamlit.testing.v1.AppTest: roda o script de verdade, sem browser.
 
 Escopo deliberado: a casca (app carrega sem exceção, abas certas existem,
@@ -88,7 +88,7 @@ def test_aba_de_dev_some_fora_do_ambiente_de_dev(monkeypatch):
 
 
 def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
-    """Passo 5 liga a persistência de verdade -- sem SUPABASE_URL/
+    """O cadastro usa a persistência de verdade -- sem SUPABASE_URL/
     SUPABASE_SECRET_KEY no ambiente de teste, submeter com um CPF válido e um
     horário dentro da grade da clínica falha com uma mensagem amigável
     (ErroPersistencia), não com traceback."""
@@ -120,7 +120,7 @@ def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypat
 
 
 def test_aba_observabilidade_sem_supabase_avisa_sem_derrubar_a_tela(monkeypatch):
-    """Passo 8.5: o painel é diagnóstico passivo (mesma escolha do status do
+    """O painel de observabilidade é diagnóstico passivo (mesma escolha do status do
     banco na sidebar), então sem Supabase ele avisa -- não derruba a tela nem
     impede a predição manual, que não depende de banco nenhum."""
     at = _rodar(monkeypatch)
@@ -130,7 +130,7 @@ def test_aba_observabilidade_sem_supabase_avisa_sem_derrubar_a_tela(monkeypatch)
 
 
 def test_aba_dev_dispara_job_e_mostra_erro_amigavel_sem_supabase(monkeypatch):
-    """Passo 6 liga o botão ao job de verdade (`disparar_job_diario`). Sem
+    """O botão está ligado ao job de verdade (`disparar_job_diario`). Sem
     SUPABASE_URL/SUPABASE_SECRET_KEY no ambiente de teste da UI (mesma
     convenção das demais abas), clicar não derruba a tela -- mostra
     ErroPersistencia traduzido, não um traceback."""

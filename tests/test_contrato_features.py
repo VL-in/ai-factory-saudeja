@@ -1,5 +1,5 @@
 """
-SaúdeJá — contrato de features (Passo 10.3). Sem banco e sem modelo: é a regra
+SaúdeJá — contrato de features. Sem banco e sem modelo: é a regra
 pura que o job, o export, o `preprocess` e o `validate_data` aplicam.
 
 O que se trava aqui:

@@ -1,10 +1,10 @@
 """
-SaúdeJá — observabilidade de aplicação (Passo 8.5, [ADR-006]).
+SaúdeJá — observabilidade de aplicação ([ADR-006]).
 
 Camada interna da decisão do ADR-006: cada predição servida e cada execução
 do job viram uma linha em `eventos_app` (Supabase, `sa-east-1`), que é a
 fonte de onde saem os números do SLO §2 (latência) e §4 (cobertura de
-explicação) no Passo 12 -- medidos ao longo da operação, não estimados na
+explicação) apresentados no pitch -- medidos ao longo da operação, não estimados na
 véspera do pitch.
 
 Três propriedades que o resto do módulo existe para garantir:
@@ -16,8 +16,8 @@ Três propriedades que o resto do módulo existe para garantir:
    funcionário não é.
 2. **Observabilidade quebrada degrada, não interrompe.** Nenhuma falha de
    gravação (Supabase fora do ar, credencial ausente, `supabase-py` nem
-   instalado) escapa deste módulo -- mesma filosofia do `ErroEnvioInfobip` do
-   Passo 7, onde a falha de um envio não derruba a fila do dia.
+   instalado) escapa deste módulo -- mesma filosofia do `ErroEnvioInfobip`
+   (`src/messaging/client.py`), onde a falha de um envio não derruba a fila do dia.
 3. **Nunca carrega PII.** `detalhe` é jsonb livre no schema, mas aqui só aceita
    chaves de `CHAVES_DETALHE_PERMITIDAS` -- contadores, rota, status HTTP e
    *nome de classe* de exceção. Mensagem de erro crua não entra: a da Infobip,
@@ -59,7 +59,7 @@ CHAVES_DETALHE_PERMITIDAS = frozenset(
         "rota",
         "status_http",
         "excecao",
-        # Nome do campo do contrato de features (Passo 10.3) que mandou um
+        # Nome do campo do contrato de features que mandou um
         # agendamento para a quarentena -- um de um conjunto fechado de nomes
         # de coluna, nunca o valor que estava nele.
         "campo_invalido",

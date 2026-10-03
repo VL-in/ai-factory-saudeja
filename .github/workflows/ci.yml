@@ -1,4 +1,4 @@
-# CI (Passo 10.5 do PLANO-IMPLEMENTACAO.md).
+# CI.
 #
 # Gates por camada, do mais barato ao mais caro -- uma quebra de tipo falha
 # antes de gastar SAS do Azure ou baixar modelo:
@@ -16,11 +16,11 @@
 #   pull_request      -> PR para dev ou main;
 #   workflow_call     -> chamado pelo deploy.yml como primeiro job: o mesmo SHA
 #                        testado e' o deployado, e falha aqui bloqueia o deploy
-#                        por construcao (achado 3 da revisao do Passo 10);
+#                        por construcao;
 #   workflow_dispatch -> o PR de promocao do retrain.yml, aberto com o
 #                        GITHUB_TOKEN, nao dispara outros workflows; o
 #                        retrain.yml o aciona assim, que e' a excecao que a
-#                        documentacao abre para esse token (achado 6).
+#                        documentacao abre para esse token.
 name: CI
 
 on:
@@ -33,7 +33,7 @@ permissions:
   contents: read
 
 env:
-  # CI nao e' trafego de produto: nada vai para `eventos_app` (Passo 8.5).
+  # CI nao e' trafego de produto: nada vai para `eventos_app` (ADR-006).
   OBSERVABILIDADE_ATIVA: "false"
 
 jobs:
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      # SAS so' de leitura (achado 4): o CI roda codigo de PR, e a credencial
+      # SAS so' de leitura: o CI roda codigo de PR, e a credencial
       # de escrita no remote fica so' no retrain.yml, o unico que faz `dvc push`.
       DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
@@ -104,7 +104,7 @@ jobs:
           dvc remote add --local -f azure "$DVC_REMOTE_URL"
           dvc pull data/model.pkl
 
-      - name: Canario ativo -- alcancavel, coerente e sao (Passo 10.7)
+      - name: Canario ativo -- alcancavel, coerente e sao (ADR-009)
         # No PR que abre o canario (e em todo PR enquanto ele estiver ativo):
         # o modelo foi publicado no remote, e' o registrado em canario.json,
         # foi aprovado contra o campeao atual, as copias do lock/dataset que a
@@ -147,7 +147,7 @@ jobs:
           dvc pull data/model.pkl
 
       - name: Staging de lista fechada (o mesmo do deploy)
-        # Build a partir do staging, nao do checkout (Passo 11.1, A1): e' o
+        # Build a partir do staging, nao do checkout: e' o
         # contexto exato que o Space builda. O deploy.yml roda este job no
         # mesmo SHA antes de sincronizar, entao um COPY que dependa de arquivo
         # fora da lista falha aqui -- antes de migrar o banco.
@@ -159,7 +159,7 @@ jobs:
       - name: Smoke -- UI e API de pe, do jeito que o Space as sobe
         # Sem Supabase de proposito: a UI tem de subir e responder saude mesmo
         # sem banco (as abas que dependem dele mostram o erro, nao derrubam).
-        # --user 1000 (A4): o Space roda o container com esse uid, nao como
+        # --user 1000: o Space roda o container com esse uid, nao como
         # root; explicito aqui para o smoke continuar valendo mesmo que o USER
         # do Dockerfile mude. O script confere tambem que a API serve o
         # model.pkl do staging.
@@ -172,7 +172,7 @@ jobs:
           fi
 
       - name: Nenhuma PII no log do container
-        # scripts/auditoria_lgpd.py sai 1 se achar algo (Passo 8). O log do
+        # scripts/auditoria_lgpd.py sai 1 se achar algo (LGPD). O log do
         # Space e' efemero, entao e' aqui que a varredura tem o que varrer.
         if: always()
         run: docker logs saudeja-app 2>&1 | python scripts/auditoria_lgpd.py -
@@ -215,7 +215,7 @@ jobs:
 
       - name: Subir o Supabase local (aplica supabase/migrations/)
         # Os testes leem `supabase status -o json` e falam com o PostgREST via
-        # supabase-py: precisam do stack, nao de um Postgres cru (achado 9).
+        # supabase-py: precisam do stack, nao de um Postgres cru.
         # Studio/edge/realtime ficam de fora so' para subir mais rapido.
         run: supabase start -x studio,edge-runtime,realtime,imgproxy,logflare,vector,supavisor
 

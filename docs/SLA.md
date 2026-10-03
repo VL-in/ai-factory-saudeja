@@ -12,7 +12,7 @@ Está **fora de escopo**: disponibilidade dos provedores externos de WhatsApp/SM
 
 ## 2. Disponibilidade do serviço
 
-- **A fila de amanhã até daqui a dois dias é processada todo dia até as 09h** (predição gravada, e lembrete pago para quem cruzou o threshold), ver [SLO §1](SLO.md#1-processamento-da-fila-d-2-batch). Revisado em 2026-09-30 (Passo 10.5): a solução é de inferência em **batch**, e a API de predição saiu do compromisso de produção — o que a clínica percebe é a fila processada a tempo, não a resposta de uma chamada.
+- **A fila de amanhã até daqui a dois dias é processada todo dia até as 09h** (predição gravada, e lembrete pago para quem cruzou o threshold), ver [SLO §1](SLO.md#1-processamento-da-fila-d-2-batch). Revisado em 2026-09-30: a solução é de inferência em **batch**, e a API de predição saiu do compromisso de produção — o que a clínica percebe é a fila processada a tempo, não a resposta de uma chamada.
 - A interface (fila do dia, cadastro) estará disponível **≥ 99.0% do tempo**, medido mensalmente (ver [SLO §1.1](SLO.md#11-disponibilidade-da-interface)).
 - Em caso de indisponibilidade, a clínica pode continuar a operação manual (fila não priorizada) sem bloqueio do fluxo de agendamento — o serviço de no-show é um **complemento**, não uma dependência crítica do core do sistema (BRIEFING.md: o produto principal já existe e funciona sem o classificador).
 
@@ -32,8 +32,8 @@ Está **fora de escopo**: disponibilidade dos provedores externos de WhatsApp/SM
 
 ## 6. Privacidade e conformidade (LGPD)
 
-- Nenhum dado pessoal identificável (nome, CPF, e-mail, telefone, IP) será registrado em logs de aplicação, em nenhuma circunstância (BRIEFING.md: "Sem PII em logs. Nunca."; ver [SLO §6/§6.1](SLO.md#6-privacidade--lgpd-não-funcional-mas-mensurável)). A lista original desta cláusula dizia apenas "nome, CPF", de antes de `telefone` entrar no schema no Passo 7 — telefone é hoje o único identificador direto que o runtime manipula.
-- Dados de saúde são tratados como **categoria especial** (Art. 5º, II e Art. 11 da LGPD) mesmo durante a fase de protótipo com dados sintéticos (`data/AVISO-DADOS-SINTETICOS.md`), com criptografia em repouso e base legal documentada — base legal, inventário, retenção e riscos residuais em [`LGPD.md`](LGPD.md) (Passo 8).
+- Nenhum dado pessoal identificável (nome, CPF, e-mail, telefone, IP) será registrado em logs de aplicação, em nenhuma circunstância (BRIEFING.md: "Sem PII em logs. Nunca."; ver [SLO §6/§6.1](SLO.md#6-privacidade--lgpd-não-funcional-mas-mensurável)). A lista original desta cláusula dizia apenas "nome, CPF", de antes de `telefone` entrar no schema para o envio do lembrete — telefone é hoje o único identificador direto que o runtime manipula.
+- Dados de saúde são tratados como **categoria especial** (Art. 5º, II e Art. 11 da LGPD) mesmo durante a fase de protótipo com dados sintéticos (`data/AVISO-DADOS-SINTETICOS.md`), com criptografia em repouso e base legal documentada — base legal, inventário, retenção e riscos residuais em [`LGPD.md`](LGPD.md).
 - Na relação com a clínica-cliente, a SaúdeJá atua como **operadora** e a clínica como **controladora** (Art. 5º, VI e VII). Pedidos de titular (Art. 18) chegam pela clínica; ver [`LGPD.md` §1 e §6](LGPD.md).
 - Qualquer incidente de exposição de dados sensíveis é reportado à clínica-cliente e ao DPO em até 72h, alinhado às boas práticas de resposta a incidentes da LGPD.
 
@@ -49,4 +49,4 @@ Estes limites devem ser comunicados explicitamente às partes interessadas — n
 
 Este SLA será apresentado, com números validados e riscos de LGPD explicitados, no pitch ao Conselho de Investidores na Semana 16 (BRIEFING.md, item 4). Deve ser revisado sempre que o [SLO.md](SLO.md) ou a arquitetura (`architecture.md`) mudarem.
 
-Última geração: 2026-09-07; última revisão: 2026-09-30 (itens 2 e 3, compromisso do batch no lugar da API, Passo 10.5); revisão anterior: 2026-09-27 (item 6, escopo da PII em log e papéis controlador/operador, Passo 8).
+Última geração: 2026-09-07; última revisão: 2026-09-30 (itens 2 e 3, compromisso do batch no lugar da API); revisão anterior: 2026-09-27 (item 6, escopo da PII em log e papéis controlador/operador).

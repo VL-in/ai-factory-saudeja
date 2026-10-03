@@ -1,8 +1,8 @@
 """
-SaúdeJá — gate de dados do re-treino mensal (Passo 10.3): stage
+SaúdeJá — gate de dados do re-treino mensal: stage
 `validate_data` do `dvc.yaml`, que roda **antes** do `preprocess`.
 
-O que ele protege: o re-treino mensal (Passo 9.1) roda sozinho, às 3h, sobre
+O que ele protege: o re-treino mensal roda sozinho, às 3h, sobre
 o que a clínica registrou no mês. Sem esta etapa, um dataset quebrado só
 aparecia -- se aparecesse -- como uma métrica estranha no fim do treino, ou
 nem isso: um modelo treinado sobre idade 150 ou sobre uma especialidade que o

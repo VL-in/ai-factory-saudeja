@@ -57,7 +57,7 @@ def _rodar_etapa(image_tag: str, data_dir: Path, script: str, env: dict[str, str
 @pytest.mark.skipif(not _docker_disponivel(), reason="Docker não disponível/rodando")
 def test_pipeline_completo_no_container_gera_selo_modelo_e_run(tmp_path):
     """As quatro etapas do dvc.yaml (validate_data -> preprocess -> train ->
-    validate), em sequência, na imagem de treino. Até o Passo 10 este teste
+    validate), em sequência, na imagem de treino. Até 2026-09-30 este teste
     rodava a imagem sem comando nenhum -- sobrevivia da época em que ela tinha
     um único script -- e falhava sem dizer por quê."""
     dataset_original = REPO_ROOT / "data" / "consultas-historicas.csv"

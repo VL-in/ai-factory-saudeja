@@ -1,6 +1,6 @@
 """
 SaúdeJá — testes de src/agenda_clinica.py: grade de horários que o cadastro
-do paciente (Passo 5, src/ui/app.py) usa para nunca oferecer um agendamento
+do paciente (src/ui/app.py) usa para nunca oferecer um agendamento
 fora da jornada da clínica -- a mesma regra que gerou
 data_hora_agendada no dataset histórico (scripts/gerar_timestamp_sintetico.py).
 """

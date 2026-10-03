@@ -1,4 +1,4 @@
--- SaudeJa - Passo 7: telefone do paciente, para o lembrete real (Infobip)
+-- SaudeJa - telefone do paciente, para o lembrete real (Infobip)
 -- ter para onde mandar mensagem.
 --
 -- Minimizacao de PII por design (architecture.md Sec4.1) segue valendo para

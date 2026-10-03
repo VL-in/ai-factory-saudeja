@@ -1,7 +1,7 @@
 """
-SaúdeJá — comportamento do job D-2 por linha, sem banco (revisão do Passo 10,
-2026-09-29). O repositório é trocado por um falso em memória; o modelo é o
-`data/model.pkl` real, como em `tests/test_inference.py`.
+SaúdeJá — comportamento do job D-2 por linha, sem banco. O repositório é
+trocado por um falso em memória; o modelo é o `data/model.pkl` real, como em
+`tests/test_inference.py`.
 
 O que se trava aqui:
 - **quarentena**: uma linha que não pode ser predita não aborta a fila. Antes,
@@ -89,7 +89,7 @@ def repositorio(monkeypatch):
 def test_linha_invalida_vai_para_quarentena_sem_abortar_a_fila(repositorio):
     # `distancia_km=None` -- antes um TypeError em float(), fora da lista de
     # exceções capturadas, que abortava tudo o que vinha depois; hoje o
-    # contrato de features (Passo 10.3) o recusa antes de chegar ao modelo.
+    # contrato de features o recusa antes de chegar ao modelo.
     falso = repositorio(
         [_agendamento("a01", distancia_km=None), _agendamento("a02")], threshold=1.01
     )
@@ -134,7 +134,7 @@ def test_falha_de_envio_nao_marca_lembrete_para_o_dia_seguinte_tentar_de_novo(re
     assert resultado["mensagens_disparadas"] == 0
 
 
-# --- Passo 10.3: contrato de features no job ----------------------------------
+# --- contrato de features no job ----------------------------------------------
 
 
 def test_agendamento_fora_do_dominio_e_predito_e_marcado(repositorio):
@@ -167,7 +167,7 @@ def test_excecao_fora_do_contrato_so_expoe_a_classe(repositorio):
     assert resultado["erros"][0]["motivo"] == "ValueError"
 
 
-# --- Passo 10.5: pré e pós-checagem do caminho agendado -------------------------
+# --- pré e pós-checagem do caminho agendado -------------------------------------
 
 
 def _resultado(**contadores):

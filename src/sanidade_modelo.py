@@ -1,7 +1,7 @@
 """
-SaúdeJá — suíte de sanidade e casos limítrofes do modelo (Passo 10.4).
+SaúdeJá — suíte de sanidade e casos limítrofes do modelo.
 
-O gate do Passo 9.1 compara três métricas agregadas no fold de teste. Isso
+O gate de re-treino (`src/retrain_gate.py`) compara três métricas agregadas no fold de teste. Isso
 deixa passar modelos que ninguém quer em produção: um que marca a fila inteira
 (com 21 positivos em 76 linhas, marcar todos dá `recall_1` 1,0 e `f1_1` 0,433,
 acima do campeão), um que devolve NaN para uma especialidade, um cujo SHAP não

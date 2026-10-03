@@ -1,6 +1,6 @@
 """
-SaúdeJá — skew treino-serving a partir do dado CRU do banco (revisão do
-Passo 10, 2026-09-29).
+SaúdeJá — skew treino-serving a partir do dado CRU do banco (bug de
+fuso corrigido em 2026-09-29).
 
 `tests/test_inference.py` já trava `construir_features` x `preprocessar`, mas
 começa num dicionário pronto. O bug que esta revisão achou estava antes dele:

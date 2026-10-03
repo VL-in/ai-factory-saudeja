@@ -1,4 +1,4 @@
--- SaudeJa - Passo 10.7 (canario do modelo com rollback automatico, ADR-009).
+-- SaudeJa - canario do modelo com rollback automatico (ADR-009).
 --
 -- Estado OPERACIONAL do rollback: um canario listado aqui deixa de receber
 -- trafego na proxima execucao do job D-2, mesmo que `data/canario.json` ainda
@@ -15,7 +15,8 @@
 -- SEM NENHUMA COLUNA DE PII: `model_version` e' o sha do artefato e `motivo`
 -- e' texto montado pelo codigo a partir de contagens agregadas.
 --
--- ADITIVA (regra do Passo 10.1): tabela nova, que o codigo anterior nao le.
+-- ADITIVA (migration aditiva pode ir no mesmo deploy do codigo; restritiva
+-- so' num deploy posterior): tabela nova, que o codigo anterior nao le.
 -- Pode ir no mesmo deploy do codigo que a usa, aplicada antes do sync.
 
 create table canarios_revertidos (

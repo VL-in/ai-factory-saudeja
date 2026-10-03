@@ -1,8 +1,7 @@
 """
-SaúdeJá — testes de integração de src/db/ (Passo 5) contra o Supabase CLI
+SaúdeJá — testes de integração de src/db/ contra o Supabase CLI
 local (`supabase start`), mesma filosofia já usada para o MLflow em
-tests/test_train.py (serviço real efêmero, não mock pesado -- ver
-PLANO-IMPLEMENTACAO.md, Passo 5).
+tests/test_train.py (serviço real efêmero, não mock pesado).
 
 Pré-requisito para rodar: `supabase start` na raiz do repositório (aplica
 `supabase/migrations/` automaticamente). Marcados `integracao`
@@ -253,7 +252,7 @@ def test_inserir_agendamento_aparece_na_fila_do_dia(db):
 
 @pytest.mark.integracao
 def test_buscar_agendamentos_d2_pendentes_cobre_de_amanha_ate_d2(db):
-    """Janela [amanhã, D+2] (revisão do Passo 10): um dia em que o cron não
+    """Janela [amanhã, D+2]: um dia em que o cron não
     rodou é recuperado na execução seguinte, e agendamento feito com um dia de
     antecedência também é predito. Hoje e D+3 ficam de fora."""
     import db.repositories as repositories
@@ -380,13 +379,13 @@ def test_fila_da_ui_carrega_a_explicacao_gravada_com_a_predicao(db):
     assert item.probabilidade == pytest.approx(0.78)
     assert item.explicacao == contribuicoes
     assert item.model_version == "6430cb3315da"
-    assert item.explicacao_texto is None  # plug do LLM inativo (Passo 13)
+    assert item.explicacao_texto is None  # plug do LLM inativo
     assert item.fora_do_dominio is None  # gravada sem a marca: "não verificado"
 
 
 @pytest.mark.integracao
 def test_marca_fora_do_dominio_faz_round_trip_ate_a_fila(db):
-    """Passo 10.3: o job grava a marca e a fila a mostra (migration
+    """Contrato de features: o job grava a marca e a fila a mostra (migration
     20260930000000_fora_do_dominio.sql)."""
     import db.repositories as repositories
     from ui import logic
@@ -412,7 +411,7 @@ def test_marca_fora_do_dominio_faz_round_trip_ate_a_fila(db):
 
 @pytest.mark.integracao
 def test_conta_consultas_passadas_ainda_sem_desfecho(db):
-    """Completude de rótulo do re-treino (Passo 10.3): só conta consulta de
+    """Completude de rótulo do re-treino: só conta consulta de
     antes de hoje ainda `agendado` -- a de hoje ainda pode receber desfecho, e
     a que já tem desfecho não é lacuna."""
     import db.repositories as repositories
@@ -519,7 +518,7 @@ def test_senha_errada_e_email_inexistente_sao_indistinguiveis_no_supabase_real(d
     assert mensagens == [logic.MENSAGEM_CREDENCIAIS_INVALIDAS] * 2
 
 
-# --- canário do modelo (Passo 10.7, ADR-009) -----------------------------------
+# --- canário do modelo (ADR-009) -----------------------------------------------
 
 
 @pytest.mark.integracao

@@ -1,5 +1,5 @@
 """
-SaúdeJá — testes da blindagem LGPD do log (Passo 8).
+SaúdeJá — testes da blindagem LGPD do log.
 
 O requisito é absoluto ("Sem PII em logs. Nunca.", BRIEFING.md; 0 ocorrências,
 SLO §6) e, segundo o [ADR-006](../docs/adr/adr-006-observabilidade.md), não há
@@ -17,7 +17,7 @@ Três coisas são provadas aqui, e a segunda é a que mais importa:
    linhas escritas por nós protegeria exatamente as que já estão sob controle.
 3. O ciclo fecha: a saída de um handler configurado, varrida por
    `scripts/auditoria_lgpd.py`, dá zero achado -- o mesmo script que dá o
-   veredito no smoke test do Passo 11.
+   veredito no smoke test do deploy.
 """
 import io
 import json
@@ -178,7 +178,7 @@ def test_extra_aninhado_tambem_e_redigido():
 def test_traceback_de_excecao_e_redigido_e_a_classe_sobrevive():
     """O vetor mais provável de PII em log não é uma f-string nossa -- é a
     mensagem de uma exceção de terceiro subindo num traceback. Era exatamente o
-    caso de `ErroEnvioInfobip` antes do Passo 8, que ecoava o corpo da resposta
+    caso de `ErroEnvioInfobip` antes da blindagem, que ecoava o corpo da resposta
     da Infobip com o telefone do destinatário dentro."""
     logger, buffer = _logger_com_captura("teste.excecao")
     try:
@@ -291,7 +291,7 @@ def test_auditoria_acha_pii_em_log_nao_blindado():
 
 def test_auditoria_nao_acha_nada_no_que_o_filtro_ja_produziu():
     """O teste que fecha o ciclo: a saída real do handler configurado é varrida
-    pelo mesmo script que dá o veredito no smoke test do Passo 11."""
+    pelo mesmo script que dá o veredito no smoke test do deploy."""
     logger, buffer = _logger_com_captura("teste.ciclo")
     logger.info(
         "cadastro de paciente cpf=%s telefone=%s email=%s", CPF, TELEFONE, EMAIL

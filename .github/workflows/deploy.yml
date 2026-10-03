@@ -1,4 +1,4 @@
-# Deploy no Hugging Face Space (Passos 10, 10.1 e 10.5 do PLANO-IMPLEMENTACAO.md).
+# Deploy no Hugging Face Space.
 #
 # Ordem, num workflow so':
 #
@@ -7,24 +7,24 @@
 #     buildar e responder
 #
 # - O CI e' o primeiro job (workflow_call): o SHA testado e' o deployado, e
-#   falha no CI deixa o deploy PULADO por construcao (achado 3).
+#   falha no CI deixa o deploy PULADO por construcao.
 # - A guarda do campeao e o staging vem ANTES da migration: sao checagens sem
 #   efeito colateral, e um deploy que nao vai acontecer nao deve deixar o banco
 #   migrado.
-# - A migration vem ANTES do sync (Passo 10.1): o Space rebuilda sozinho ao
+# - A migration vem ANTES do sync: o Space rebuilda sozinho ao
 #   receber os arquivos, entao nao ha janela depois do sync em que migrar seja
 #   seguro. Migration restritiva (drop, set not null, check mais estreito)
 #   nunca vai no mesmo deploy do codigo que a exige -- isso e' disciplina de
 #   quem escreve a migration, nao algo que este YAML consiga impedir.
 # - O sync sobe um diretorio de STAGING com lista fechada, nunca o checkout
-#   (achado 1): a action faz `hf upload` por HTTP, sem git, e nao respeita os
+#   -- a action faz `hf upload` por HTTP, sem git, e nao respeita os
 #   .gitignore aninhados -- subiria .dvc/config.local (URL do remote), o cache
 #   do DVC e o dataset de treino para um Space publico fora do Brasil.
 # - A lista fechada e' de scripts/montar_staging_space.py, e o job `imagem` do
 #   CI ja' buildou e testou (como uid 1000) a imagem a partir do mesmo staging
-#   neste SHA -- nao ha segundo docker build aqui (Passo 11.1, A1).
+#   neste SHA -- nao ha segundo docker build aqui.
 # - O sync nao e' o fim: o ultimo passo espera o Space buildar no commit novo
-#   e responder na URL publica (A2).
+#   e responder na URL publica.
 name: Deploy (HF Space)
 
 on:
@@ -32,8 +32,8 @@ on:
     branches: [main]
     # Mudanca so' de documentacao nao rebuilda o Space (cold start, SLO §2).
     # dvc.lock e data/champion_metrics.json NAO entram aqui: sao justamente o
-    # merge do PR de promocao do re-treino (Passo 9.1).
-    # O canario tambem nao (Passo 10.7): ele vive so' no runner do job D-2 e
+    # merge do PR de promocao do re-treino.
+    # O canario tambem nao (ADR-009): ele vive so' no runner do job D-2 e
     # nao entra no staging, entao abrir ou reverter um canario nao muda nada
     # no Space. A PROMOCAO muda champion_metrics.json e dvc.lock, e deploya.
     paths-ignore:
@@ -41,7 +41,7 @@ on:
       - "data/canario.json"
       - "data/canario/**"
       - "data/canario_historico.json"
-  # Primeiro deploy (Passo 11) e reenvio manual.
+  # Primeiro deploy e reenvio manual.
   workflow_dispatch:
 
 permissions:
@@ -55,7 +55,7 @@ jobs:
   deploy:
     needs: ci
     runs-on: ubuntu-latest
-    # 20 min de ate' o sync + ate' 25 de espera pelo build do Space (A2).
+    # 20 min de ate' o sync + ate' 25 de espera pelo build do Space.
     timeout-minutes: 45
     # Historico de deploys na aba Environments do GitHub (evidencia para o
     # pitch) e o HF_TOKEN guardado so' aqui, nao no repositorio inteiro.
@@ -67,7 +67,7 @@ jobs:
       DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
       # Nivel do JOB, nao so' do `db push`: o `supabase link` tambem precisa do
-      # token, do ref e da senha (achado 8). O ref e' secret pelo mesmo motivo
+      # token, do ref e da senha. O ref e' secret pelo mesmo motivo
       # da URL do remote do DVC: identificador de infraestrutura fora do git.
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -94,16 +94,16 @@ jobs:
 
       - name: So' o campeao vai para producao
         # sha do model.pkl e decision.threshold contra data/champion_metrics.json
-        # (achado 7 e Passo 10.4): um `dvc repro` manual commitado mudaria o
+        # (src/campeao.py): um `dvc repro` manual commitado mudaria o
         # dvc.lock e levaria ao Space um modelo que nunca passou pelo gate.
         run: python src/campeao.py
 
       - name: Staging com lista fechada
         # A lista mora em scripts/montar_staging_space.py, o mesmo script que o
         # job `imagem` do CI usou para buildar e testar a imagem neste SHA
-        # (Passo 11.1, A1). Arquivo novo no repositorio nao vai para producao
+        # Arquivo novo no repositorio nao vai para producao
         # sem alguem acrescenta-lo la' -- mesmo principio da allowlist de
-        # `eventos_app` (Passo 8.5). O script tambem recusa dado de treino,
+        # `eventos_app` (src/observabilidade.py). O script tambem recusa dado de treino,
         # config do DVC ou ambiente no que sobe, e lista o que entrou.
         run: python scripts/montar_staging_space.py
 
@@ -111,7 +111,7 @@ jobs:
         with:
           version: 2.117.0 # fixa: o CLI muda o comportamento do db push entre versoes
 
-      - name: Migrations no Supabase de producao (Passo 10.1)
+      - name: Migrations no Supabase de producao
         # Falha aqui (senha errada, migration quebrada) para o deploy ANTES do
         # sync: o codigo novo nunca chega ao Space contra schema antigo.
         run: |
@@ -130,15 +130,16 @@ jobs:
           space_sdk: docker
           private: "false"
           subdirectory: build/space
-          hf_version: "2.0.0" # fixa: a action instalaria a ultima por padrao (achado 14)
+          hf_version: "2.0.0" # fixa: a action instalaria a ultima por padrao
 
-      - name: Esperar o Space buildar e responder (Passo 11.1, A2)
+      - name: Esperar o Space buildar e responder
         # Sem isto o workflow terminava verde no sync, mesmo com o build do
         # Space quebrado. Espera o runtime chegar no commit que acabou de subir
         # (sha do runtime == sha do repositorio do Space), falha em
         # BUILD_ERROR/RUNTIME_ERROR e bate em /_stcore/health na URL publica.
         # A model_version nao e' conferida aqui: a API (8000) nao e' publica
-        # enquanto a decisao da porta unica do Passo 11 estiver aberta.
+        # enquanto nao houver decisao sobre a porta unica do Space (so' a UI,
+        # em 7860, e' publicada).
         timeout-minutes: 25
         env:
           HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}

@@ -6,7 +6,7 @@ import preprocess
 
 
 def _payload_da_linha(df, i):
-    """Monta o payload cru (dict) que a API/job (Passos 3/6) receberiam,
+    """Monta o payload cru (dict) que a API/job receberiam,
     a partir de uma linha do fixture já no schema de consultas-historicas.csv."""
     linha = df.iloc[i]
     return {
@@ -115,7 +115,7 @@ def test_pipeline_ponta_a_ponta_sem_retreinar(df_consultas):
         assert 0.0 <= probabilidade <= 1.0
 
 
-# --- Passo 10.3: assinatura do modelo conferida na carga ---------------------
+# --- assinatura do modelo conferida na carga --------------------------------
 
 
 def test_modelo_com_features_diferentes_do_codigo_e_recusado_na_carga():

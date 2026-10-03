@@ -1,5 +1,5 @@
 """
-SaúdeJá — suíte de sanidade do modelo (Passo 10.4), rodada pelo CI contra o
+SaúdeJá — suíte de sanidade do modelo, rodada pelo CI contra o
 `data/model.pkl` de `main` e pelo gate de re-treino contra o desafiante.
 
 O primeiro teste é o que o CI exige do modelo em produção. Os demais são

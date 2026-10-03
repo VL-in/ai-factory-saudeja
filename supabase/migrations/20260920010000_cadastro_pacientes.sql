@@ -22,8 +22,8 @@
 
 alter table pacientes add column data_nascimento date;
 
--- Backfill para linhas ja existentes (dados sinteticos de teste ate aqui, Passo
--- 5) a partir da idade antiga -- aproximado (anos completos contados de hoje),
+-- Backfill para linhas ja existentes (dados sinteticos de teste ate
+-- aqui) a partir da idade antiga -- aproximado (anos completos contados de hoje),
 -- mas evita destruir o dado sem alternativa: idade em si ja era so uma
 -- aproximacao tambem. Sem backfill, o "not null" abaixo falharia contra
 -- qualquer linha ja cadastrada.

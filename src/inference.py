@@ -1,6 +1,6 @@
 """
-SaúdeJá — módulo de inferência reusável (Passo 1 do plano de implementação).
-API (Passo 3) e job diário (Passo 6) importam daqui em vez de duplicar a
+SaúdeJá — módulo de inferência reusável.
+API e job diário importam daqui em vez de duplicar a
 lógica de "payload cru -> features -> predição".
 
 Contrato crítico: preprocess.preprocessar() AJUSTA (fit) um mapa de
@@ -45,7 +45,7 @@ class EspecialidadeDesconhecidaError(Exception):
     """Levantada quando o payload traz uma especialidade fora do mapa
     fixado no treino. Em preprocess.py isso vira NaN silencioso (aceitável
     lá, onde o mapa é fit no próprio dataset de treino); em produção o mapa
-    é fixo, então um valor novo precisa virar erro claro (a API, Passo 3,
+    é fixo, então um valor novo precisa virar erro claro (a API
     traduz isso para HTTP 422) em vez de uma predição sem sentido sobre NaN.
     """
 
@@ -54,7 +54,7 @@ def carregar_modelo(path, features_temporais: bool | None = None):
     """Carrega o artefato salvo por train.py: o modelo e o mapa de
     especialidade usados naquele treino (nunca recalculado aqui) -- e confere,
     antes de devolver, que o modelo espera exatamente as features que
-    `construir_features` monta (Passo 10.3)."""
+    `construir_features` monta (contrato de features)."""
     artefato = joblib.load(path)
     model = artefato["model"]
     verificar_assinatura(model, features_temporais)
@@ -136,7 +136,7 @@ def construir_features_lote(
     payloads: list[dict], mapa_especialidade: dict, features_temporais: bool | None = None
 ):
     """`construir_features` para várias linhas de uma vez -- a suíte de
-    sanidade do modelo (Passo 10.4) prediz uma grade inteira de casos."""
+    sanidade do modelo (`src/sanidade_modelo.py`) prediz uma grade inteira de casos."""
     df = pd.DataFrame(payloads)
     df["sexo"] = df["sexo"].map({"F": 0, "M": 1})
     df = aplicar_mapa_especialidade(df, mapa_especialidade)

@@ -6,7 +6,7 @@ Service Level Objectives (SLOs) são as metas técnicas internas, mensuráveis, 
 
 ## 1. Processamento da fila D-2 (batch)
 
-> **Reescrito em 2026-09-30 (Passo 10.5).** As versões anteriores das §1/§2 mediam a API `/predict` (uptime e p95 de latência). A revisão do Passo 10 fixou a premissa de que a solução é de **inferência em batch**: o produto depende do job diário, do registro do desfecho pela atendente e do re-treino mensal — nada em tempo real. A API continua no repositório para cumprir o item 1 do BRIEFING, mas **saiu do caminho crítico e do compromisso de produção** (decisão 1 da 2ª revisão do Passo 10). O que a clínica percebe é se a fila de amanhã foi processada a tempo, e é isso que passa a ser medido.
+> **Reescrito em 2026-09-30.** As versões anteriores das §1/§2 mediam a API `/predict` (uptime e p95 de latência). A revisão do CI/CD (2026-09-29) fixou a premissa de que a solução é de **inferência em batch**: o produto depende do job diário, do registro do desfecho pela atendente e do re-treino mensal — nada em tempo real. A API continua no repositório para cumprir o item 1 do BRIEFING, mas **saiu do caminho crítico e do compromisso de produção**. O que a clínica percebe é se a fila de amanhã foi processada a tempo, e é isso que passa a ser medido.
 
 | Métrica | Alvo | Observação |
 |---|---|---|
@@ -21,16 +21,16 @@ Service Level Objectives (SLOs) são as metas técnicas internas, mensuráveis, 
 
 | Métrica | Alvo | Observação |
 |---|---|---|
-| Uptime mensal da interface (fila do dia, cadastro) | ≥ 99.0% | Sonda externa no Space (Passo 11). Orçamento de US$ 100/mês (BRIEFING.md) exclui redundância; o Space free hiberna, e o cold start é risco conhecido. |
+| Uptime mensal da interface (fila do dia, cadastro) | ≥ 99.0% | Sonda externa no Space (UptimeRobot em `/health`, ligada com o deploy). Orçamento de US$ 100/mês (BRIEFING.md) exclui redundância; o Space free hiberna, e o cold start é risco conhecido. |
 
 ## 2. Latência
 
 | Métrica | Alvo | Observação |
 |---|---|---|
 | Duração do job D-2 | termina antes das 09h (≈ 40 min a partir do disparo) | Folga larga: o job processa uma fila diária de uma clínica em segundos; o que ocupa a janela é o atraso do cron do GitHub. |
-| Carga da interface depois de hibernar (cold start) | < 10s | Medido no Passo 11/12. A fila do dia lê predições **já gravadas** pelo job — nenhuma predição acontece na hora em que a atendente abre a tela. |
+| Carga da interface depois de hibernar (cold start) | < 10s | Medido no Space publicado, antes do pitch. A fila do dia lê predições **já gravadas** pelo job — nenhuma predição acontece na hora em que a atendente abre a tela. |
 
-**Fora do compromisso de produção** (decisão 1 da 2ª revisão do Passo 10): o p95 de `/predict` e da aba "Testar predição". Continuam medidos em `eventos_app` (`origem` = `api`/`processo`) como indicador de desenvolvimento — a medição do Passo 8.5 (~1,4s na primeira predição de um processo, ~10ms nas seguintes) segue valendo como referência.
+**Fora do compromisso de produção** (decisão de 2026-09-29): o p95 de `/predict` e da aba "Testar predição". Continuam medidos em `eventos_app` (`origem` = `api`/`processo`) como indicador de desenvolvimento — a medição de 2026-09-21 (~1,4s na primeira predição de um processo, ~10ms nas seguintes) segue valendo como referência.
 
 ## 3. Qualidade do modelo (re-treino mensal)
 
@@ -45,7 +45,7 @@ Baseline herdado (`docs/logs/CHANGELOG.md`, v0.5): acurácia 78%, F1 da classe p
 
 ### 3.1 Tolerância de regressão do gate de re-treino
 
-Definida em 2026-09-21, ao especificar o Passo 9 do [PLANO-IMPLEMENTACAO.md](PLANO-IMPLEMENTACAO.md). Até então havia um único número (0.02, herdado da linha de ROC-AUC acima) aplicado a todas as métricas — **menor que a granularidade do próprio fold de teste**, o que faria o gate bloquear e promover por ruído de amostragem.
+Definida em 2026-09-21, ao especificar o gate de re-treino mensal (`src/retrain_gate.py`). Até então havia um único número (0.02, herdado da linha de ROC-AUC acima) aplicado a todas as métricas — **menor que a granularidade do próprio fold de teste**, o que faria o gate bloquear e promover por ruído de amostragem.
 
 | Métrica | Tolerância de regressão vs. campeão | Por quê |
 |---|---|---|
@@ -53,11 +53,11 @@ Definida em 2026-09-21, ao especificar o Passo 9 do [PLANO-IMPLEMENTACAO.md](PLA
 | `f1_1` | 0.05 | Mesma natureza — deriva de precision/recall da mesma contagem de positivos. |
 | `roc_auc` | 0.02 | É contínua (ordenação de probabilidades), não sofre do salto discreto acima. Valor mantido do que já vigorava. |
 
-**A regra, não só o número** — a tolerância das métricas de contagem é aproximadamente **1/(positivos no fold de teste)**, arredondada para cima. Os 0.05 acima valem para o dataset atual: 380 linhas, 104 positivos, fold de teste de 76 linhas com **21 positivos** (conferido no `data/interim/test.pkl` ao implementar o Passo 9.1, não estimado). Conforme a ingestão de desfechos reais pela interface (Passo 9.0) fizer o dataset crescer, o número **deve ser recalculado**: com ≥50 positivos no fold, a tolerância cai para 0.02 e o gate passa a enxergar regressões que hoje são invisíveis. Revisar a cada ciclo em que o volume de treino aumentar de forma relevante, e registrar a mudança aqui junto com o tamanho do fold que a justificou.
+**A regra, não só o número** — a tolerância das métricas de contagem é aproximadamente **1/(positivos no fold de teste)**, arredondada para cima. Os 0.05 acima valem para o dataset atual: 380 linhas, 104 positivos, fold de teste de 76 linhas com **21 positivos** (conferido no `data/interim/test.pkl` ao implementar o gate, não estimado). Conforme a ingestão de desfechos reais pela interface (aba "Fila do dia") fizer o dataset crescer, o número **deve ser recalculado**: com ≥50 positivos no fold, a tolerância cai para 0.02 e o gate passa a enxergar regressões que hoje são invisíveis. Revisar a cada ciclo em que o volume de treino aumentar de forma relevante, e registrar a mudança aqui junto com o tamanho do fold que a justificou.
 
-**Atenção — tolerância ≠ alvo**: as tolerâncias acima governam **regressão relativa** ao modelo campeão. Os alvos absolutos da tabela da §3 (`recall_1` ≥ 0.75, `f1_1` ≥ 0.65) não são critério de promoção — o modelo vigente já os viola e, se fossem, nada jamais seria promovido. O gap absoluto é exceção documentada, com fechamento previsto para o Passo 12.
+**Atenção — tolerância ≠ alvo**: as tolerâncias acima governam **regressão relativa** ao modelo campeão. Os alvos absolutos da tabela da §3 (`recall_1` ≥ 0.75, `f1_1` ≥ 0.65) não são critério de promoção — o modelo vigente já os viola e, se fossem, nada jamais seria promovido. O gap absoluto é exceção documentada, com decisão prevista para a validação final antes do pitch (threshold recalibrado ou gap aceito e documentado).
 
-Os números do modelo vigente, **medidos** no fold de teste isolado e registrados em `data/champion_metrics.json` ao implementar o Passo 9.1: `recall_1` **0.429**, `f1_1` **0.419**, `roc_auc` **0.643**, no threshold 0.6. O 0.522 que este documento e o `architecture.md` citavam como "recall atual" vinha do [ADR-003](adr/adr-003-SMOTE-NC.md), medido em outra configuração (antes de `features.temporais=true`, em outro threshold) — o par "0.522 / 0.419" nunca foi de um mesmo modelo. Daqui em diante o número vigente é o do `champion_metrics.json`, que só muda quando o gate promove.
+Os números do modelo vigente, **medidos** no fold de teste isolado e registrados em `data/champion_metrics.json` ao implementar o gate (2026-09-21): `recall_1` **0.429**, `f1_1` **0.419**, `roc_auc` **0.643**, no threshold 0.6. O 0.522 que este documento e o `architecture.md` citavam como "recall atual" vinha do [ADR-003](adr/adr-003-SMOTE-NC.md), medido em outra configuração (antes de `features.temporais=true`, em outro threshold) — o par "0.522 / 0.419" nunca foi de um mesmo modelo. Daqui em diante o número vigente é o do `champion_metrics.json`, que só muda quando o gate promove.
 
 **Quem aplica a regra**: `src/retrain_gate.py` mede os positivos do fold a cada ciclo e, quando passarem de 50, emite aviso no resumo do run pedindo a revisão desta seção — sem bloquear, porque mudar tolerância é decisão humana. As tolerâncias em si vivem em `params.yaml` (`gate.tolerancia`), lidas pelo gate; não há default no código, para que nenhuma promoção aconteça por um número que ninguém revisou.
 
@@ -84,9 +84,9 @@ Os números do modelo vigente, **medidos** no fold de teste isolado e registrado
 | Dados sensíveis (Art. 5º/11 LGPD) em repouso | 100% criptografados | Dados de saúde são categoria especial mesmo sendo sintéticos no protótipo (`AVISO-DADOS-SINTETICOS.md`, `notas-camila.md`). Herdado do provedor gerenciado (Supabase, Azure Blob Storage), não implementado por nós — registrado como risco residual em [LGPD.md §9](LGPD.md). |
 | Retenção de dados derivados | `predicoes`/`mensagens_disparadas` purgadas em ≤ 365 dias | Princípio da necessidade (Art. 6º, III). Purga no job diário; política por tabela em [LGPD.md §5](LGPD.md). |
 
-### 6.1 Como o "zero PII em log" é verificado (revisão de 2026-09-27, Passo 8)
+### 6.1 Como o "zero PII em log" é verificado (revisão de 2026-09-27)
 
-Duas correções ao texto original desta seção, decididas ao implementar o Passo 8:
+Duas correções ao texto original desta seção, decididas ao implementar a blindagem de PII no log (`src/logging_config.py`):
 
 **(a) "Verificável via auditoria/regex nos logs" não é executável em produção.** O [ADR-006](adr/adr-006-observabilidade.md) (risco 2) já havia registrado isto: o log de runtime do Hugging Face Space é efêmero — restart ou rebuild apaga, sem busca e sem retenção. No dia do pitch não haverá log de produção para varrer. A métrica continua sendo 0 ocorrências; o que muda é o **método de verificação**, que passa a ser preventivo:
 
@@ -94,9 +94,9 @@ Duas correções ao texto original desta seção, decididas ao implementar o Pas
 |---|---|
 | Filtro de redação em todo handler do processo (`src/logging_config.py`) | O log de **terceiros** (`uvicorn`, `httpx`, `streamlit`), que é o único que existe em volume em produção e o único que não temos como reescrever |
 | Guarda estática sobre a AST de `src/` (`tests/test_coerencia_repo.py`) | Código nosso passando campo de PII para uma chamada de log — o caso que não deveria nem chegar ao filtro |
-| `scripts/auditoria_lgpd.py` | Varredura de log **local** (smoke test do Passo 11, artifact do Actions). Ferramenta de verificação, não a evidência apresentada no pitch |
+| `scripts/auditoria_lgpd.py` | Varredura de log **local** (smoke test do deploy, artifact do Actions). Ferramenta de verificação, não a evidência apresentada no pitch |
 
-**(b) A lista "(nome, CPF)" estava incompleta.** Ela vem de antes do Passo 7, que acrescentou `telefone` a `pacientes` como exceção deliberada à minimização de PII — e telefone é hoje o **único identificador direto** que o runtime manipula, justamente no ponto mais exposto (a resposta de erro da Infobip ecoava o número enviado). O alvo passa a valer para nome, CPF, e-mail, telefone e IP. O inventário completo do que é tratado está em [LGPD.md §2](LGPD.md).
+**(b) A lista "(nome, CPF)" estava incompleta.** Ela vem de antes da integração com a Infobip, que acrescentou `telefone` a `pacientes` como exceção deliberada à minimização de PII — e telefone é hoje o **único identificador direto** que o runtime manipula, justamente no ponto mais exposto (a resposta de erro da Infobip ecoava o número enviado). O alvo passa a valer para nome, CPF, e-mail, telefone e IP. O inventário completo do que é tratado está em [LGPD.md §2](LGPD.md).
 
 ## 7. Features pendentes que afetam SLOs futuros
 
@@ -105,4 +105,4 @@ Duas correções ao texto original desta seção, decididas ao implementar o Pas
 
 ## Revisão
 
-Este documento deve ser revisado a cada marco do semestre (BRIEFING.md) e sempre que o [ADR-001](adr/adr-001-stack.md) ou a arquitetura mudar. Última geração: 2026-09-07; última revisão: 2026-09-30 (§1/§2 reescritas como SLOs do batch, Passo 10.5); revisão anterior: 2026-09-27 (§6/§6.1, método de verificação do zero-PII e escopo da lista de campos; §3.1 revisado em 2026-09-21 com as tolerâncias de regressão do gate e a correção das métricas do modelo vigente, agora medidas e registradas em `data/champion_metrics.json`).
+Este documento deve ser revisado a cada marco do semestre (BRIEFING.md) e sempre que o [ADR-001](adr/adr-001-stack.md) ou a arquitetura mudar. Última geração: 2026-09-07; última revisão: 2026-09-30 (§1/§2 reescritas como SLOs do batch); revisão anterior: 2026-09-27 (§6/§6.1, método de verificação do zero-PII e escopo da lista de campos; §3.1 revisado em 2026-09-21 com as tolerâncias de regressão do gate e a correção das métricas do modelo vigente, agora medidas e registradas em `data/champion_metrics.json`).

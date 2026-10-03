@@ -5,15 +5,15 @@ Aceito (2026-09-28)
 
 ## Contexto
 
-A minimização de PII por design é decisão fundadora do schema deste projeto ([architecture.md §4.1](../architecture.md), [`docs/LGPD.md` §2](../LGPD.md)): `pacientes` guarda `id_paciente_externo` (hash sha256 do CPF), `data_nascimento`, `sexo` e `telefone`, e **nunca** nome/CPF/e-mail. A migration `20260920010000_cadastro_pacientes.sql` afirma isso em texto, e `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii` falha o build se a palavra aparecer. O Passo 8 acabou de reforçar a mesma regra em duas camadas novas: `nome` é chave proibida no filtro de redação de log e na guarda de AST sobre `src/`.
+A minimização de PII por design é decisão fundadora do schema deste projeto ([architecture.md §4.1](../architecture.md), [`docs/LGPD.md` §2](../LGPD.md)): `pacientes` guarda `id_paciente_externo` (hash sha256 do CPF), `data_nascimento`, `sexo` e `telefone`, e **nunca** nome/CPF/e-mail. A migration `20260920010000_cadastro_pacientes.sql` afirma isso em texto, e `tests/test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii` falha o build se a palavra aparecer. A blindagem de PII no log acabou de reforçar a mesma regra em duas camadas novas: `nome` é chave proibida no filtro de redação de log e na guarda de AST sobre `src/`.
 
-**O que a operação real revelou.** A aba "Fila do dia" existe para o funcionário da clínica atender a fila ordenada por risco — chamar o paciente, confirmar presença, registrar o desfecho (`concluido`/`no_show`/`cancelado`, Passo 9.0). A coluna "Paciente" mostrava o hash sha256, **64 caracteres hexadecimais**. Não é um detalhe de UX: é uma tela que não pode ser operada. Um funcionário não chama `9f86d081884c7d65…` na sala de espera, e o registro de desfecho — que é o que alimenta o re-treino mensal — depende de ele saber de quem é aquela linha.
+**O que a operação real revelou.** A aba "Fila do dia" existe para o funcionário da clínica atender a fila ordenada por risco — chamar o paciente, confirmar presença, registrar o desfecho (`concluido`/`no_show`/`cancelado`). A coluna "Paciente" mostrava o hash sha256, **64 caracteres hexadecimais**. Não é um detalhe de UX: é uma tela que não pode ser operada. Um funcionário não chama `9f86d081884c7d65…` na sala de espera, e o registro de desfecho — que é o que alimenta o re-treino mensal — depende de ele saber de quem é aquela linha.
 
 **Três forças em jogo:**
 
-1. **Necessidade, não conveniência.** A minimização existe para não guardar o que o produto não precisa (LGPD Art. 6º, III). A partir do momento em que a fila é operada por uma pessoa, o nome deixa de ser acessório e passa a ser dado necessário à finalidade — exatamente o argumento que o Passo 7 usou para `telefone`: sem contato de envio, não existe lembrete pago; sem nome, não existe fila operável.
+1. **Necessidade, não conveniência.** A minimização existe para não guardar o que o produto não precisa (LGPD Art. 6º, III). A partir do momento em que a fila é operada por uma pessoa, o nome deixa de ser acessório e passa a ser dado necessário à finalidade — exatamente o argumento usado para gravar `telefone`: sem contato de envio, não existe lembrete pago; sem nome, não existe fila operável.
 2. **O funcionário não é um terceiro.** Ele é preposto da clínica, que é a **controladora** ([`LGPD.md` §1](../LGPD.md)) e já detém o prontuário completo. Assinou termo de confidencialidade. A base legal não muda (Art. 11, II, "f" — tutela da saúde) e nenhum novo destinatário entra em cena.
-3. **A preocupação da autora foi específica e correta**: o nome pode ficar visível para a equipe, mas não pode vazar para log, para um provedor de LLM (Passo 13) ou para qualquer outra aplicação. Isso é o que esta ADR precisa garantir por construção, não por convenção.
+3. **A preocupação da autora foi específica e correta**: o nome pode ficar visível para a equipe, mas não pode vazar para log, para um provedor de LLM (integração opcional) ou para qualquer outra aplicação. Isso é o que esta ADR precisa garantir por construção, não por convenção.
 
 Uma pergunta foi levantada explicitamente e merece resposta registrada: **cifrar a coluna no banco protegeria o nome do LLM?** Não. A chamada ao LLM sai de dentro do mesmo processo que já leu (e decifraria) o nome para desenhar a tela — a chave estaria na mesma memória. Criptografia na aplicação defende contra vazamento do dump ou da chave do Supabase, que é outro risco, legítimo mas distinto. O que protege do LLM é uma fronteira no código.
 
@@ -29,13 +29,13 @@ Uma pergunta foi levantada explicitamente e merece resposta registrada: **cifrar
 
 | Porta de saída | O que a fecha | Teste |
 |---|---|---|
-| Log de aplicação | `nome` é chave proibida no filtro de `src/logging_config.py` (Passo 8) | `test_logging_lgpd.py` |
+| Log de aplicação | `nome` é chave proibida no filtro de `src/logging_config.py` | `test_logging_lgpd.py` |
 | Código que loga | Guarda de AST sobre `src/*.py` | `test_coerencia_repo.py::test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii` |
 | `eventos_app` | Allowlist fechada de `detalhe` ([ADR-006](adr-006-observabilidade.md)) | `test_observabilidade.py` |
 | Dataset de treino (vai para fora do Brasil) | `COLUNAS_SAIDA` de `src/export_treino.py` | `test_coerencia_repo.py::test_export_treino_sem_coluna_proibida_de_pii` |
 | API `/predict` (integrações externas) | Campo inexistente em `src/api/schemas.py` | `test_coerencia_repo.py::test_nome_do_paciente_nao_vaza_pelas_portas_de_saida` |
 | SMS via Infobip (processador externo) | Select do job D-2 não traz a coluna | idem |
-| LLM/TrueFoundry (Passo 13) | `explain.contexto_sem_pii`, aplicada pela classe-base | `test_explain.py` |
+| LLM/TrueFoundry (opcional) | `explain.contexto_sem_pii`, aplicada pela classe-base | `test_explain.py` |
 
 **Armazenamento em texto puro**, protegido pelo mesmo conjunto que `telefone` já usa: RLS habilitado sem policies (só a chave secreta do backend enxerga), TLS em trânsito, criptografia em repouso do provedor gerenciado. Cifrar `nome_completo` enquanto `telefone` — identificador direto **e** dado de contato — fica em texto puro seria incoerente; se a decisão mudar, ela tem de cobrir os dois, e é reversível a uma migration mais um módulo de cripto.
 
@@ -45,14 +45,14 @@ Uma pergunta foi levantada explicitamente e merece resposta registrada: **cifrar
 
 **Positivas**
 
-- A "Fila do dia" passa a ser operável, o que destrava o registro de desfecho do Passo 9.0 na prática — e é dele que sai o dado real do re-treino mensal.
+- A "Fila do dia" passa a ser operável, o que destrava o registro de desfecho na prática — e é dele que sai o dado real do re-treino mensal.
 - As fronteiras de saída deixaram de ser implícitas. O `select("*")` era um vazamento latente independente desta decisão: qualquer coluna de PII futura chegaria à UI sem revisão.
-- A sanitização do contexto do LLM existe **antes** do Passo 13, não depois — a integração nasce com a fronteira pronta em vez de precisar ser auditada quando já estiver funcionando.
+- A sanitização do contexto do LLM existe **antes** de o LLM ser ligado, não depois — a integração nasce com a fronteira pronta em vez de precisar ser auditada quando já estiver funcionando.
 - `chave_de_pii` passa a ser a noção única de "campo de PII" no repositório, compartilhada por log e por LLM. Duas listas divergiriam, e a que divergisse em silêncio seria a que guarda a fronteira externa.
 
 **Negativas, e assumidas**
 
-- **A superfície de PII cresceu.** Um vazamento do banco agora expõe nome + telefone + especialidade + desfecho, o que permite reidentificação direta. Antes exigia quebrar o hash. É o custo real da decisão e vai para o slide de risco do Passo 12.
+- **A superfície de PII cresceu.** Um vazamento do banco agora expõe nome + telefone + especialidade + desfecho, o que permite reidentificação direta. Antes exigia quebrar o hash. É o custo real da decisão e vai para o slide de risco do pitch.
 - **A tela da recepção fica exposta a quem está na sala de espera.** Mitigado por aviso, não por mecanismo — a decisão de onde posicionar o monitor é da clínica. A alternativa (nome abreviado na tabela, completo na seleção) foi considerada e recusada por custo de operação.
 - **Direito de eliminação fica mais pesado.** Apagar um paciente já era operação manual (`LGPD.md` §9, risco 2); agora apagar de verdade importa mais, porque o que sobreviveria é identificável.
 - **Reverte texto de duas migrations e de vários documentos.** A afirmação "o banco nunca grava nome nem CPF" deixa de ser verdadeira pela metade, e cada lugar que a repetia precisou ser corrigido — o risco aqui é documentação desatualizada afirmando garantia que o código não dá mais.

@@ -1,5 +1,5 @@
 """
-SaúdeJá — "só o campeão vai para produção" (Passos 10.4/10.5).
+SaúdeJá — "só o campeão vai para produção".
 
 `campeao.verificar_campeao` é chamada pela pré-checagem do job D-2 e pela
 guarda do `deploy.yml`. O que se trava: o repositório como está passa; um

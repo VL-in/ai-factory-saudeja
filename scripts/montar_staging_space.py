@@ -1,5 +1,5 @@
 """
-Monta o diretório de staging que sobe para o Hugging Face Space (Passo 11.1).
+Monta o diretório de staging que sobe para o Hugging Face Space.
 
 Antes, a lista fechada vivia em `cp` soltos dentro do `deploy.yml`, e o CI
 buildava a imagem a partir do checkout inteiro (filtrado pelo
@@ -12,14 +12,14 @@ A1 do roteiro do primeiro deploy). Agora os dois workflows chamam este script:
   (o CI é o primeiro job do deploy, via `workflow_call`), e o sincroniza.
 
 A lista é **fechada** de propósito, mesmo princípio da allowlist de
-`eventos_app` (Passo 8.5): arquivo novo no repositório não vai para produção
+`eventos_app` (`src/observabilidade.py`): arquivo novo no repositório não vai para produção
 sem alguém acrescentá-lo em `ARQUIVOS`/`DIRETORIOS`. O `hub-sync` faz upload
 por HTTP e não respeita os `.gitignore` aninhados -- subir o checkout levaria
 `.dvc/config.local` (URL do remote), o cache do DVC e o dataset de treino para
-um Space público fora do Brasil (achado 1 da revisão do Passo 10).
+um Space público fora do Brasil.
 
 `tests/test_deploy.py` trava a coerência: toda origem de `COPY` do
-`infra/deploy/dockerfile` existe no staging (A3), e nada proibido entra nele.
+`infra/deploy/dockerfile` existe no staging, e nada proibido entra nele.
 
 Só biblioteca padrão: o job de deploy instala o mínimo (DVC + PyYAML).
 

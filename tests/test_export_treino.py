@@ -1,6 +1,6 @@
 """
-SaúdeJá — testes de src/export_treino.py (Passo 9.0; contrato e
-`historico_noshow` gravado no Passo 10.3).
+SaúdeJá — testes de src/export_treino.py (inclui o contrato de
+features e o `historico_noshow` gravado no cadastro).
 
 `montar_dataset_producao`/`montar_dataset_treino` recebem `agendamentos` já
 prontos (mesma forma que `db.repositories.buscar_agendamentos_com_desfecho()`
@@ -70,7 +70,7 @@ def test_idade_calculada_a_partir_da_data_da_consulta_nao_de_hoje():
 
 
 def test_historico_noshow_e_o_valor_gravado_no_cadastro_nao_recalculado():
-    """Passo 10.3: o dataset de treino carrega o `historico_noshow` com que o
+    """O dataset de treino carrega o `historico_noshow` com que o
     job D-2 predisse (o gravado no cadastro). Até aqui ele era recontado a
     partir dos desfechos -- e uma falta acontecida entre o agendamento e a
     consulta entrava no recálculo, mas não na predição: skew treino-serving.
@@ -157,7 +157,7 @@ def test_montar_dataset_treino_junta_semente_e_producao(tmp_path):
 def test_montar_dataset_treino_sem_producao_reproduz_so_a_semente(tmp_path):
     """Enquanto ninguém registrou desfecho real, o dataset de treino deve ser
     idêntico à semente -- não um bug, o estado esperado do produto ainda sem
-    volume de produção (PLANO-IMPLEMENTACAO, Passo 9.0)."""
+    volume de produção."""
     semente = pd.DataFrame(
         {
             "id_consulta": [1],
