@@ -79,17 +79,33 @@ ai-factory-saudeja/
 
 ## 2. High-Level System Diagram
 
-Camada C1
+
+###  Camada C1
+
 ```mermaid
 flowchart LR
-    UserP[Paciente] -->|agenda| Sys[SaudeJa]
-    UserC[Clínica] -->|verifica lista| Sys[SaudeJa]
-    Sys --> |grava| DB[Banco de dados<br/> pacientes]
-    Sys --> |dispara quando atinge<br/>threshold| Aut[Lembretes via<br/> Whatsapp/SMS]
-    Sys --> |requisicao/features| ML[Modelo classificacao<br/>no-show API]
-    Admin[Time MLOps] -->|retreina| ML
+    Paciente["Paciente"]
+    Funcionario["Funcionário<br/>da clínica"]
+    MLOps["Time MLOps"]
+
+    Sys["<b>Saúde Já</b><br/>SaaS de agendamento com<br/>predição de no-show"]
+
+    Supabase["Supabase<br/>Postgres gerenciado + Auth"]
+    Infobip["Infobip<br/>SMS"]
+    Automacao["GitHub Actions + DVC/Azure Blob<br/>CI/CD, job D-2, re-treino e canário"]
+
+    Paciente -->|"cadastra e agenda"| Sys
+    Funcionario -->|"consulta a fila do dia<br/>e registra o resultado da consulta"| Sys
+    Sys -->|"pacientes, agendamentos, predições,<br/>envios e eventos"| Supabase
+    Sys -->|"autentica o funcionário"| Supabase
+    Sys -->|"lembrete acima do threshold"| Infobip
+    Infobip -.->|"SMS"| Paciente
+    Automacao -->|"executa o job diário,<br/>treina e publica o campeão"| Sys
+    MLOps -->|"aprova o PR"| Automacao
 ```
-Camada C2
+
+### 2.3. Camada C2 — original (Passo 6)
+
 ```mermaid
 flowchart LR
     Paciente["Paciente"]
@@ -115,6 +131,67 @@ flowchart LR
     Funcionario -->|HTTPS, consulta lista| web
     web -->|RESTful| LLM
 ```
+
+O que diverge do código atual: a API FastAPI (3.2.1) não aparece, embora seja o container sobre o qual a seção 6 abre o ponto do Passo 11; a aresta `web --RESTful--> ML` não existe (a fila vem do Supabase por SQL, a predição é em processo, e o disparo manual da aba de dev chama `processar_dia` por import); o "Scheduler" genérico é o GitHub Actions, que é externo ao Space; não há nada do eixo de MLOps dos Passos 9 e 10 (gate, canário, campeão, DVC/Azure, MLflow); a Infobip está dentro do limite do sistema enquanto o TrueFoundry está fora; o LLM aparece como aresta sólida embora `ExplicadorLLMDesativado` nunca toque a rede; e a janela do job virou "amanhã até D+2" na revisão do Passo 10.
+
+### 2.4. Camada C2 — revisado (2026-10-01)
+
+```mermaid
+flowchart TB
+    Paciente["Paciente"]
+    Funcionario["Funcionário<br/>da clínica"]
+    MLOps["Time MLOps"]
+    Infobip["<b>Infobip</b><br/>SMS — sistema externo"]
+
+    subgraph SaudeJa["Saúde Já - limite do sistema"]
+        direction TB
+
+        subgraph Space["Hugging Face Space — 1 container, 2 processos"]
+            direction LR
+            web["App Web<br/>Streamlit"]
+            api["API de predição<br/>FastAPI <br/>/predict, /health"]
+        end
+
+        nucleo["Núcleo de predição<br/>src/inference.py + src/explain.py<br/>"]
+
+        subgraph Runner["GitHub Actions — runners efêmeros"]
+            direction TB
+            jobd2["Job D-2 <br/>job_d2.yml"]
+            gate["Gate de re-treino — mensal<br/>retrain.yml + DVC/MLflow"]
+            canario["Avaliação do canário <br/>canario.yml"]
+            deploy["Deploy — push em main<br/>ci.yml + deploy.yml"]
+        end
+
+        DB[("Supabase<br/>Postgres + Auth")]
+        Blob[("Azure Blob — remote do DVC<br/>model.pkl, canário e dataset")]
+    end
+
+    Paciente -->|"HTTPS, cadastra e agenda"| web
+    Funcionario -->|"HTTPS, fila do dia e desfecho"| web
+    web -->|"login e-mail/senha — Supabase Auth"| DB
+    web -->|"SQL via supabase-py"| DB
+    web -->|"import em processo"| nucleo
+    web -.->|"REST, só com PREDICT_BACKEND=api"| api
+    api -->|"import em processo"| nucleo
+
+    jobd2 -->|"agendamentos de amanhã a D+2,<br/>grava predições e purga retenção"| DB
+    jobd2 -->|"import em processo —<br/>campeão e canário por braço"| nucleo
+    jobd2 -->|"REST, acima do threshold do braço"| Infobip
+    Infobip -.->|"SMS"| Paciente
+    jobd2 -->|"dvc pull com SAS de leitura"| Blob
+
+    gate -->|"export dos desfechos reais"| DB
+    gate -->|"dvc push do desafiante"| Blob
+    gate -->|"aprovado abre o canário (PR)"| canario
+    canario -->|"guardrails por braço e<br/>reversões registradas"| DB
+    canario -->|"PR de promoção ou de reversão"| deploy
+    deploy -->|"migrations + sync do staging<br/>com model.pkl do campeão"| Space
+    deploy -->|"dvc pull do campeão"| Blob
+
+    MLOps -->|"aprova o PR"| Runner
+```
+
+Leitura do diagrama: o que está dentro do limite do sistema é o que a SaúdeJá opera; Infobip e TrueFoundry são SaaS de terceiros. O **núcleo de predição** aparece fora dos dois agrupamentos de deploy de propósito — é o mesmo módulo importado pela UI, pela API e pelo job, que é o que [ADR-005](adr/adr-005-integracoes-implicitas.md) (b) decidiu e o que o teste de paridade entre backends protege. O canário não chega ao Space por construção (seção 6): ele vive no runner e no Azure Blob até ser promovido.
 
 ## 3. Core Components
 
