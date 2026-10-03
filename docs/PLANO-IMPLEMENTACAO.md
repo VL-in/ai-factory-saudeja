@@ -687,7 +687,7 @@ alter table agendamentos
 - Os cinco workflows passam no `actionlint` sem erro; as expressões `jq` do corpo do PR de promoção foram testadas.
 
 **Pendências — dependem de GitHub/Hugging Face, não de código** (o checklist do Passo 11 parte daqui):
-- **Antes de 2026-10-01 06:00 UTC (hoje à noite)**: o `retrain.yml` de `main` ainda é o antigo e dispara nesse horário com zero secrets. Configurar os secrets ou `gh workflow disable retrain.yml` — continua valendo o aviso da revisão de 2026-09-29.
+- ~~**Antes de 2026-10-01 06:00 UTC (hoje à noite)**: o `retrain.yml` de `main` ainda é o antigo e dispara nesse horário com zero secrets. Configurar os secrets ou `gh workflow disable retrain.yml` — continua valendo o aviso da revisão de 2026-09-29.~~ Disparou em 2026-10-01 e falhou, como previsto; o próximo disparo é em 2026-11-01. O estado completo está no [11.1](#111--roteiro-do-primeiro-deploy-o-que-fica-preparado-no-código-e-o-que-é-configuração-da-autora).
 - Secrets e variáveis da tabela do README ("CI/CD"), incluindo a SAS só de leitura e o environment `production` com `HF_TOKEN`/`HF_SPACE_ID`; proteção de `main` exigindo os checks do `ci.yml`; CodeQL pelo *default setup* em Settings.
 - As verificações que só existem com o repositório no GitHub (as da 1ª revisão e do 10.1): PR de teste, CI quebrado deixando o deploy pulado, migração aditiva de brincadeira, lista de arquivos do Space igual à do staging, PR de promoção recebendo o check, `job_d2.yml` disparado duas vezes sem SMS em dobro.
 - **`supabase db push` das migrations `20260929000000` e `20260930000000` no projeto remoto.** O primeiro deploy faz isso sozinho; até lá, a "Fila do dia" local apontando para o remoto mostra o aviso de schema desatualizado (`42703`), porque o select passou a pedir `predicoes.fora_do_dominio`.
@@ -799,9 +799,73 @@ retrain.yml (dia 1)  gate aprova + há campeão -> data/canario/ + dvc add + dvc
 - **Ligar as sondas externas do Passo 8.5**, que só agora têm URL pública para apontar: monitor do UptimeRobot em `/health` do Space e checks do Healthchecks.io para o job D-2 e o re-treino. Vale anotar que o Space free **hiberna por inatividade** — o monitor batendo de minutos em minutos mantém o container acordado como efeito colateral, o que melhora o cold start percebido (SLO §2) mas mascara o comportamento real de hibernação. Decidir conscientemente se isso é desejável antes de medir o cold start para o pitch.
 - **Antes do primeiro sync**, conferir que o projeto Supabase remoto está com todas as migrations aplicadas (`supabase db push`) e que os três secrets do sub-passo [10.1](#101--migrations-de-banco-no-deploy) existem no repositório — senão o primeiro deploy sincroniza código contra schema antigo, que é o incidente de 2026-09-28 acontecendo com a clínica na frente.
 - **Login da equipe no projeto remoto** ([ADR-008](adr/adr-008-login-da-equipe.md)): desligar "Allow new users to sign up" no Dashboard do Supabase (Authentication → Sign In / Providers), subir o tamanho mínimo de senha para 8 e criar as contas da equipe com `scripts/criar_funcionario.py`, antes de divulgar a URL do Space. O `supabase/config.toml` vale só para o Supabase local. Com o cadastro aberto, a tela de login seria só decoração.
-- Deploy inicial: criar o HF Space e rodar manualmente o `deploy.yml` do Passo 10 (`workflow_dispatch`) para o primeiro sync via `huggingface/hub-sync` (a action cria o Space se ele não existir, com `--exist-ok`). Dali em diante, todo push em `main` (deploy manual de código ou promoção automática do Passo 9) usa o mesmo workflow — não há um segundo mecanismo de deploy a manter.
+- Deploy inicial: criar o HF Space e rodar manualmente o `deploy.yml` do Passo 10 (`workflow_dispatch`) para o primeiro sync via `huggingface/hub-sync` (a action cria o Space se ele não existir, com `--exist-ok`). Dali em diante, todo push em `main` (deploy manual de código ou promoção automática do Passo 9) usa o mesmo workflow — não há um segundo mecanismo de deploy a manter. **Corrigido no [11.1](#111--roteiro-do-primeiro-deploy-o-que-fica-preparado-no-código-e-o-que-é-configuração-da-autora)**: o merge de `dev` em `main` já dispara o deploy, e o `workflow_dispatch` serve só para reenviar. Criar o Space à mão é obrigatório para o token *fine-grained*.
 
 **Verificação**: Space público respondendo `/health` 200 com a `model_version` esperada; smoke test manual fim a fim (criar agendamento → job via `workflow_dispatch` → predição+explicação visível na fila do Streamlit → log de decisão de mensageria); medição manual do cold start vs. SLO <10s; smoke test do loop de deploy automático (merge de um PR de promoção do Passo 9 → confirmar que o Space rebuilda sozinho, sem passo manual).
+
+### 11.1 — Roteiro do primeiro deploy: o que fica preparado no código e o que é configuração da autora
+
+> Escrito em 2026-10-02, a partir do estado real do GitHub, do Supabase remoto e do remote do DVC (consultados com `gh`, `supabase migration list --linked` e `dvc status -c`). **Nada daqui foi executado ainda.** A Fase A é código, feito sob pedido da autora; as Fases B a D são dela.
+
+**Estado em 2026-10-02:**
+
+- O repositório é um **fork público** de `wmonteiro-ai/ai-factory-saudeja`. Isso tem duas consequências práticas: com dois remotes, o `gh` local não sabe qual repositório usar (`gh secret list` falha com "multiple remotes detected"); e um PR aberto pela interface web de um fork vem com o **upstream** pré-selecionado como repositório base.
+- `dev` local está **14 commits à frente de `origin/dev`** (nada do Passo 10 foi enviado), e `main` é ancestral direto de `dev`, sem divergência.
+- `main` tem só o `retrain.yml` antigo. O cron disparou em 2026-10-01 (às 12:35 UTC, seis horas atrasado) e **falhou**, como a revisão de 2026-09-29 previa. O próximo disparo é em 2026-11-01.
+- Zero secrets, zero variáveis, nenhum *environment*, `main` sem proteção e **"Allow GitHub Actions to create and approve pull requests" desligado**. Sem essa opção, o `gh pr create` do `retrain.yml` e do `canario.yml` falha com o `GITHUB_TOKEN`. Esse ponto não estava em nenhuma pendência anterior.
+- Supabase remoto: migrations aplicadas até `20260930000000`. Só falta a `20261001000000` (tabela nova, aditiva), que o `db push` do primeiro deploy aplica.
+- Remote do DVC: o `dvc status -c` local, com a credencial do `.env`, respondeu **`AuthorizationFailure`**. Com chave válida, essa resposta costuma indicar o firewall da conta de storage. É bloqueante: CI, deploy e job D-2 começam todos com `dvc pull data/model.pkl`.
+
+**O que muda em relação ao texto acima: o merge de `dev` em `main` já é o deploy.** O `deploy.yml` dispara em todo push em `main`, então a fusão do PR roda CI → deploy na mesma hora. O `workflow_dispatch` do "deploy inicial" só entra em cena quando esse deploy é barrado. Para o primeiro deploy ser um ato deliberado, e não um efeito colateral do merge, a recomendação é usar o *environment* `production` com **revisor obrigatório** (a autora): o job `deploy` fica pausado depois do CI até alguém aprovar. Também dá para manter a exigência depois do primeiro deploy, como um *human-in-the-loop* antes de cada mudança em produção (inclusive na promoção do re-treino). O custo é que a verificação do Passo 9 ("o Space rebuilda sozinho, sem passo manual") deixa de valer literalmente.
+
+#### Fase A — preparação no código (Claude, sob pedido; não depende de secrets)
+
+Vai num PR para `dev` **antes** do PR `dev` → `main`, para que o primeiro deploy já saia com estas guardas.
+
+| # | O que | Por quê |
+|---|---|---|
+| A1 | No `deploy.yml`, entre "Conferir o staging" e a migration: `docker build build/space` e o mesmo smoke de saúde do CI | O CI builda com o checkout inteiro (filtrado pelo `.dockerignore`); o Space builda o staging de lista fechada. Hoje os dois batem por convenção, não por teste. Builda o contexto real e falha **antes** de migrar o banco |
+| A2 | Passo pós-sync: aguardar o Space sair de `BUILDING` (API `huggingface.co/api/spaces/<id>/runtime`, com timeout), conferir que o `sha` do runtime é o do commit enviado e bater em `/_stcore/health` na URL pública | Hoje o workflow termina no sync e fica verde mesmo que o build do Space falhe. A comparação da `model_version` pelo `/health` da API **depende da decisão da porta única** (abaixo): com a opção (a), a porta 8000 não é pública |
+| A3 | Teste em `test_coerencia_repo.py`: toda origem de `COPY` do `infra/deploy/dockerfile` aparece nos `cp` do staging | Uma rede barata para o mesmo buraco do A1, que pega o erro já no PR |
+| A4 | Smoke do CI também com `docker run --user 1000` e, se falhar, um usuário 1000 com `HOME` gravável no `infra/deploy/dockerfile` | O Space roda o container como uid 1000, não como root. O smoke atual roda como root e não veria, por exemplo, o cache do numba (via `shap`) ou o `~/.streamlit` sem permissão de escrita. É a "checagem de usuário não-root" do texto acima, transformada em gate |
+| A5 | `GH_REPO: ${{ github.repository }}` nos passos com `gh` do `retrain.yml` e do `canario.yml` | Seguro barato por causa do fork: o PR automático nunca pode cair no upstream |
+
+#### Fase B — contas e configuração (autora)
+
+Nesta ordem, porque cada item destrava o seguinte:
+
+1. **Azure.** Resolver o `AuthorizationFailure`: em *Storage account → Networking*, o acesso público precisa estar habilitado para todas as redes, porque runner do GitHub não tem IP fixo (a proteção passa a ser a SAS); ou a chave do `.env` foi rotacionada. Feito isso, `dvc push` e `dvc status -c` limpos na máquina local. Depois, gerar a SAS `rl` do container (comando no `.env.example`) **com data de expiração anotada na agenda**, porque SAS vencida derruba CI, deploy e job D-2 de uma vez.
+2. **Hugging Face.** Criar o Space **à mão** (SDK Docker, template em branco, CPU basic, público), em vez de deixar a action criá-lo: token *fine-grained* só pode receber escopo num repositório que já existe. Em seguida, gerar o token com escrita **só nesse Space**. Em *Space → Settings → Secrets*, cadastrar só `SUPABASE_URL` e `SUPABASE_SECRET_KEY`: a UI não envia SMS, então a Infobip não entra no Space, e o `APP_ENV=prod` já vem do Dockerfile.
+3. **Supabase (Dashboard).** Fazer os passos do ADR-008 descritos acima (cadastro desligado, senha mínima 8, contas criadas com `scripts/criar_funcionario.py`) e gerar o token pessoal do CLI (`SUPABASE_ACCESS_TOKEN`).
+4. **GitHub**, depois de `gh repo set-default VL-in/ai-factory-saudeja` na máquina local:
+   - *Settings → Actions → General → Workflow permissions*: manter "Read", **marcar "Allow GitHub Actions to create and approve pull requests"**.
+   - *Settings → Environments → `production`*: secret `HF_TOKEN`, variável `HF_SPACE_ID`, *deployment branches* só `main` e *required reviewers* com a autora (recomendado).
+   - *Secrets* do repositório: `DVC_REMOTE_URL`, `AZURE_STORAGE_CONNECTION_STRING_LEITURA`, `AZURE_STORAGE_CONNECTION_STRING`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_PASSWORD`, `SUPABASE_PROJECT_REF`, `INFOBIP_BASE_URL` e `INFOBIP_CHAVE_API`. `gh secret set NOME` pede o valor sem ecoá-lo no terminal.
+   - *Variables*: `INFOBIP_REMETENTE` e `CANARIO_DESLIGADO` (vazia). **`MESSAGING_PROVIDER` fica sem definir até a Fase D**: sem ela, o `job_d2.yml` falha no primeiro passo, antes de tocar no banco ou mandar SMS. É a trava de segurança enquanto a operação não começa.
+   - Proteção de `main`, **depois** do primeiro PR (os nomes dos checks só aparecem para seleção depois de rodarem uma vez): exigir PR e os checks `lint, tipos e testes`, `imagem de deploy (build + smoke)` e `dependency-review`, com **zero aprovações** (a autora não aprova o próprio PR). O job `integracao` pode ficar de fora, já que é condicional.
+   - CodeQL pelo *default setup* (opcional).
+5. **Healthchecks.io**: os dois checks (job D-2 e re-treino) podem ser criados a qualquer momento. As URLs viram os secrets `HEALTHCHECKS_*`. O UptimeRobot só entra depois da Fase C, porque precisa da URL pública.
+
+#### Fase C — PRs e primeiro deploy
+
+1. `git push origin dev` (14 commits). Não dispara nada: nenhum workflow escuta push em `dev`.
+2. PR da Fase A para `dev`: é o **primeiro CI real com secrets** e valida a Fase B sem risco nenhum para produção.
+3. PR `dev` → `main` com `gh pr create --base main --head dev`. Na interface web, conferir que o *base repository* é `VL-in/ai-factory-saudeja`, e não o upstream. O merge deve ser feito com **"Create a merge commit"**: *squash* e *rebase* reescrevem os commits e fazem `dev` divergir de `main` a partir daí. Depois do merge, rodar `git merge --ff-only origin/main` em `dev`.
+4. O merge dispara o `deploy.yml`: o CI roda de novo, o `deploy` espera a aprovação no *environment*, e depois vêm a guarda do campeão, o staging, o build do staging (A1), o `db push` (aplica a `20261001000000`), o sync e a espera com o health check (A2). Para reenviar um deploy, usar *Actions → Deploy (HF Space) → Run workflow* em `main`.
+5. **Logo depois do merge**, o `job_d2.yml` (11:17 UTC) e o `canario.yml` (12:47 UTC) passam a disparar todo dia a partir de `main`. Até a Fase D terminar, rodar `gh workflow disable job_d2.yml` e `gh workflow disable canario.yml`, em vez de colecionar runs vermelhos.
+
+#### Fase D — verificações e início da operação
+
+Juntam as verificações já descritas no corpo deste passo, no 10.1, nas revisões do Passo 10 e no 10.7:
+
+- Arquivos do Space idênticos ao staging, sem `.dvc/`, sem `data/*.csv` e sem `docs/`.
+- UI abrindo na URL pública, login da equipe funcionando, cadastro fechado e cold start medido contra o SLO.
+- `retrain.yml` por `workflow_dispatch`: o PR do canário (ou de promoção) é aberto e recebe o check do CI. Isso valida a permissão do item B4.
+- Caminhos de falha: um PR com teste quebrado deixa o `deploy` como **pulado**, e uma senha errada no `db push` falha **antes** do sync. A segunda mexe no *environment* de produção, então a senha precisa ser restaurada logo em seguida.
+- Ensaio do job D-2: definir `MESSAGING_PROVIDER`, reabilitar os dois workflows e rodar o `job_d2.yml` por `workflow_dispatch` duas vezes seguidas, sem SMS em dobro. Na conta trial da Infobip só números verificados recebem, então o ensaio usa um paciente de teste com o telefone da autora.
+- Só então: os secrets `HEALTHCHECKS_*`, o monitor do UptimeRobot e a divulgação da URL.
+
+**Decisão que continua com a autora:** a porta única do Space (opções a/b/c no corpo deste passo). Além da API pública, ela define até onde o A2 consegue conferir a versão do modelo depois do deploy.
 
 ---
 
