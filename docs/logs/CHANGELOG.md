@@ -18,6 +18,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 - A imagem de deploy roda como usuário não-root (uid 1000), a mesma condição do Space, e já traz o código compilado.
 - **O deploy só termina verde quando o Space está no ar com a versão nova.** Antes, o workflow terminava logo depois de enviar os arquivos, mesmo que o build do Space falhasse. Agora ele espera o Space buildar o commit enviado e responder na URL pública, e falha se o build ou a inicialização quebrarem.
 - O CI builda e testa a imagem a partir dos mesmos arquivos que vão para o Space, e não do repositório inteiro.
+- **O re-treino grava no remote do DVC com uma credencial restrita.** O secret `AZURE_STORAGE_CONNECTION_STRING`, que levava a chave da conta Azure inteira, foi substituído por `AZURE_STORAGE_CONNECTION_STRING_ESCRITA`, no environment `production`: uma SAS só do container, que cria arquivos novos mas não sobrescreve nem apaga os já publicados. Nenhum workflow recebe mais a chave da conta.
 
 ### Corrigido
 - O CI do GitHub falharia na primeira execução: quatro testes de observabilidade dependiam de uma variável que o próprio CI desliga.

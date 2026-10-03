@@ -522,12 +522,12 @@ def test_canario_e_encerrado_sempre_por_pr_nunca_por_push_em_main():
 _SECRETS_DE_AMBIENTE = re.compile(
     r"secrets\.(SUPABASE_URL|SUPABASE_SECRET_KEY|SUPABASE_DB_PASSWORD|SUPABASE_PROJECT_REF"
     r"|SUPABASE_ACCESS_TOKEN|INFOBIP_\w+|HF_TOKEN|HEALTHCHECKS_\w+"
-    r"|AZURE_STORAGE_CONNECTION_STRING)\b"
+    r"|AZURE_STORAGE_CONNECTION_STRING_ESCRITA)\b"
 )
 
 
 def test_jobs_com_secret_de_ambiente_declaram_o_environment():
-    """Separação dev/prod: o Supabase, o Space, a Infobip e a chave de
+    """Separação dev/prod: o Supabase, o Space, a Infobip e a SAS de
     escrita do Azure ficam nos environments. Os jobs agendados usam
     `production` sem criar deploy (`deployment: false`); o deploy escolhe o
     environment pelo branch."""
@@ -544,6 +544,28 @@ def test_jobs_com_secret_de_ambiente_declaram_o_environment():
                 assert ambiente == {"name": "production", "deployment": False}, (
                     f"{arquivo.name}::{nome}"
                 )
+
+
+def test_workflows_usam_sas_do_azure_e_so_o_retreino_escreve():
+    """A account key lê, grava e apaga na conta inteira e gera SAS novas:
+    nenhum workflow a recebe. A SAS de escrita (rlc) fica só no re-treino, o
+    único que faz `dvc push`; os demais leem com a SAS `rl`."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        texto = arquivo.read_text(encoding="utf-8")
+        assert not re.search(r"secrets\.AZURE_STORAGE_CONNECTION_STRING\b", texto), (
+            f"{arquivo.name} lê a account key"
+        )
+        assert ("secrets.AZURE_STORAGE_CONNECTION_STRING_ESCRITA" in texto) == (
+            arquivo.name == "retrain.yml"
+        ), arquivo.name
+        comandos = [
+            passo.get("run", "")
+            for job in yaml.safe_load(texto)["jobs"].values()
+            for passo in job.get("steps", [])
+        ]
+        assert not any("dvc push" in c for c in comandos) or arquivo.name == "retrain.yml", (
+            f"{arquivo.name} faz `dvc push` com a SAS de leitura"
+        )
 
 
 def test_filtro_de_deploy_do_ci_espelha_o_paths_ignore_do_deploy():

@@ -207,7 +207,7 @@ Nada aqui é surpresa oculta — cada item é para constar do slide de risco do 
 
 10. **O log do job D-2 é público.** O repositório é público, e o log do GitHub Actions também. O job processa telefone de paciente; o que impede o número de aparecer no log é o filtro de redação de `src/logging_config.py` (§8), que aqui deixa de ser defesa em profundidade e vira **a última barreira**. Mitigações: o job loga só contadores e identificadores internos (`id_agendamento`), a lista de erros com motivo nunca vai para o log nem para o resumo do run, e a guarda estática sobre a AST de `src/` impede que código novo passe campo de PII a uma chamada de log. O CI ainda varre o log da imagem de deploy com `scripts/auditoria_lgpd.py`. **Não mitigado**: um bug de terceiro que logue o corpo de uma requisição antes do filtro existir no processo.
 11. **Processamento fora do Brasil num operador a mais** (§4): o runner do GitHub. Sem gravação local que sobreviva ao job.
-12. **Credencial do remote do DVC no CI.** O CI roda código de PR. Por isso CI, deploy e job D-2 usam uma SAS **só de leitura** (e só do container); a credencial de escrita fica só no workflow de re-treino. PR de fork não recebe secret nenhum.
+12. **Credencial do remote do DVC no CI.** O CI roda código de PR. Por isso CI, deploy e job D-2 usam uma SAS **só de leitura** (e só do container); a credencial de escrita fica só no workflow de re-treino, e também é uma SAS do container, que cria arquivos novos mas não sobrescreve nem apaga os existentes. A account key, que dá acesso à conta inteira, não chega a nenhum workflow. PR de fork não recebe secret nenhum.
 
 ## 10. Incidentes
 

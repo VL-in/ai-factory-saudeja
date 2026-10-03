@@ -69,10 +69,12 @@ jobs:
       name: production
       deployment: false
     env:
-      # Credencial do remote DVC (Azure Blob Storage). A URL vem separada, em
+      # Credencial do remote DVC (Azure Blob Storage): SAS do container com
+      # read, list e create. Grava objeto novo, mas nao sobrescreve nem apaga
+      # nenhum ja' publicado (ver .env.example). A URL vem separada, em
       # DVC_REMOTE_URL: .dvc/config e' versionado e nao guarda nem uma nem a
-      # outra (ver .dvc/config e .env.example).
-      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+      # outra (ver .dvc/config).
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_ESCRITA }}
       DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
       # Supabase: e' de onde saem os desfechos reais registrados pela clinica.
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
