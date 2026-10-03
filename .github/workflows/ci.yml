@@ -12,6 +12,9 @@
 #
 # Mesmos comandos que a maquina local, sem flags extras (architecture.md §8).
 #
+# Em PR para main que vai deployar, o job `versao` confere tambem a versao
+# SemVer do topo do CHANGELOG.
+#
 # Tres gatilhos, um para cada caminho por onde codigo chega a main:
 #   pull_request      -> PR para dev ou main;
 #   workflow_call     -> chamado pelo deploy.yml como primeiro job: o mesmo SHA
@@ -43,6 +46,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       integracao: ${{ steps.filtro.outputs.integracao }}
+      deploya: ${{ steps.deploya.outputs.deploya }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,6 +70,47 @@ jobs:
           else
             echo "integracao=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: O merge deste PR dispara o deploy?
+        id: deploya
+        # O espelho do `paths-ignore` do deploy.yml (tests/test_coerencia_repo.py
+        # confere que os dois concordam). PR que so' mexe nesses caminhos nao
+        # deploya, e por isso nao precisa de versao nova.
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+          IGNORADOS_PELO_DEPLOY: '^(docs/|data/canario\.json$|data/canario/|data/canario_historico\.json$)'
+        # `grep -c` le a entrada inteira: com `-q` o grep sairia cedo e o
+        # SIGPIPE do `git diff` viraria falha do pipeline (pipefail).
+        run: |
+          fora=$(git diff --name-only "origin/${BASE}...HEAD" | grep -vcE "$IGNORADOS_PELO_DEPLOY" || true)
+          if [ "${fora:-0}" -gt 0 ]; then
+            echo "deploya=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploya=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  versao:
+    # Em PR para main que vai deployar: a versao do topo do CHANGELOG tem de
+    # ser nova, ou o deploy falharia depois do merge (scripts/versao_release.py).
+    # Pulado nos demais casos -- e check pulado conta como aprovado na protecao
+    # de branch. Os PRs automaticos do re-treino e do canario, que rodam o CI
+    # por workflow_dispatch, sobem o PATCH sozinhos.
+    name: versao da release (SemVer)
+    needs: mudancas
+    if: >-
+      github.event_name == 'pull_request' && github.base_ref == 'main'
+      && needs.mudancas.outputs.deploya == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # as tags
+          persist-credentials: false
+
+      - name: Versao nova no topo do CHANGELOG
+        run: python3 scripts/versao_release.py conferir
 
   rapido:
     name: lint, tipos e testes

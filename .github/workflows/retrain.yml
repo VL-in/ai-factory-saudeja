@@ -60,6 +60,14 @@ jobs:
   retrain:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Secrets de producao (Supabase, Infobip, ...) vivem no environment
+    # `production`, nao no repositorio. `deployment: false`: o job usa os
+    # secrets, mas nao entra no historico de deploys -- la' so' fica o deploy.yml.
+    # Por isso o environment de producao nao pode ter revisor obrigatorio: o
+    # revisor valeria tambem aqui e pararia o job agendado esperando aprovacao.
+    environment:
+      name: production
+      deployment: false
     env:
       # Credencial do remote DVC (Azure Blob Storage). A URL vem separada, em
       # DVC_REMOTE_URL: .dvc/config e' versionado e nao guarda nem uma nem a
@@ -191,10 +199,14 @@ jobs:
           else
             branch="retrain/$(date -u +%Y-%m)-${GITHUB_RUN_NUMBER}"
             git checkout -b "$branch"
-            git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc
-            git commit -m "(resultado) data/champion_metrics.json, dvc.lock: modelo promovido pelo gate de re-treino mensal"
+            # A promocao deploya: precisa de versao nova (PATCH), que o
+            # deploy de producao confere e vira a tag da Release.
+            python scripts/versao_release.py subir-patch \
+              --item "Modelo \`$(jq -r .model_version data/champion_metrics.json)\` promovido pelo re-treino mensal."
+            git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc docs/logs/CHANGELOG.md
+            git commit -m "(resultado) data/champion_metrics.json, dvc.lock, docs/logs/CHANGELOG.md: modelo promovido pelo gate de re-treino mensal"
             titulo="(resultado) modelo promovido pelo gate de re-treino ($(date -u +%Y-%m))"
-            efeito="O merge deste PR em \`main\` dispara o \`deploy.yml\`, que faz \`dvc pull\` do modelo promovido e sincroniza o HF Space."
+            efeito="O merge deste PR em \`main\` dispara o \`deploy.yml\`, que faz \`dvc pull\` do modelo promovido, sincroniza o HF Space e publica a Release da versao PATCH."
           fi
           git push origin "$branch"
 

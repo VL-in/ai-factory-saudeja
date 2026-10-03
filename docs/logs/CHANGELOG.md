@@ -10,6 +10,10 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
 ## [Não publicado] (Vanessa + Claude) - 2026-10-02
 
+### Adicionado
+- **Ambientes de desenvolvimento e de produção separados**, cada um com Space, banco e credenciais próprios ([ADR-010](../adr/adr-010-ambientes-e-releases.md)). Enviar código ao branch `dev` publica no ambiente de desenvolvimento e aplica as migrations no banco de desenvolvimento primeiro. A produção usa um banco novo, que nunca recebe dado de teste.
+- **Releases numeradas (SemVer).** Cada publicação em produção vira uma versão `vX.Y.Z` no GitHub, com estas notas. A versão vem do topo deste arquivo e é conferida antes de o banco de produção ser migrado. A troca do modelo pelo re-treino ou pelo canário sobe a versão PATCH automaticamente.
+
 ### Modificado
 - A imagem de deploy roda como usuário não-root (uid 1000), a mesma condição do Space, e já traz o código compilado.
 - **O deploy só termina verde quando o Space está no ar com a versão nova.** Antes, o workflow terminava logo depois de enviar os arquivos, mesmo que o build do Space falhasse. Agora ele espera o Space buildar o commit enviado e responder na URL pública, e falha se o build ou a inicialização quebrarem.

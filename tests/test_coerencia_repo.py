@@ -513,3 +513,76 @@ def test_canario_e_encerrado_sempre_por_pr_nunca_por_push_em_main():
     assert "gh pr create" in texto
     assert 'git push origin "$BRANCH"' in texto
     assert "git push origin main" not in texto
+
+
+# --- ambientes dev/production e versão da release ---------------------------------
+
+# Secrets que só existem nos environments: um job que os lê sem declarar o
+# environment receberia vazio (ou, pior, um secret de repositório esquecido).
+_SECRETS_DE_AMBIENTE = re.compile(
+    r"secrets\.(SUPABASE_URL|SUPABASE_SECRET_KEY|SUPABASE_DB_PASSWORD|SUPABASE_PROJECT_REF"
+    r"|SUPABASE_ACCESS_TOKEN|INFOBIP_\w+|HF_TOKEN|HEALTHCHECKS_\w+"
+    r"|AZURE_STORAGE_CONNECTION_STRING)\b"
+)
+
+
+def test_jobs_com_secret_de_ambiente_declaram_o_environment():
+    """Separação dev/prod: o Supabase, o Space, a Infobip e a chave de
+    escrita do Azure ficam nos environments. Os jobs agendados usam
+    `production` sem criar deploy (`deployment: false`); o deploy escolhe o
+    environment pelo branch."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        conteudo = yaml.safe_load(arquivo.read_text(encoding="utf-8"))
+        for nome, job in conteudo["jobs"].items():
+            if not _SECRETS_DE_AMBIENTE.search(yaml.safe_dump(job)):
+                continue
+            ambiente = job.get("environment")
+            assert ambiente, f"{arquivo.name}::{nome} lê secret de ambiente sem environment"
+            if arquivo.name == "deploy.yml":
+                assert ambiente == "${{ github.ref_name == 'main' && 'production' || 'dev' }}"
+            else:
+                assert ambiente == {"name": "production", "deployment": False}, (
+                    f"{arquivo.name}::{nome}"
+                )
+
+
+def test_filtro_de_deploy_do_ci_espelha_o_paths_ignore_do_deploy():
+    """O job `versao` do CI só exige versão nova quando o merge vai deployar.
+    Se o filtro e o `paths-ignore` divergirem, ou um PR que deploya passa sem
+    versão (e o deploy falha depois do merge), ou um PR só de docs é barrado."""
+    deploy = yaml.safe_load((WORKFLOWS / "deploy.yml").read_text(encoding="utf-8"))
+    ignorados = deploy[True]["push"]["paths-ignore"]
+    ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text(encoding="utf-8"))
+    passo = next(p for p in ci["jobs"]["mudancas"]["steps"] if p.get("id") == "deploya")
+    filtro = re.compile(passo["env"]["IGNORADOS_PELO_DEPLOY"])
+
+    def glob_para_regex(glob: str) -> str:
+        return re.escape(glob).replace(r"\*\*", ".*").replace(r"\*", "[^/]*")
+
+    def ignorado_pelo_deploy(caminho: str) -> bool:
+        return any(re.fullmatch(glob_para_regex(p), caminho) for p in ignorados)
+
+    for caminho in (
+        "docs/logs/CHANGELOG.md",
+        "docs/adr/adr-009-canario-do-modelo.md",
+        "data/canario.json",
+        "data/canario/model.pkl.dvc",
+        "data/canario_historico.json",
+        "data/champion_metrics.json",
+        "dvc.lock",
+        "src/jobs/inferencia_diaria.py",
+        "README.md",
+        "data/canario.json.salvo",
+    ):
+        assert bool(filtro.search(caminho)) == ignorado_pelo_deploy(caminho), caminho
+
+
+def test_release_so_depois_do_space_no_ar_e_so_em_main():
+    deploy = yaml.safe_load((WORKFLOWS / "deploy.yml").read_text(encoding="utf-8"))
+    release = deploy["jobs"]["release"]
+    assert release["needs"] == "deploy"
+    assert "github.ref_name == 'main'" in release["if"]
+    nomes = [p.get("name", "") for p in deploy["jobs"]["deploy"]["steps"]]
+    versao = next(i for i, n in enumerate(nomes) if "Versao da release" in n)
+    migracao = next(i for i, n in enumerate(nomes) if "Migrations" in n)
+    assert versao < migracao, "versão inválida tem de parar o deploy antes de migrar o banco"

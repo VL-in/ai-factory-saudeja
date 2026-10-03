@@ -23,7 +23,7 @@
 #
 # Rollback manual: workflow_dispatch com acao=reverter e um motivo. Para
 # desligar o canario NA HORA, sem PR, ha' a variavel CANARIO_DESLIGADO=true
-# do repositorio (lida pelo job_d2.yml).
+# do environment `production` (lida pelo job_d2.yml).
 name: Canario do modelo
 
 on:
@@ -59,6 +59,14 @@ jobs:
   canario:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Secrets de producao (Supabase, Infobip, ...) vivem no environment
+    # `production`, nao no repositorio. `deployment: false`: o job usa os
+    # secrets, mas nao entra no historico de deploys -- la' so' fica o deploy.yml.
+    # Por isso o environment de producao nao pode ter revisor obrigatorio: o
+    # revisor valeria tambem aqui e pararia o job agendado esperando aprovacao.
+    environment:
+      name: production
+      deployment: false
     env:
       DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
       # Leitura basta: a promocao so' troca o PONTEIRO (dvc.lock) para um
@@ -186,9 +194,13 @@ jobs:
           git checkout -b "$BRANCH"
           git add -A -- data/canario data/canario.json data/canario_historico.json
           if [ "$ACAO" = "promover" ]; then
-            git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc
+            # A promocao deploya: precisa de versao nova (PATCH), que o
+            # deploy de producao confere e vira a tag da Release.
+            python scripts/versao_release.py subir-patch \
+              --item "Modelo \`$VERSAO\` promovido a campeao depois do canario (ADR-009)."
+            git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc docs/logs/CHANGELOG.md
             titulo="(resultado) canario $VERSAO promovido a campeao"
-            efeito="O merge dispara o \`deploy.yml\`, que leva o modelo ao Space; o job D-2 passa a usar o novo campeao em 100% da fila."
+            efeito="O merge dispara o \`deploy.yml\`, que leva o modelo ao Space e publica a Release da versao PATCH; o job D-2 passa a usar o novo campeao em 100% da fila."
           else
             titulo="(resultado) canario $VERSAO revertido"
             efeito="O campeao nao muda. O job D-2 ja' esta' mandando 100% da fila para ele (\`canarios_revertidos\`); o merge so' formaliza a decisao e impede o gate de aprovar este modelo de novo."

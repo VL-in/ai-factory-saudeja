@@ -76,12 +76,14 @@ O dataset e o `data/model.pkl` são versionados pelo DVC num container privado d
 
 | Workflow | Gatilho | Função |
 |---|---|---|
-| `ci.yml` | PR para `dev`/`main` | `ruff`, `mypy`, `pytest`, build e smoke da imagem de deploy, testes de integração |
-| `deploy.yml` | push em `main` | CI, verificação do modelo campeão, `supabase db push` e sync para o Hugging Face Space |
+| `ci.yml` | PR para `dev`/`main` | `ruff`, `mypy`, `pytest`, build e smoke da imagem de deploy, testes de integração; em PR para `main`, versão SemVer nova no CHANGELOG |
+| `deploy.yml` | push em `dev` ou `main` | CI, verificação do modelo campeão, `supabase db push` e sync para o Space do ambiente; em `main`, cria a tag `vX.Y.Z` e a Release |
 | `job_d2.yml` | diário, 08h17 | Job de inferência D-2 |
 | `retrain.yml` | dia 1 de cada mês | Re-treino com gate de promoção; abre PR do modelo desafiante |
 | `canario.yml` | diário, 09h47 | Avalia o modelo canário (20% da fila) e abre PR de promoção ou reversão ([ADR-009](docs/adr/adr-009-canario-do-modelo.md)) |
 | `dependency-review.yml` | PR | Bloqueia dependência vulnerável |
+
+Há dois ambientes, cada um com Space, projeto Supabase e secrets próprios no *environment* do GitHub: `dev`, alimentado pelo branch `dev`, e `production`, alimentado por `main`. Cada deploy de produção vira uma release SemVer a partir do topo do [CHANGELOG](docs/logs/CHANGELOG.md) ([ADR-010](docs/adr/adr-010-ambientes-e-releases.md)).
 
 Só o modelo campeão vai para produção: deploy e job D-2 conferem o hash do `model.pkl` e o threshold contra `data/champion_metrics.json`. O deploy envia ao Space apenas o necessário para a imagem (código, `params.yaml` e modelo), nunca o dataset nem a configuração do DVC.
 

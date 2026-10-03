@@ -25,11 +25,21 @@
 #   neste SHA -- nao ha segundo docker build aqui.
 # - O sync nao e' o fim: o ultimo passo espera o Space buildar no commit novo
 #   e responder na URL publica.
+#
+# Dois ambientes, cada um com Space, projeto Supabase e secrets proprios
+# (environments do GitHub):
+#
+#   push em dev  -> environment `dev`: Space de dev e Supabase de dev. E' o
+#                   ensaio da migration antes de ela chegar a producao.
+#   push em main -> environment `production`. `main` e' producao: o deploy
+#                   confere a versao do topo do CHANGELOG antes de migrar e,
+#                   com o Space no ar, cria a tag vX.Y.Z e a Release
+#                   (scripts/versao_release.py).
 name: Deploy (HF Space)
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     # Mudanca so' de documentacao nao rebuilda o Space (cold start, SLO §2).
     # dvc.lock e data/champion_metrics.json NAO entram aqui: sao justamente o
     # merge do PR de promocao do re-treino.
@@ -41,7 +51,8 @@ on:
       - "data/canario.json"
       - "data/canario/**"
       - "data/canario_historico.json"
-  # Primeiro deploy e reenvio manual.
+  # Reenvio manual. Em `main`, reenviar a versao que ja' tem tag neste commit
+  # refaz o deploy sem criar outra Release.
   workflow_dispatch:
 
 permissions:
@@ -58,11 +69,16 @@ jobs:
     # 20 min de ate' o sync + ate' 25 de espera pelo build do Space.
     timeout-minutes: 45
     # Historico de deploys na aba Environments do GitHub (evidencia para o
-    # pitch) e o HF_TOKEN guardado so' aqui, nao no repositorio inteiro.
-    environment: production
+    # pitch). Os secrets de cada ambiente ficam so' no environment dele: um
+    # push em dev nunca enxerga o Supabase nem o Space de producao. Outro
+    # branch cai em `dev`, cuja regra de branch o recusa.
+    environment: ${{ github.ref_name == 'main' && 'production' || 'dev' }}
     concurrency:
-      group: deploy-space
+      group: deploy-space-${{ github.ref_name }}
       cancel-in-progress: false # um deploy pela metade e' pior que um atrasado
+    outputs:
+      versao: ${{ steps.versao.outputs.versao }}
+      situacao: ${{ steps.versao.outputs.situacao }}
     env:
       DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
@@ -76,6 +92,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # as tags, para conferir a versao
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -98,6 +115,14 @@ jobs:
         # dvc.lock e levaria ao Space um modelo que nunca passou pelo gate.
         run: python src/campeao.py
 
+      - name: Versao da release (SemVer)
+        # So' em producao, e antes da migration: versao ja' publicada em outro
+        # commit, menor que a ultima tag ou item esquecido em [Nao publicado]
+        # param o deploy sem tocar no banco.
+        id: versao
+        if: github.ref_name == 'main'
+        run: python scripts/versao_release.py conferir --sha "$GITHUB_SHA"
+
       - name: Staging com lista fechada
         # A lista mora em scripts/montar_staging_space.py, o mesmo script que o
         # job `imagem` do CI usou para buildar e testar a imagem neste SHA
@@ -111,7 +136,7 @@ jobs:
         with:
           version: 2.117.0 # fixa: o CLI muda o comportamento do db push entre versoes
 
-      - name: Migrations no Supabase de producao
+      - name: Migrations no Supabase do ambiente
         # Falha aqui (senha errada, migration quebrada) para o deploy ANTES do
         # sync: o codigo novo nunca chega ao Space contra schema antigo.
         run: |
@@ -145,3 +170,30 @@ jobs:
           HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python scripts/smoke_deploy.py space --space-id "$HF_SPACE_ID" --timeout 1200
+
+  release:
+    # Depois do Space no ar, nunca antes: a tag marca o que esta' em producao.
+    # Reenvio (a tag ja' aponta para este commit) nao cria outra.
+    name: tag e Release SemVer
+    needs: deploy
+    if: github.ref_name == 'main' && needs.deploy.outputs.situacao == 'nova'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # a tag e a Release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Criar a tag e a Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Fork publico: sem isto o `gh` pode resolver o upstream.
+          GH_REPO: ${{ github.repository }}
+          VERSAO: ${{ needs.deploy.outputs.versao }}
+        # As notas sao a secao da versao no CHANGELOG.
+        run: |
+          python3 scripts/versao_release.py notas > "$RUNNER_TEMP/notas.md"
+          gh release create "v$VERSAO" --target "$GITHUB_SHA" \
+            --title "v$VERSAO" --notes-file "$RUNNER_TEMP/notas.md"

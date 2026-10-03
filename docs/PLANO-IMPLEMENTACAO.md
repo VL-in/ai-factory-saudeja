@@ -877,6 +877,148 @@ Juntam as verificações já descritas no corpo deste passo, no 10.1, nas revis�
 
 **Decisão que continua com a autora:** a porta única do Space (opções a/b/c no corpo deste passo). Além da API pública, ela define até onde o A2 consegue conferir a versão do modelo depois do deploy.
 
+### 11.2 — Ambientes dev/prod e release SemVer: roteiro do deploy em conjunto
+
+> Escrito em 2026-10-03 com as decisões da autora, registradas no [ADR-010](adr/adr-010-ambientes-e-releases.md):
+> - dois projetos Supabase e dois Spaces;
+> - `main` é produção, e o deploy cria a tag automaticamente;
+> - a produção usa um projeto Supabase novo, e o atual vira dev;
+> - a primeira release é a **v2.0.0**.
+>
+> **Este roteiro substitui as Fases B a D do 11.1 onde as duas divergirem.** A Fase A continua valendo.
+
+**Revisão final, 2026-10-03.**
+- `ruff`, `mypy` e `actionlint` limpos.
+- 482 testes rápidos verdes. Eram 467, e os 15 novos cobrem versão e ambiente.
+- O Supabase atual, que vira dev, tem migrations até `20260930000000`.
+- O remote do DVC **ainda responde `AuthorizationFailure`** com a credencial do `.env`. É bloqueante e é o passo 1 da Fase 1.
+- Continuam abertos, sem bloquear o piloto, o `414 URI too long` e o `enable_signup` em `[auth.email]`, que só afeta o ambiente local (achados 1 e 2 do 10.7).
+
+**O que entrou no código (Fase A2, sem commit ainda):**
+- `scripts/versao_release.py`, que lê a versão do topo do CHANGELOG.
+- `deploy.yml`:
+  - roda em push em `dev` e em `main`;
+  - escolhe o environment pelo branch;
+  - em `main`, confere a versão antes da migration;
+  - tem um job `release` que cria a tag e a Release depois de o Space responder.
+- `ci.yml`: novo job `versao da release (SemVer)` em PR para `main`.
+- `job_d2.yml`, `canario.yml` e `retrain.yml` usam `environment: production` com `deployment: false`.
+- Os PRs de promoção do modelo sobem o PATCH sozinhos.
+
+**Onde mora cada secret.** Secret de environment só chega ao job que declara aquele environment, e a regra de branch do environment recusa qualquer outro branch.
+
+| Nome | Tipo | Repositório | `dev` | `production` | De onde vem |
+|---|---|:-:|:-:|:-:|---|
+| `DVC_REMOTE_URL` | secret | ✅ | | | `.env` local |
+| `AZURE_STORAGE_CONNECTION_STRING_LEITURA` | secret | ✅ | | | SAS `rl` do container (comando no `.env.example`) |
+| `AZURE_STORAGE_CONNECTION_STRING` | secret | | | ✅ | account key, de escrita; só o re-treino usa |
+| `HF_TOKEN` | secret | | ✅ | ✅ | token *fine-grained* com escrita **só** no Space daquele ambiente |
+| `HF_SPACE_ID` | variável | | ✅ | ✅ | `<usuário>/<space>` de cada ambiente |
+| `SUPABASE_ACCESS_TOKEN` | secret | | ✅ | ✅ | token pessoal do CLI; gerar dois (`github-dev`, `github-prod`) para revogar um sem afetar o outro |
+| `SUPABASE_PROJECT_REF` | secret | | ✅ | ✅ | *Project Settings → General* de cada projeto |
+| `SUPABASE_DB_PASSWORD` | secret | | ✅ | ✅ | senha do banco de cada projeto |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | secret | | | ✅ | projeto de produção (*Settings → API Keys*). Nenhum job do Actions lê o banco de dev |
+| `INFOBIP_BASE_URL`, `INFOBIP_CHAVE_API` | secret | | | ✅ | painel da Infobip |
+| `HEALTHCHECKS_JOB_D2_URL`, `HEALTHCHECKS_RETRAIN_URL` | secret | | | ✅ | Healthchecks.io (Fase 4) |
+| `INFOBIP_REMETENTE`, `CANARIO_DESLIGADO` | variável | | | ✅ | `SaudeJa`; vazia |
+| `MESSAGING_PROVIDER` | variável | | | ✅ **só na Fase 4** | `infobip`. Enquanto não existir, o job D-2 falha no primeiro passo, que funciona como trava |
+
+Nos Spaces, e não no GitHub, cada um recebe em *Settings → Variables and secrets* o `SUPABASE_URL` e o `SUPABASE_SECRET_KEY` **do seu projeto**.
+
+Comandos (o `gh` pede o valor sem ecoá-lo):
+
+```powershell
+gh secret set DVC_REMOTE_URL                         # repositório
+gh secret set HF_TOKEN --env dev                     # environment dev
+gh secret set HF_TOKEN --env production              # environment production
+gh variable set HF_SPACE_ID --env dev --body "<usuario>/saudeja-dev"
+gh secret list; gh secret list --env dev; gh secret list --env production; gh variable list --env production
+```
+
+#### Fase 1 — contas (autora, nesta ordem)
+
+1. **Azure (bloqueante).** Em *Storage account → Networking*, deixe *Public network access* em "Enabled from all networks". Runner do GitHub não tem IP fixo, então a proteção passa a ser a SAS. Se essa opção já estiver ligada, a chave do `.env` foi rotacionada, e é preciso copiar de novo a connection string da `key1`.
+   - O pronto é `dvc status -c` responder "in sync".
+   - Em seguida, gere a SAS `rl` **com data de expiração anotada na agenda**.
+2. **Supabase de produção.**
+   - Crie um *New project* na região **South America (São Paulo)**, a mesma do dev (ADR-005, LGPD), e guarde a senha do banco num gerenciador de senhas.
+   - Em *Authentication → Sign In / Providers*, desligue "Allow new users to sign up" e suba a senha mínima para 8. Confira que o projeto de dev está igual.
+   - Gere os dois *Access Tokens* da conta.
+   - **Não rode `supabase link` nem `db push` contra produção da sua máquina.** O primeiro deploy aplica as 9 migrations, e a máquina local continua ligada ao projeto de dev.
+3. **Hugging Face.**
+   - Crie **dois Spaces à mão**, por exemplo `saudeja-dev` e `saudeja`, com Docker, template *Blank*, CPU basic e visibilidade pública. O smoke do deploy consulta a URL pública sem token.
+   - Em cada Space, cadastre os secrets `SUPABASE_URL` e `SUPABASE_SECRET_KEY` do projeto correspondente.
+   - No Space de dev, a variável `APP_ENV=dev` é opcional e mostra a aba de disparo manual. Sem `MESSAGING_PROVIDER`, o provedor é o stub.
+   - Gere dois tokens *fine-grained*, cada um com escrita só no seu Space.
+4. **GitHub.**
+   - Rode `gh repo set-default VL-in/ai-factory-saudeja`.
+   - Em *Settings → Actions → General → Workflow permissions*, mantenha "Read" e **marque "Allow GitHub Actions to create and approve pull requests"**.
+   - Em *Settings → Environments*:
+     - `dev`: *Deployment branches and tags* → *Selected* → `dev`.
+     - `production`: *Selected* → `main`. Em *Required reviewers*, coloque você, **só até a Fase 4**, e deixe "Prevent self-review" desmarcado, senão você não consegue aprovar o próprio deploy.
+   - Cadastre os secrets e as variáveis da tabela, exceto `MESSAGING_PROVIDER` e `HEALTHCHECKS_*`.
+
+#### Fase 2 — primeiro deploy em dev (juntas)
+
+1. Faça o commit das mudanças da Fase A2. A mensagem é preparada pelo Claude, e você roda o commit.
+2. `git push origin dev`. **Agora isso dispara o deploy de dev**: é o primeiro CI com secrets, aplica a `20261001000000` no Supabase de dev, sincroniza o Space de dev e roda o smoke. Acompanhe com `gh run watch`.
+3. Confira o Space de dev:
+   - a URL `https://<usuario>-saudeja-dev.hf.space` abre e o login com uma conta de dev funciona;
+   - a aba *Files* tem **exatamente** `Dockerfile`, `README.md`, `requirements/`, `src/`, `params.yaml`, `infra/deploy/entrypoint.sh` e `data/model.pkl`.
+
+   Se algo falhar, corrija em `dev` e envie de novo. A produção não foi tocada.
+
+#### Fase 3 — release v2.0.0 em produção (juntas)
+
+1. No CHANGELOG, renomeie `## [Não publicado] (Vanessa + Claude) - 2026-10-02` para `## [v2.0.0] (Vanessa + Claude) - <data do merge>`. O pronto, local, é `python scripts/versao_release.py conferir` responder `v2.0.0: nova`. Depois, commit e push em `dev`.
+2. Rode `gh pr create --base main --head dev --title "Release v2.0.0" -R VL-in/ai-factory-saudeja`. Pela web, confira que o *base repository* não é o upstream. O CI roda, incluindo `versao da release (SemVer)`.
+3. Faça o merge com **"Create a merge commit"**. **Logo em seguida**, rode `gh workflow disable job_d2.yml`, `gh workflow disable canario.yml` e `gh workflow disable retrain.yml`. A partir do merge, os três existem em `main` com cron.
+4. O deploy roda o CI e para em *Review deployments*. Você aprova, e ele segue esta ordem:
+   1. guarda do campeão;
+   2. `v2.0.0: nova`;
+   3. staging;
+   4. `db push` das **9 migrations** no projeto vazio;
+   5. sync;
+   6. smoke;
+   7. job `tag e Release SemVer`.
+
+   O pronto é `gh release view v2.0.0`.
+5. Atualize `dev`: `git checkout dev`, `git fetch origin`, `git merge --ff-only origin/main` e `git push origin dev`. O push redeploya dev com o mesmo conteúdo.
+6. Proteja `main` em *Settings → Branches*:
+   - exija PR e os checks `lint, tipos e testes`, `imagem de deploy (build + smoke)`, `dependency-review` e `versao da release (SemVer)`;
+   - deixe **zero aprovações**.
+
+   Os nomes dos checks só aparecem para seleção depois do PR do passo 2.
+
+#### Fase 4 — produção em operação
+
+1. **Contas da equipe em produção.** A credencial de produção fica só na sessão do terminal. O `load_dotenv` não sobrescreve variável já definida, então o `.env` de dev continua intocado:
+   ```powershell
+   $env:SUPABASE_URL = "<url do projeto de produção>"
+   $s = Read-Host "SUPABASE_SECRET_KEY de producao" -AsSecureString
+   $env:SUPABASE_SECRET_KEY = [Net.NetworkCredential]::new("", $s).Password
+   python scripts/criar_funcionario.py recepcao@clinica.com.br
+   Remove-Item Env:SUPABASE_URL, Env:SUPABASE_SECRET_KEY
+   ```
+2. Confira a produção: a URL pública abre, o login funciona e o cadastro está fechado. Meça o cold start contra o SLO §2.
+3. **Tire o revisor obrigatório de `production`.** Com ele, o job D-2 esperaria aprovação todo dia.
+4. Prepare a operação:
+   - crie a variável `MESSAGING_PROVIDER=infobip` e os secrets `HEALTHCHECKS_*`;
+   - reative os três workflows com `gh workflow enable`;
+   - faça o ensaio do job D-2 do 11.1: paciente de teste com o seu telefone, porque a Infobip trial só manda para número verificado, e dois `workflow_dispatch` seguidos sem SMS em dobro;
+   - remova o paciente de teste depois.
+5. **Re-treino.** Com o banco de produção vazio, o `retrain.yml` sai com o código 2 ("nenhum dado novo") até a clínica registrar desfechos. É o comportamento esperado, e não dá para ensaiar o PR do canário antes disso.
+6. Configure o UptimeRobot na URL de produção e só então divulgue a URL.
+
+#### Depois do primeiro deploy: o ciclo normal
+
+- **Release de código.** O trabalho acontece em `dev`, e cada push publica no Space de dev. Para liberar, renomeie `[Não publicado]` para a versão nova e abra o PR `dev` → `main`. O merge deploya e cria a tag.
+  - MAJOR: incompatível.
+  - MINOR: funcionalidade nova ou migration aditiva.
+  - PATCH: correção.
+- **Release de modelo.** O PR do re-treino ou da promoção do canário já traz a seção PATCH. Depois do merge, rode `git merge origin/main` em `dev`. Esse merge não é *fast-forward* e pode dar conflito no CHANGELOG, que se resolve mantendo as duas seções.
+- **Rollback.** É um PR de `git revert` com versão PATCH nova. O deploy reenvia só o HEAD de `main`, e `workflow_dispatch` em `main` refaz o deploy da versão atual sem criar outra Release. A migration não volta, e é a regra do 10.1 (só aditiva junto do código) que mantém o código anterior compatível com o schema novo.
+
 ---
 
 ## Passo 12 — Validação final para o pitch (Semana 16)

@@ -35,6 +35,14 @@ jobs:
   job-d2:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Secrets de producao (Supabase, Infobip, ...) vivem no environment
+    # `production`, nao no repositorio. `deployment: false`: o job usa os
+    # secrets, mas nao entra no historico de deploys -- la' so' fica o deploy.yml.
+    # Por isso o environment de producao nao pode ter revisor obrigatorio: o
+    # revisor valeria tambem aqui e pararia o job agendado esperando aprovacao.
+    environment:
+      name: production
+      deployment: false
     env:
       # Modelo: o mesmo remote do deploy, com SAS so' de leitura.
       DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
@@ -49,7 +57,7 @@ jobs:
       HEALTHCHECKS_JOB_D2_URL: ${{ secrets.HEALTHCHECKS_JOB_D2_URL }}
       APP_ENV: prod
       # Rollback manual instantaneo do canario (ADR-009): `true` na variavel
-      # do repositorio faz o job ignorar data/canario/ ja' na proxima execucao,
+      # do environment `production` faz o job ignorar data/canario/ ja' na proxima execucao,
       # sem PR nem deploy.
       CANARIO_DESLIGADO: ${{ vars.CANARIO_DESLIGADO }}
     steps:
