@@ -1,0 +1,19 @@
+# Dependabot: as actions ficam fixadas por SHA, entao
+# atualiza-las a mao seria trabalho recorrente; e os requirements/ sao pinados
+# com ==. PR do Dependabot nao recebe os secrets do repositorio -- o CI dele
+# falha no `dvc pull` ate' os mesmos secrets existirem em "Dependabot secrets".
+# Aceito: pular os testes sem modelo esconderia o teste de paridade UI x API.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    target-branch: dev
+
+  - package-ecosystem: pip
+    directory: "/requirements"
+    schedule:
+      interval: weekly
+    target-branch: dev
+    open-pull-requests-limit: 5

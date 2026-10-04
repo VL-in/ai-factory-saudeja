@@ -6,6 +6,7 @@ Não testam lógica de negócio -- servem para pegar "drift" de configuração
 ausente).
 """
 import ast
+import re
 import subprocess
 from pathlib import Path
 
@@ -61,6 +62,11 @@ def test_dvc_yaml_deps_e_outs_existem_no_repo():
         for dep in stage.get("deps", []):
             if dep in outs_de_outros_stages:
                 continue
+            # Dataset versionado por DVC (`<arquivo>.dvc` no git, conteúdo no
+            # remote): no CI só o model.pkl é baixado, e o que
+            # garante a existência do dado é o próprio `.dvc`.
+            if (REPO_ROOT / f"{dep}.dvc").exists():
+                continue
             caminho = REPO_ROOT / dep
             assert caminho.exists(), (
                 f"dep '{dep}' do stage '{nome_stage}' não existe no repositório "
@@ -83,7 +89,7 @@ def test_dvc_lock_consistente_com_dvc_yaml():
 
 def test_requirements_nao_tem_pacotes_duplicados():
     """requirements.txt foi dividido em requirements/{base,train,api}.txt
-    (Passo 3) -- cada arquivo próprio (ignorando linhas "-r ...", que só
+    -- cada arquivo próprio (ignorando linhas "-r ...", que só
     referenciam outro arquivo) não deve ter pacote repetido dentro de si."""
     for caminho in (REPO_ROOT / "requirements").glob("*.txt"):
         linhas = caminho.read_text(encoding="utf-8").splitlines()
@@ -100,7 +106,8 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
     """O elo dvc.yaml -> dockerfile deixou de ser direto (`docker build -f
     dockerfile`) e passou a ter o compose no meio: os stages rodam
     `docker compose run ... train`, e é o serviço `train` que aponta para o
-    dockerfile (Passo 9, decisão 5 -- `%cd%` não expandia no runner Linux).
+    dockerfile (`%cd%`, que o mount antigo usava, não expandia no runner
+    Linux).
     A checagem segue a mesma: o dockerfile que o pipeline usa existe de fato,
     agora percorrendo os dois saltos."""
     dvc_yaml = yaml.safe_load((REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8"))
@@ -113,7 +120,7 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
     for nome, stage in dvc_yaml["stages"].items():
         assert "docker compose run" in stage["cmd"], (
             f"stage '{nome}' não usa `docker compose run` -- um `docker run` com mount "
-            "montado à mão volta a quebrar no runner Linux (Passo 9, decisão 5)"
+            "montado à mão volta a quebrar no runner Linux"
         )
         # Sem estas deps, mudar a imagem ou o mount não invalidaria o stage.
         for dep in ("dockerfile", "docker-compose.yml"):
@@ -126,7 +133,7 @@ def test_dockerfile_referenciado_pelo_dvc_yaml_existe():
 # `nome_completo` em outra tabela sem ninguém notar -- o que é exatamente o
 # tipo de drift que esta guarda existe para pegar.
 COLUNAS_DE_PII_PERMITIDAS_POR_MIGRATION = {
-    # Passo 7: sem contato de envio não existe lembrete pago, que é o produto.
+    # Sem contato de envio não existe lembrete pago, que é o produto.
     "telefone": "20260920020000_telefone_paciente.sql",
     # 2026-09-28 (ADR-007): a fila do dia é operada por uma pessoa, que precisa
     # chamar o paciente pelo nome -- o hash sha256 não serve para isso.
@@ -151,7 +158,7 @@ def test_migrations_sql_sem_coluna_proibida_de_pii():
     escapa)."""
     colunas_proibidas = ("nome", "cpf", "email", "telefone")
     migrations_dir = REPO_ROOT / "supabase" / "migrations"
-    assert migrations_dir.exists(), "supabase/migrations/ não existe (Passo 5)"
+    assert migrations_dir.exists(), "supabase/migrations/ não existe"
 
     for migration in migrations_dir.glob("*.sql"):
         linhas_sem_comentario = (
@@ -190,15 +197,15 @@ def test_excecoes_de_pii_apontam_para_migrations_que_existem():
 
 
 def test_export_treino_sem_coluna_proibida_de_pii():
-    """`src/export_treino.py` (Passo 9.0) monta um CSV a partir de dados reais
+    """`src/export_treino.py` monta um CSV a partir de dados reais
     de produção -- mesmo critério de PII do schema (`test_migrations_sql_...`),
     aplicado agora ao código que gera o dataset de treino. `telefone` é a
-    exceção deliberada no schema (Passo 7, contato de envio), mas o export
+    exceção deliberada no schema (contato de envio), mas o export
     nunca deveria emiti-la -- por isso ela some da lista de proibidas do
     schema e volta a ser proibida aqui."""
     colunas_proibidas = ("nome", "cpf", "email", "telefone")
     caminho = REPO_ROOT / "src" / "export_treino.py"
-    assert caminho.exists(), "src/export_treino.py não existe (Passo 9.0)"
+    assert caminho.exists(), "src/export_treino.py não existe"
 
     texto = caminho.read_text(encoding="utf-8").lower()
     # COLUNAS_SAIDA é a lista literal de colunas que o CSV final carrega --
@@ -385,8 +392,256 @@ def test_a_guarda_de_log_realmente_detecta_pii():
 def test_architecture_md_sem_placeholder_generico():
     """docs/architecture.md é um template genérico -- este teste falha se algum
     placeholder tipo '[e.g., ...]' ainda não foi preenchido com conteúdo real
-    do projeto (ver Passo 0 do PLANO-IMPLEMENTACAO.md)."""
+    do projeto."""
     texto = (REPO_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
     assert "[e.g.," not in texto, (
         "docs/architecture.md ainda contém placeholder(s) '[e.g., ...]' não preenchido(s)"
     )
+
+
+# --- workflows do GitHub Actions ----------------------------------------------
+
+WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+
+
+def _passos(workflow: str) -> list[dict]:
+    conteudo = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
+    return [passo for job in conteudo["jobs"].values() for passo in job.get("steps", [])]
+
+
+def test_actions_de_terceiros_fixadas_por_sha():
+    """A action de deploy recebe o HF_TOKEN; uma tag pode ser
+    movida para outro código, um SHA não. O Dependabot atualiza os SHAs."""
+    soltas = [
+        f"{arquivo.name}: {passo['uses']}"
+        for arquivo in WORKFLOWS.glob("*.yml")
+        for passo in _passos(arquivo.name)
+        if "uses" in passo
+        and not passo["uses"].startswith("./")
+        and not re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", passo["uses"])
+    ]
+    assert soltas == [], f"actions sem SHA fixo: {soltas}"
+
+
+def test_dvc_pull_sempre_com_alvo_fora_do_re_treino():
+    """`dvc pull` sem alvo traria o dataset de treino -- e, no
+    deploy, ele iria para o Space junto. Só o re-treino precisa do dado."""
+    sem_alvo = [
+        f"{arquivo.name}: {linha.strip()}"
+        for arquivo in WORKFLOWS.glob("*.yml")
+        if arquivo.name != "retrain.yml"
+        for linha in arquivo.read_text(encoding="utf-8").splitlines()
+        if re.search(r"\bdvc pull\s*$", linha)
+    ]
+    assert sem_alvo == [], f"dvc pull sem alvo: {sem_alvo}"
+
+
+def test_deploy_sobe_o_staging_e_nao_o_checkout():
+    sync = [p for p in _passos("deploy.yml") if "hub-sync" in p.get("uses", "")]
+    assert len(sync) == 1
+    assert sync[0]["with"]["subdirectory"] == "build/space"
+
+
+def test_deploy_migra_o_banco_antes_do_sync_e_depois_da_guarda_do_campeao():
+    """Migration antes do sync (o Space rebuilda ao receber os
+    arquivos). Guarda do campeão antes da migration: deploy que não vai
+    acontecer não deixa o banco migrado."""
+    nomes = [p.get("name", p.get("uses", "")) for p in _passos("deploy.yml")]
+    guarda = next(i for i, n in enumerate(nomes) if "campeao" in n)
+    migracao = next(i for i, n in enumerate(nomes) if "Migrations" in n)
+    sync = next(i for i, n in enumerate(nomes) if "hub-sync" in n or "Sync" in n)
+    assert guarda < migracao < sync
+
+
+def test_dependencias_do_dvc_estao_em_lf_no_checkout():
+    """O DVC 3 hasheia os BYTES das dependências dos stages. Com CRLF no
+    checkout de Windows e LF no runner Linux, o md5 do dvc.lock nunca batia
+    no GitHub Actions -- o re-treino reexecutava tudo mesmo sem dado novo e o
+    código 2 do gate não disparava. O
+    `.gitattributes` força LF no checkout; este teste pega o arquivo novo que
+    um editor de Windows tenha gravado com CRLF antes de ele virar commit."""
+    dvc_yaml = yaml.safe_load((REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8"))
+    com_crlf = sorted(
+        {
+            dep
+            for stage in dvc_yaml["stages"].values()
+            for dep in stage.get("deps", [])
+            if (REPO_ROOT / dep).is_file()
+            and not (REPO_ROOT / f"{dep}.dvc").exists()
+            and b"\r\n" in (REPO_ROOT / dep).read_bytes()
+        }
+    )
+    assert com_crlf == [], (
+        f"dependências do dvc.yaml com CRLF: {com_crlf} -- converta para LF "
+        "(o .gitattributes já faz isso no checkout)"
+    )
+
+
+# --- canário do modelo (ADR-009) ------------------------------------------------
+
+
+def test_canario_nao_aciona_deploy_mas_a_promocao_aciona():
+    """Abrir ou reverter um canário não muda nada no Space (o canário não
+    entra no staging); promover muda champion_metrics.json e dvc.lock, que
+    precisam continuar disparando o deploy."""
+    conteudo = yaml.safe_load((WORKFLOWS / "deploy.yml").read_text(encoding="utf-8"))
+    # PyYAML lê a chave `on:` como o booleano True.
+    ignorados = conteudo[True]["push"]["paths-ignore"]
+    assert {"data/canario.json", "data/canario/**", "data/canario_historico.json"} <= set(
+        ignorados
+    )
+    assert not any(
+        re.fullmatch(p.replace("**", ".*").replace("*", "[^/]*"), alvo)
+        for p in ignorados
+        for alvo in ("data/champion_metrics.json", "dvc.lock", "data/consultas-treino.csv.dvc")
+    )
+
+
+def test_job_d2_nao_morre_se_o_modelo_do_canario_nao_baixar():
+    """Um canário inalcançável não pode custar o lembrete de ninguém: o job
+    segue com o campeão e falha no fim (src/canario.py::preparar_para_job)."""
+    texto = (WORKFLOWS / "job_d2.yml").read_text(encoding="utf-8")
+    linha = next(
+        i for i, t in enumerate(texto.splitlines()) if "dvc pull data/canario/model.pkl" in t
+    )
+    seguinte = texto.splitlines()[linha + 1]
+    assert "||" in texto.splitlines()[linha] or seguinte.strip().startswith("||")
+
+
+def test_canario_e_encerrado_sempre_por_pr_nunca_por_push_em_main():
+    texto = (WORKFLOWS / "canario.yml").read_text(encoding="utf-8")
+    assert "gh pr create" in texto
+    assert 'git push origin "$BRANCH"' in texto
+    assert "git push origin main" not in texto
+
+
+# --- ambientes dev/production e versão da release ---------------------------------
+
+# Secrets que só existem nos environments: um job que os lê sem declarar o
+# environment receberia vazio (ou, pior, um secret de repositório esquecido).
+_SECRETS_DE_AMBIENTE = re.compile(
+    r"secrets\.(SUPABASE_URL|SUPABASE_SECRET_KEY|SUPABASE_DB_PASSWORD|SUPABASE_PROJECT_REF"
+    r"|SUPABASE_ACCESS_TOKEN|INFOBIP_\w+|HF_TOKEN|HEALTHCHECKS_\w+"
+    r"|AZURE_STORAGE_CONNECTION_STRING_ESCRITA)\b"
+)
+
+
+def test_jobs_com_secret_de_ambiente_declaram_o_environment():
+    """Separação dev/prod: o Supabase, o Space, a Infobip e a SAS de
+    escrita do Azure ficam nos environments. Os jobs agendados usam
+    `production` sem criar deploy (`deployment: false`); o deploy escolhe o
+    environment pelo branch."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        conteudo = yaml.safe_load(arquivo.read_text(encoding="utf-8"))
+        for nome, job in conteudo["jobs"].items():
+            if not _SECRETS_DE_AMBIENTE.search(yaml.safe_dump(job)):
+                continue
+            ambiente = job.get("environment")
+            assert ambiente, f"{arquivo.name}::{nome} lê secret de ambiente sem environment"
+            if arquivo.name == "deploy.yml":
+                assert ambiente == "${{ github.ref_name == 'main' && 'production' || 'dev' }}"
+            else:
+                assert ambiente == {"name": "production", "deployment": False}, (
+                    f"{arquivo.name}::{nome}"
+                )
+
+
+def test_workflows_usam_sas_do_azure_e_so_o_retreino_escreve():
+    """A account key lê, grava e apaga na conta inteira e gera SAS novas:
+    nenhum workflow a recebe. A SAS de escrita (rlcw) fica só no re-treino, o
+    único que faz `dvc push`; os demais leem com a SAS `rl`."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        texto = arquivo.read_text(encoding="utf-8")
+        assert not re.search(r"secrets\.AZURE_STORAGE_CONNECTION_STRING\b", texto), (
+            f"{arquivo.name} lê a account key"
+        )
+        assert ("secrets.AZURE_STORAGE_CONNECTION_STRING_ESCRITA" in texto) == (
+            arquivo.name == "retrain.yml"
+        ), arquivo.name
+        comandos = [
+            passo.get("run", "")
+            for job in yaml.safe_load(texto)["jobs"].values()
+            for passo in job.get("steps", [])
+        ]
+        assert not any("dvc push" in c for c in comandos) or arquivo.name == "retrain.yml", (
+            f"{arquivo.name} faz `dvc push` com a SAS de leitura"
+        )
+
+
+def test_filtro_de_deploy_do_ci_espelha_o_paths_ignore_do_deploy():
+    """O job `versao` do CI só exige versão nova quando o merge vai deployar.
+    Se o filtro e o `paths-ignore` divergirem, ou um PR que deploya passa sem
+    versão (e o deploy falha depois do merge), ou um PR só de docs é barrado."""
+    deploy = yaml.safe_load((WORKFLOWS / "deploy.yml").read_text(encoding="utf-8"))
+    ignorados = deploy[True]["push"]["paths-ignore"]
+    ci = yaml.safe_load((WORKFLOWS / "ci.yml").read_text(encoding="utf-8"))
+    passo = next(p for p in ci["jobs"]["mudancas"]["steps"] if p.get("id") == "deploya")
+    filtro = re.compile(passo["env"]["IGNORADOS_PELO_DEPLOY"])
+
+    def glob_para_regex(glob: str) -> str:
+        return re.escape(glob).replace(r"\*\*", ".*").replace(r"\*", "[^/]*")
+
+    def ignorado_pelo_deploy(caminho: str) -> bool:
+        return any(re.fullmatch(glob_para_regex(p), caminho) for p in ignorados)
+
+    for caminho in (
+        "docs/logs/CHANGELOG.md",
+        "docs/adr/adr-009-canario-do-modelo.md",
+        "data/canario.json",
+        "data/canario/model.pkl.dvc",
+        "data/canario_historico.json",
+        "data/champion_metrics.json",
+        "dvc.lock",
+        "src/jobs/inferencia_diaria.py",
+        "README.md",
+        "src/README.md",
+        "data/canario.json.salvo",
+    ):
+        assert bool(filtro.search(caminho)) == ignorado_pelo_deploy(caminho), caminho
+
+
+def test_release_so_depois_do_space_no_ar_e_so_em_main():
+    deploy = yaml.safe_load((WORKFLOWS / "deploy.yml").read_text(encoding="utf-8"))
+    release = deploy["jobs"]["release"]
+    assert release["needs"] == "deploy"
+    assert "github.ref_name == 'main'" in release["if"]
+    nomes = [p.get("name", "") for p in deploy["jobs"]["deploy"]["steps"]]
+    versao = next(i for i, n in enumerate(nomes) if "Versao da release" in n)
+    migracao = next(i for i, n in enumerate(nomes) if "Migrations" in n)
+    assert versao < migracao, "versão inválida tem de parar o deploy antes de migrar o banco"
+
+
+# --- operação: alertas e pontos humanos -------------------------------------------
+
+
+def test_todo_workflow_agendado_pinga_o_healthchecks_no_sucesso_e_na_falha():
+    """Workflow agendado é desativado em silêncio depois de inatividade do
+    repositório (ADR-006). Só um ping que deixa de chegar denuncia isso, então
+    todo cron tem o próprio dead-man's-switch."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        conteudo = yaml.safe_load(arquivo.read_text(encoding="utf-8"))
+        if "schedule" not in conteudo[True]:
+            continue
+        for nome, job in conteudo["jobs"].items():
+            comandos = [p.get("run", "") for p in job.get("steps", [])]
+            pings = [c for c in comandos if "curl" in c and "HEALTHCHECKS_" in c]
+            assert any("/fail" not in c for c in pings), (
+                f"{arquivo.name}::{nome} sem ping de sucesso"
+            )
+            assert any("/fail" in c for c in pings), f"{arquivo.name}::{nome} sem ping de falha"
+
+
+def test_prs_automaticos_pedem_revisao_sem_arriscar_o_ci():
+    """PR do robô parado bloqueia o re-treino seguinte (código 4) sem ninguém
+    ver. O pedido de revisão notifica a pessoa, mas vem depois do
+    `gh workflow run ci.yml` e não derruba o passo: se falhar, o PR ainda
+    precisa do check que a proteção de `main` exige."""
+    for nome in ("retrain.yml", "canario.yml"):
+        texto = (WORKFLOWS / nome).read_text(encoding="utf-8")
+        assert "--add-reviewer" in texto, nome
+        assert texto.index("gh workflow run ci.yml") < texto.index("--add-reviewer"), nome
+        linhas = texto.splitlines()
+        i = next(i for i, linha in enumerate(linhas) if "--add-reviewer" in linha)
+        assert linhas[i + 1].strip().startswith("||"), (
+            f"{nome}: pedido de revisão não pode falhar o passo"
+        )

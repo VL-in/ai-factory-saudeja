@@ -1,4 +1,4 @@
--- SaudeJa - Passo 8.5: observabilidade de aplicacao (ADR-006).
+-- SaudeJa - observabilidade de aplicacao (ADR-006).
 --
 -- Camada INTERNA da decisao do ADR-006, e a unica que guarda estado: o log de
 -- runtime do HF Space e' efemero (restart/rebuild apaga, sem busca nem

@@ -1,0 +1,227 @@
+# Deploy no Hugging Face Space.
+#
+# Ordem, num workflow so':
+#
+#   ci (reutilizado) -> dvc pull do modelo -> guarda do campeao -> staging
+#     -> supabase db push -> sync do staging para o Space -> espera o Space
+#     buildar e responder
+#
+# - O CI e' o primeiro job (workflow_call): o SHA testado e' o deployado, e
+#   falha no CI deixa o deploy PULADO por construcao.
+# - A guarda do campeao e o staging vem ANTES da migration: sao checagens sem
+#   efeito colateral, e um deploy que nao vai acontecer nao deve deixar o banco
+#   migrado.
+# - A migration vem ANTES do sync: o Space rebuilda sozinho ao
+#   receber os arquivos, entao nao ha janela depois do sync em que migrar seja
+#   seguro. Migration restritiva (drop, set not null, check mais estreito)
+#   nunca vai no mesmo deploy do codigo que a exige -- isso e' disciplina de
+#   quem escreve a migration, nao algo que este YAML consiga impedir.
+# - O sync sobe um diretorio de STAGING com lista fechada, nunca o checkout
+#   -- a action faz `hf upload` por HTTP, sem git, e nao respeita os
+#   .gitignore aninhados -- subiria .dvc/config.local (URL do remote), o cache
+#   do DVC e o dataset de treino para um Space publico fora do Brasil.
+# - A lista fechada e' de scripts/montar_staging_space.py, e o job `imagem` do
+#   CI ja' buildou e testou (como uid 1000) a imagem a partir do mesmo staging
+#   neste SHA -- nao ha segundo docker build aqui.
+# - O sync nao e' o fim: o ultimo passo espera o Space buildar no commit novo
+#   e responder na URL publica.
+#
+# Dois ambientes, cada um com Space, projeto Supabase e secrets proprios
+# (environments do GitHub):
+#
+#   push em dev  -> environment `dev`: Space de dev e Supabase de dev. E' o
+#                   ensaio da migration antes de ela chegar a producao.
+#   push em main -> environment `production`. `main` e' producao: o deploy
+#                   confere a versao do topo do CHANGELOG antes de migrar e,
+#                   com o Space no ar, cria a tag vX.Y.Z e a Release
+#                   (scripts/versao_release.py).
+name: Deploy (HF Space)
+
+on:
+  push:
+    branches: [main, dev]
+    # Mudanca so' de documentacao nao rebuilda o Space (cold start, SLO §2).
+    # dvc.lock e data/champion_metrics.json NAO entram aqui: sao justamente o
+    # merge do PR de promocao do re-treino.
+    # O canario tambem nao (ADR-009): ele vive so' no runner do job D-2 e
+    # nao entra no staging, entao abrir ou reverter um canario nao muda nada
+    # no Space. A PROMOCAO muda champion_metrics.json e dvc.lock, e deploya.
+    paths-ignore:
+      - "docs/**"
+      # O README do GitHub nao vai para o Space: o staging escreve um README
+      # proprio, com o front-matter do SDK (scripts/montar_staging_space.py).
+      - "README.md"
+      - "data/canario.json"
+      - "data/canario/**"
+      - "data/canario_historico.json"
+  # Reenvio manual. Em `main`, reenviar a versao que ja' tem tag neste commit
+  # refaz o deploy sem criar outra Release.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    # 20 min de ate' o sync + ate' 25 de espera pelo build do Space.
+    timeout-minutes: 45
+    # Historico de deploys na aba Environments do GitHub (evidencia para o
+    # pitch). Os secrets de cada ambiente ficam so' no environment dele: um
+    # push em dev nunca enxerga o Supabase nem o Space de producao. Outro
+    # branch cai em `dev`, cuja regra de branch o recusa.
+    environment: ${{ github.ref_name == 'main' && 'production' || 'dev' }}
+    concurrency:
+      group: deploy-space-${{ github.ref_name }}
+      cancel-in-progress: false # um deploy pela metade e' pior que um atrasado
+    outputs:
+      versao: ${{ steps.versao.outputs.versao }}
+      situacao: ${{ steps.versao.outputs.situacao }}
+    env:
+      DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
+      # Nivel do JOB, nao so' do `db push`: o `supabase link` tambem precisa do
+      # token, do ref e da senha. O ref e' secret pelo mesmo motivo
+      # da URL do remote do DVC: identificador de infraestrutura fora do git.
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # as tags, para conferir a versao
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements/dvc.txt
+
+      - name: Instalar DVC (e o PyYAML que a guarda usa para ler o threshold)
+        # O pin do PyYAML vem de requirements/base.txt -- um lugar so'.
+        run: pip install -r requirements/dvc.txt "$(grep -i '^pyyaml==' requirements/base.txt)"
+
+      - name: Baixar o modelo (so' ele)
+        run: |
+          dvc remote add --local -f azure "$DVC_REMOTE_URL"
+          dvc pull data/model.pkl
+
+      - name: So' o campeao vai para producao
+        # sha do model.pkl e decision.threshold contra data/champion_metrics.json
+        # (src/campeao.py): um `dvc repro` manual commitado mudaria o
+        # dvc.lock e levaria ao Space um modelo que nunca passou pelo gate.
+        run: python src/campeao.py
+
+      - name: Versao da release (SemVer)
+        # So' em producao, e antes da migration: versao ja' publicada em outro
+        # commit, menor que a ultima tag ou item esquecido em [Nao publicado]
+        # param o deploy sem tocar no banco.
+        id: versao
+        if: github.ref_name == 'main'
+        run: python scripts/versao_release.py conferir --sha "$GITHUB_SHA"
+
+      - name: Staging com lista fechada
+        # A lista mora em scripts/montar_staging_space.py, o mesmo script que o
+        # job `imagem` do CI usou para buildar e testar a imagem neste SHA
+        # Arquivo novo no repositorio nao vai para producao
+        # sem alguem acrescenta-lo la' -- mesmo principio da allowlist de
+        # `eventos_app` (src/observabilidade.py). O script tambem recusa dado de treino,
+        # config do DVC ou ambiente no que sobe, e lista o que entrou.
+        run: python scripts/montar_staging_space.py
+
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: 2.117.0 # fixa: o CLI muda o comportamento do db push entre versoes
+
+      - name: Migrations no Supabase do ambiente
+        # Falha aqui (senha errada, migration quebrada) para o deploy ANTES do
+        # sync: o codigo novo nunca chega ao Space contra schema antigo.
+        #
+        # Sem o add-on de IPv4, o host direto do banco so' tem IPv6, e o runner
+        # nao tem IPv6: o `db push` so' conecta pelo pooler, cuja URL o CLI le de
+        # supabase/.temp/pooler-url. O `supabase link` grava esse arquivo como
+        # best-effort -- se a consulta falha, ele engole o erro, diz "Finished" e
+        # o `db push` morre com "IPv6 is not supported". Por isso a URL vem da
+        # mesma API aqui, falhando alto: 401 e' o token, 403 e' token com escopo
+        # sem "Connection Pooling: Read" (database_pooling_config_read), 404 e' o
+        # ref. O corpo da resposta vai para o log: com `-o`, o --fail-with-body
+        # grava o erro no arquivo e o log so' mostraria o status. O CLI tira o
+        # placeholder da senha e forca a porta 5432 (modo sessao) ao ler o
+        # arquivo, e a senha continua vindo de SUPABASE_DB_PASSWORD, nunca da URL.
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
+          if ! curl --fail-with-body -sS -o "$RUNNER_TEMP/pooler.json" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/database/pooler"; then
+            cat "$RUNNER_TEMP/pooler.json"; echo
+            echo "::error::A API do Supabase recusou a consulta do pooler (403: o SUPABASE_ACCESS_TOKEN com escopo precisa de Connection Pooling: Read)."
+            exit 1
+          fi
+          jq -r 'map(select(.database_type == "PRIMARY"))[0].connection_string // empty' \
+            "$RUNNER_TEMP/pooler.json" > supabase/.temp/pooler-url
+          if [ ! -s supabase/.temp/pooler-url ]; then
+            echo "::error::A API do Supabase nao devolveu pooler PRIMARY para o projeto."
+            exit 1
+          fi
+          supabase db push
+
+      - name: Sync do staging para o Space
+        uses: huggingface/hub-sync@fdffea8e04104d0bd4e3181c5feb3025f0433ff5 # v0.3.0
+        with:
+          github_repo_id: ${{ github.repository }}
+          # Variavel do environment, nao valor versionado: o id do Space e'
+          # identificador de infraestrutura.
+          huggingface_repo_id: ${{ vars.HF_SPACE_ID }}
+          hf_token: ${{ secrets.HF_TOKEN }}
+          repo_type: space
+          space_sdk: docker
+          private: "false"
+          subdirectory: build/space
+          hf_version: "2.0.0" # fixa: a action instalaria a ultima por padrao
+
+      - name: Esperar o Space buildar e responder
+        # Sem isto o workflow terminava verde no sync, mesmo com o build do
+        # Space quebrado. Espera o runtime chegar no commit que acabou de subir
+        # (sha do runtime == sha do repositorio do Space), falha em
+        # BUILD_ERROR/RUNTIME_ERROR e bate em /_stcore/health na URL publica.
+        # A model_version nao e' conferida aqui: a API (8000) nao e' publica
+        # enquanto nao houver decisao sobre a porta unica do Space (so' a UI,
+        # em 7860, e' publicada).
+        timeout-minutes: 25
+        env:
+          HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python scripts/smoke_deploy.py space --space-id "$HF_SPACE_ID" --timeout 1200
+
+  release:
+    # Depois do Space no ar, nunca antes: a tag marca o que esta' em producao.
+    # Reenvio (a tag ja' aponta para este commit) nao cria outra.
+    name: tag e Release SemVer
+    needs: deploy
+    if: github.ref_name == 'main' && needs.deploy.outputs.situacao == 'nova'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # a tag e a Release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Criar a tag e a Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Fork publico: sem isto o `gh` pode resolver o upstream.
+          GH_REPO: ${{ github.repository }}
+          VERSAO: ${{ needs.deploy.outputs.versao }}
+        # As notas sao a secao da versao no CHANGELOG.
+        run: |
+          python3 scripts/versao_release.py notas > "$RUNNER_TEMP/notas.md"
+          gh release create "v$VERSAO" --target "$GITHUB_SHA" \
+            --title "v$VERSAO" --notes-file "$RUNNER_TEMP/notas.md"

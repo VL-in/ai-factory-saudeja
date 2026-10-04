@@ -6,12 +6,98 @@ O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.
 Registramos o que muda para quem usa o sistema: comportamento visível, correções de
 bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. Detalhe
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
-nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
+nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
+
+## [v2.0.0] (Vanessa + Claude) - 2026-10-04
+
+Primeiro deploy do SaudeJá em produção. O SaudeJá prevê quais pacientes têm alta chance de faltar à consulta e manda lembrete por SMS só para eles, dois dias antes do atendimento, sem o custo de avisar todo mundo. A partir desta versão, cada publicação em produção ganha um número de versão e uma página de Release com as mudanças.
+
+### Adicionado
+- **Ambientes de desenvolvimento e de produção separados**, cada um com Space, banco e credenciais próprios ([ADR-010](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-010-ambientes-e-releases.md)). Enviar código ao branch `dev` publica no ambiente de desenvolvimento e aplica as migrations no banco de desenvolvimento primeiro. A produção usa um banco novo, que nunca recebe dado de teste.
+- **Releases numeradas (SemVer).** Cada publicação em produção vira uma versão `vX.Y.Z` no GitHub, com estas notas. A versão vem do topo deste arquivo e é conferida antes de o banco de produção ser migrado. A troca do modelo pelo re-treino ou pelo canário sobe a versão PATCH automaticamente.
+- **Alerta diário de observabilidade.** Todo dia às 10h17, um workflow confere as últimas 24 horas e avisa por e-mail se alguma predição ficou sem explicação, se houve erro (inclusive paciente em quarentena), se o job D-2 não rodou ou se ele levou mais de 10 minutos. Antes, essa degradação só aparecia para quem abrisse a aba "Observabilidade".
+
+### Modificado
+- A imagem de deploy roda como usuário não-root (uid 1000), a mesma condição do Space, e já traz o código compilado.
+- **O deploy só termina verde quando o Space está no ar com a versão nova.** Antes, o workflow terminava logo depois de enviar os arquivos, mesmo que o build do Space falhasse. Agora ele espera o Space buildar o commit enviado e responder na URL pública, e falha se o build ou a inicialização quebrarem.
+- O CI builda e testa a imagem a partir dos mesmos arquivos que vão para o Space, e não do repositório inteiro.
+- Os pedidos de mudança abertos pelo re-treino e pelo canário pedem revisão à mantenedora, que passa a ser notificada. Um pedido parado bloqueia o re-treino seguinte.
+- A avaliação diária do canário também avisa quando deixa de rodar, como já faziam o job D-2 e o re-treino.
+- Mudanças só no `README.md` não republicam mais o Space nem exigem versão nova.
+- **O re-treino grava no remote do DVC com uma credencial restrita.** O secret `AZURE_STORAGE_CONNECTION_STRING`, que levava a chave da conta Azure inteira, foi substituído por `AZURE_STORAGE_CONNECTION_STRING_ESCRITA`, no environment `production`: uma SAS só do container, que grava arquivos mas não apaga nenhum. Como cada arquivo do remote é nomeado pelo próprio conteúdo, uma regravação escreve os mesmos bytes e não altera o que já foi publicado. Nenhum workflow recebe mais a chave da conta.
+
+### Corrigido
+- O CI do GitHub falharia na primeira execução: quatro testes de observabilidade dependiam de uma variável que o próprio CI desliga.
+- Os pedidos de mudança abertos pelo re-treino e pelo canário ficam presos a este repositório e não podem cair no repositório de origem do fork.
+- Com o login por e-mail desligado na configuração do Supabase, a tela de login dizia "E-mail ou senha incorretos." a qualquer funcionário. Agora informa que o login está indisponível e pede para procurar o administrador. O Supabase local também voltou a aceitar login por e-mail: a trava de auto-cadastro ([ADR-008](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-008-login-da-equipe.md)) estava desligando o provedor de e-mail inteiro.
+- A aba "Observabilidade" podia falhar ao abrir, de vez em quando, com `Invalid isoformat string`. O horário da última execução do job vem do banco às vezes com menos casas decimais nos segundos, e a leitura recusava esse formato.
+
+## [v1.14] (Vanessa + Claude) - 2026-10-01
+
+### Adicionado
+- **Canário do modelo.** O modelo novo aprovado pelo re-treino mensal não substitui mais o modelo em produção de uma vez. Primeiro, ele decide 20% da fila do job diário; o modelo atual decide o resto. Os pacientes são sorteados e ficam no mesmo modelo durante todo o período. Os dois modelos são comparados na fila real pela fração de pacientes que recebe lembrete pago e pela fração de faltas entre os pacientes classificados como baixo risco. O modelo novo só passa a valer para todos depois de pelo menos 7 dias sem ser pior que o atual além da margem ([ADR-009](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-009-canario-do-modelo.md)).
+- **Volta automática ao modelo atual (rollback).** O job diário volta a usar só o modelo atual, já na execução em que o problema aparece, quando o modelo novo manda lembrete a muito mais pacientes, deixa passar mais faltas ou não consegue avaliar parte da fila. Ele também volta se, em 21 dias, não houver evidência de que o modelo novo é tão bom quanto o atual. Não é preciso deploy.
+- Workflow `canario.yml`: avalia o canário todo dia às 09h47 e abre o pedido de promoção ou de reversão. Também pode ser disparado à mão para reverter, informando o motivo.
+- Variável do repositório `CANARIO_DESLIGADO`: com `true`, o job diário ignora o canário a partir da próxima execução, sem pedido de mudança nem deploy.
+- Tabela `canarios_revertidos` (migration `20261001000000_canarios_revertidos.sql`, aditiva), que registra cada reversão. **Aplicar no projeto remoto com `supabase db push`** (o primeiro deploy automático também o faz).
+- `data/canario_historico.json` registra cada canário encerrado, promovido ou revertido, com a evidência da decisão. Um modelo revertido nunca volta a ser aprovado pelo re-treino.
+
+### Modificado
+- O re-treino mensal, ao aprovar um modelo, abre um pedido de **canário** em vez do pedido de promoção. A promoção direta continua quando ainda não há modelo em produção registrado ou com `canario.habilitado: false` em `params.yaml`.
+- O re-treino mensal não roda enquanto houver canário em observação. Ele falha avisando (código de saída 4), porque um canário sem decisão no dia do re-treino é um pedido esperando aprovação.
+- O resumo do job diário mostra, quando há canário, quantos agendamentos cada modelo decidiu.
+- O modelo em produção (`data/champion_metrics.json`) passa a registrar, quando promovido depois de um canário, o período do canário e a evidência da promoção.
+
+### Segurança
+- O canário roda só no job diário. Ele não vai para o Space e não muda o modelo usado na interface. O sorteio usa o identificador já pseudonimizado do paciente, que não aparece em log. Nenhum dado novo é tratado.
+- Um canário com qualquer problema (modelo que não baixou, aprovado contra outro modelo, banco fora do ar) faz o job usar só o modelo atual e terminar com falha. Nenhum paciente fica sem lembrete por causa do canário.
+
+## [v1.13] (Vanessa + Claude) - 2026-09-30
+
+### Adicionado
+- **A "Fila do dia" marca a predição feita sobre dados que o modelo não viu no treino** (coluna "Fora do domínio", com aviso no detalhe da linha). Exemplos: distância acima de 50 km, consulta marcada com mais de 90 dias de antecedência, mais de 10 faltas anteriores. A probabilidade dessas linhas é extrapolação e merece menos confiança. Coluna nova `predicoes.fora_do_dominio` (migration `20260930000000_fora_do_dominio.sql`, aditiva); predições anteriores ficam sem a marca ("não verificado"). **Aplicar no projeto remoto com `supabase db push`** (o primeiro deploy automático também o faz): até lá, a "Fila do dia" local apontando para o banco remoto mostra o aviso de banco desatualizado.
+- **O job diário passa a rodar sozinho todo dia às 08h17**, pelo GitHub Actions, e não no servidor da aplicação. Antes de enviar qualquer SMS, ele confere se o modelo e o threshold em uso são os aprovados no último re-treino; se não forem, não roda. Se a fila inteira do dia não puder ser predita, o job falha e avisa a equipe.
+- **Deploy automático**: cada mudança aprovada em `main` passa pelos testes, aplica as migrations do banco e só então atualiza o Space. Só o modelo aprovado pelo re-treino chega a produção.
+- O re-treino mensal informa, no resumo e no pedido de promoção, **quantos pacientes o modelo novo mandaria lembrete pago** — o número que liga o modelo ao custo de mensageria.
+
+### Modificado
+- **O job diário recusa agendamentos com dado impossível** (idade fora de 0 a 120, sexo inválido, horário fora do expediente da clínica, campo vazio) em vez de predizer sobre eles. O paciente recebe o lembrete mesmo assim, como já acontecia com os que não podiam ser preditos.
+- **O re-treino mensal é bloqueado antes de treinar se o dataset estiver quebrado** (coluna faltando, valor impossível, especialidade que a clínica não oferece, poucas faltas registradas para a comparação com o modelo atual ser confiável). O motivo aparece no resumo do run.
+- **O re-treino também bloqueia** um modelo novo com ROC-AUC abaixo de 0,60, mesmo que pareça melhor que o atual, e um modelo que se comporte de forma anormal (mesma probabilidade para todos, explicação que não fecha com a probabilidade).
+- O dataset de re-treino passa a usar o **histórico de faltas registrado no momento do agendamento** — o mesmo que o modelo viu ao predizer — em vez de recalculá-lo depois. Agendamentos com dado impossível ficam de fora do dataset.
+- As especialidades oferecidas no cadastro passam a vir da configuração (`params.yaml`), não do modelo treinado. A lista não mudou.
+
+### Corrigido
+- A aba "Dev: disparo manual" podia mostrar, no motivo de um erro, o dado do paciente que causou o erro (por exemplo, a data de nascimento ilegível). Agora mostra só o campo e a regra.
+- O re-treino mensal rodando no GitHub Actions reexecutaria o pipeline inteiro todo mês, mesmo sem nenhum desfecho novo registrado, porque o fim de linha dos arquivos no Windows e no Linux era diferente. Ele passa a reconhecer corretamente o mês sem dado novo.
+
+### Segurança
+- O CI, o deploy e o job diário usam uma credencial **só de leitura** para baixar o modelo; a de escrita fica só no re-treino.
+- O job diário roda num servidor do GitHub fora do Brasil e o log dele é público: ele registra só contagens e identificadores internos, e a redação de dado pessoal no log passa a ser a última barreira. Registrado em `docs/LGPD.md` §4 e §9.1.
+- A aplicação deixou de consultar um serviço externo, na inicialização, para descobrir o próprio IP público, e de imprimi-lo no log.
+- Pull requests passam por revisão automática de dependências vulneráveis.
+
+## [v1.12] (Vanessa + Claude) - 2026-09-29
+
+### Corrigido
+- **O lembrete por SMS informava o horário da consulta 3 horas adiantado** (ex.: "às 21:00" para uma consulta das 18:00). O banco devolve data e hora em UTC, e o job diário não as convertia para o horário da clínica.
+- **A predição do job diário usava esse mesmo horário deslocado.** Uma consulta das 18h era avaliada como se fosse às 21h, horário que o modelo nunca viu no treino: para o mesmo paciente, a probabilidade de falta caía de 0,48 para 0,24. As predições gravadas antes desta versão carregam esse erro.
+- **O dataset de re-treino recebia as consultas reais com o horário em UTC.** A exportação passa a gravar o horário da clínica, o mesmo formato do dataset histórico.
+- **Um agendamento com dado inválido não interrompe mais a fila do dia.** Antes, alguns tipos de erro abortavam o job e os pacientes seguintes ficavam sem predição.
+
+### Modificado
+- O job diário passa a considerar as consultas **de amanhã até daqui a dois dias** que ainda não têm predição, em vez de só as de daqui a dois dias. Um dia em que o job não rodou é recuperado na execução seguinte, e agendamentos feitos com um dia de antecedência também recebem predição.
+- **Paciente que não pôde ser predito recebe o lembrete mesmo assim**, como exceção. O envio fica registrado com o status `enviado_sem_predicao`, separado do envio por risco alto.
+- O cadastro só aceita consulta **entre hoje e 180 dias à frente**. Antes não havia limite, e dava para agendar no passado.
+- O desfecho ("realizada", "faltou", "cancelado") só pode ser registrado **no dia da consulta ou depois**. Na fila de uma data futura, a tela explica isso no lugar dos botões.
+
+### Adicionado
+- Coluna `agendamentos.lembrete_enviado` (migration `20260929000000_lembrete_enviado.sql`), que registra se o paciente recebeu lembrete. O re-treino precisa dessa informação para distinguir "compareceu" de "compareceu porque foi lembrado". A coluna também entra no dataset de re-treino, mas ainda não é usada como feature. **Aplicar no projeto remoto com `supabase db push` antes de subir o código.**
 
 ## [v1.11] (Vanessa + Claude) - 2026-09-28
 
 ### Adicionado
-- **Tela de login para a equipe da clínica.** A visão "Funcionário da clínica" passa a pedir e-mail e senha, verificados pelo Supabase Auth do mesmo projeto do banco. Antes do login nenhuma aba é exibida: nem a fila do dia, nem a predição manual, nem a observabilidade. A visão "Paciente" continua aberta ([ADR-008](../adr/adr-008-login-da-equipe.md)).
+- **Tela de login para a equipe da clínica.** A visão "Funcionário da clínica" passa a pedir e-mail e senha, verificados pelo Supabase Auth do mesmo projeto do banco. Antes do login nenhuma aba é exibida: nem a fila do dia, nem a predição manual, nem a observabilidade. A visão "Paciente" continua aberta ([ADR-008](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-008-login-da-equipe.md)).
 - A barra lateral mostra com qual e-mail a pessoa está conectada e tem o botão **Sair**.
 - `scripts/criar_funcionario.py` cria a conta de um funcionário. A senha é digitada no terminal, sem eco, e a conta nasce com o e-mail confirmado. Para desativar alguém, apague ou bana o usuário no Dashboard do Supabase.
 
@@ -49,7 +135,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 ## [v1.9] (Vanessa + Claude) - 2026-09-27
 
 ### Adicionado
-- [`docs/LGPD.md`](../LGPD.md): papéis (a clínica é controladora, a SaúdeJá é operadora), inventário do que é tratado, base legal, retenção, transferência internacional, direitos do titular, incidentes e riscos residuais. Fecha as duas pendências de LGPD que os passos anteriores declararam e adiaram.
+- [`docs/LGPD.md`](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/LGPD.md): papéis (a clínica é controladora, a SaúdeJá é operadora), inventário do que é tratado, base legal, retenção, transferência internacional, direitos do titular, incidentes e riscos residuais. Fecha as duas pendências de LGPD que os passos anteriores declararam e adiaram.
 - A aplicação passa a emitir log estruturado (uma linha JSON por registro) com redação automática de PII — nome, sobrenome, CPF, e-mail, telefone e IP. Vale também para o log das bibliotecas de terceiros (`uvicorn`, `httpx`, `streamlit`), que é o que existe em volume em produção.
 - `scripts/auditoria_lgpd.py` varre arquivos, diretórios ou a entrada padrão em busca de PII e devolve código de saída 1 se achar algo. O relatório mostra a linha e a regra, nunca o valor encontrado.
 - `predicoes` e `mensagens_disparadas` passam a ser purgadas após 365 dias, pela mesma execução diária que já limpava `eventos_app`. `pacientes` e `agendamentos` não são purgados: o registro do atendimento é da clínica.
@@ -58,7 +144,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 ### Modificado
 - O resumo de fim de execução do job D-2 deixou de ser uma frase em português e passou a ser uma linha JSON com os contadores, incluindo quantos registros cada purga removeu. Quem consumia essa saída por texto precisa ler os campos.
 - A mensagem de erro de envio da Infobip mudou de conteúdo: onde antes vinha o corpo inteiro da resposta, agora vem o status HTTP e o código de erro do provedor. É o que aparece em "agendamentos com erro" na aba de dev.
-- O compromisso de "nenhuma PII em log" do [SLA §6](../SLA.md) passa a listar explicitamente e-mail, telefone e IP, não só nome e CPF. O [SLO §6](../SLO.md) registra que a verificação é preventiva (filtro no código e teste automatizado), porque o log do ambiente de produção é apagado a cada reinício e não pode ser auditado depois.
+- O compromisso de "nenhuma PII em log" do [SLA §6](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/SLA.md) passa a listar explicitamente e-mail, telefone e IP, não só nome e CPF. O [SLO §6](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/SLO.md) registra que a verificação é preventiva (filtro no código e teste automatizado), porque o log do ambiente de produção é apagado a cada reinício e não pode ser auditado depois.
 
 ### Segurança
 - O telefone do paciente deixou de circular no texto de erro de envio. A Infobip ecoa o payload recebido no corpo de erro, e esse corpo ia inteiro para a lista de erros do job e para a tela de dev.
@@ -104,7 +190,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
 ## [v1.6] (Vanessa + Claude) - 2026-09-21
 
-Versão só de documentação, sem mudança de comportamento: o [ADR-006](../adr/adr-006-observabilidade.md) decide a observabilidade de aplicação (tabela no Supabase como fonte de verdade, aba no Streamlit, sonda de uptime e dead-man's-switch externos), descarta Langfuse/OpenTelemetry/Grafana para o núcleo e adia o Sentry. Implementado na v1.7.
+Versão só de documentação, sem mudança de comportamento: o [ADR-006](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-006-observabilidade.md) decide a observabilidade de aplicação (tabela no Supabase como fonte de verdade, aba no Streamlit, sonda de uptime e dead-man's-switch externos), descarta Langfuse/OpenTelemetry/Grafana para o núcleo e adia o Sentry. Implementado na v1.7.
 
 ## [v1.5] (Vanessa + Claude) - 2026-09-20
 
@@ -227,7 +313,7 @@ Versão só de documentação, sem mudança de comportamento: o [ADR-006](../adr
 
 ### Adicionado
 - `src/tune.py`: busca de hiperparâmetros por GridSearchCV sobre o Pipeline SMOTENC+LightGBM, com SMOTENC recalculado a cada fold para não vazar sintéticos entre treino e validação. Script exploratório, fora do `dvc.yaml`.
-- Documentação: ADR-004 propõe a stack de produto e o `PLANO-IMPLEMENTACAO.md` detalha os passos até o produto deployável.
+- Documentação: ADR-004 propõe a stack de produto e o roteiro de implementação até o produto deployável.
 
 ### Modificado
 - Os hiperparâmetros de `params.yaml` não mudaram: os encontrados pelo GridSearch saíram piores no fold de teste isolado (f1_1 0,372 contra 0,419). O dataset atual (~380 linhas) é pequeno demais para o tuning fino generalizar.

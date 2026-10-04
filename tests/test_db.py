@@ -1,8 +1,7 @@
 """
-SaúdeJá — testes de integração de src/db/ (Passo 5) contra o Supabase CLI
+SaúdeJá — testes de integração de src/db/ contra o Supabase CLI
 local (`supabase start`), mesma filosofia já usada para o MLflow em
-tests/test_train.py (serviço real efêmero, não mock pesado -- ver
-PLANO-IMPLEMENTACAO.md, Passo 5).
+tests/test_train.py (serviço real efêmero, não mock pesado).
 
 Pré-requisito para rodar: `supabase start` na raiz do repositório (aplica
 `supabase/migrations/` automaticamente). Marcados `integracao`
@@ -62,6 +61,25 @@ def test_consulta_do_fim_do_dia_cai_na_fila_do_dia_certo():
     inicio, fim = _intervalo_do_dia(date(2026, 9, 19))
 
     assert datetime.fromisoformat(inicio) <= consulta < datetime.fromisoformat(fim)
+
+
+@pytest.mark.parametrize(
+    "valor",
+    [
+        "2026-10-04T19:46:05.01422+00:00",  # o do CI: 5 dígitos
+        "2026-10-04T19:46:05.1+00:00",
+        "2026-10-04T19:46:05.014220+00:00",
+        "2026-10-04T19:46:05+00:00",
+    ],
+)
+def test_ler_timestamptz_aceita_a_fracao_sem_zeros_finais(valor):
+    """O PostgREST corta os zeros finais da fração, e o `fromisoformat` do
+    Python 3.10 (o do CI e das imagens) recusa 5 dígitos."""
+    from db.repositories import ler_timestamptz
+
+    lido = ler_timestamptz(valor)
+
+    assert lido.replace(microsecond=0).isoformat() == "2026-10-04T19:46:05+00:00"
 
 
 # --- repositórios contra o Supabase local (integracao) -------------------------
@@ -252,15 +270,20 @@ def test_inserir_agendamento_aparece_na_fila_do_dia(db):
 
 
 @pytest.mark.integracao
-def test_buscar_agendamentos_d2_pendentes_filtra_por_data_e_predicao_existente(db):
+def test_buscar_agendamentos_d2_pendentes_cobre_de_amanha_ate_d2(db):
+    """Janela [amanhã, D+2]: um dia em que o cron não
+    rodou é recuperado na execução seguinte, e agendamento feito com um dia de
+    antecedência também é predito. Hoje e D+3 ficam de fora."""
     import db.repositories as repositories
 
     hoje = hoje_na_clinica()
+    _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-3-HOJE")
+    _, agendamento_d1 = _criar_paciente_e_agendamento(repositories, dias=1, id_externo="EXT-3-D1")
     _, agendamento_d2 = _criar_paciente_e_agendamento(repositories, dias=2, id_externo="EXT-3")
     _criar_paciente_e_agendamento(repositories, dias=3, id_externo="EXT-4")
 
     pendentes = repositories.buscar_agendamentos_d2_pendentes(hoje)
-    assert [a["id"] for a in pendentes] == [agendamento_d2["id"]]
+    assert [a["id"] for a in pendentes] == [agendamento_d1["id"], agendamento_d2["id"]]
 
     repositories.gravar_predicao(
         id_agendamento=agendamento_d2["id"],
@@ -270,9 +293,26 @@ def test_buscar_agendamentos_d2_pendentes_filtra_por_data_e_predicao_existente(d
         explicacao_shap=[{"feature": "historico_noshow", "contribuicao": 0.4}],
         model_version="abc123",
     )
+    # Quem já recebeu lembrete sem predição (quarentena) também não volta.
+    repositories.marcar_lembrete_enviado(agendamento_d1["id"])
 
-    pendentes_apos_predicao = repositories.buscar_agendamentos_d2_pendentes(hoje)
-    assert pendentes_apos_predicao == []
+    assert repositories.buscar_agendamentos_d2_pendentes(hoje) == []
+
+
+@pytest.mark.integracao
+def test_desfecho_so_e_gravado_para_consulta_de_hoje_ou_anterior(db):
+    import db.repositories as repositories
+
+    _, de_hoje = _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-DESF-0")
+    _, de_amanha = _criar_paciente_e_agendamento(repositories, dias=1, id_externo="EXT-DESF-1")
+
+    gravado = repositories.atualizar_status_agendamento(de_hoje["id"], "no_show")
+    assert gravado["status"] == "no_show"
+    with pytest.raises(repositories.DesfechoForaDePrazo):
+        repositories.atualizar_status_agendamento(de_amanha["id"], "no_show")
+
+    linha = db.table("agendamentos").select("status").eq("id", de_amanha["id"]).execute().data
+    assert linha[0]["status"] == "agendado"
 
 
 @pytest.mark.integracao
@@ -358,7 +398,49 @@ def test_fila_da_ui_carrega_a_explicacao_gravada_com_a_predicao(db):
     assert item.probabilidade == pytest.approx(0.78)
     assert item.explicacao == contribuicoes
     assert item.model_version == "6430cb3315da"
-    assert item.explicacao_texto is None  # plug do LLM inativo (Passo 13)
+    assert item.explicacao_texto is None  # plug do LLM inativo
+    assert item.fora_do_dominio is None  # gravada sem a marca: "não verificado"
+
+
+@pytest.mark.integracao
+def test_marca_fora_do_dominio_faz_round_trip_ate_a_fila(db):
+    """Contrato de features: o job grava a marca e a fila a mostra (migration
+    20260930000000_fora_do_dominio.sql)."""
+    import db.repositories as repositories
+    from ui import logic
+
+    _, agendamento = _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-DOM-1")
+    repositories.gravar_predicao(
+        id_agendamento=agendamento["id"],
+        probabilidade=0.4,
+        classe_prevista=0,
+        threshold_usado=0.6,
+        explicacao_shap=[{"feature": "distancia_km", "contribuicao": 0.1}],
+        model_version="6430cb3315da",
+        fora_do_dominio=True,
+    )
+
+    item = next(
+        i
+        for i in logic.buscar_fila_do_dia(hoje_na_clinica())
+        if i.id_paciente_externo == "EXT-DOM-1"
+    )
+    assert item.fora_do_dominio is True
+
+
+@pytest.mark.integracao
+def test_conta_consultas_passadas_ainda_sem_desfecho(db):
+    """Completude de rótulo do re-treino: só conta consulta de
+    antes de hoje ainda `agendado` -- a de hoje ainda pode receber desfecho, e
+    a que já tem desfecho não é lacuna."""
+    import db.repositories as repositories
+
+    _criar_paciente_e_agendamento(repositories, dias=-3, id_externo="EXT-ROT-1")
+    _, com_desfecho = _criar_paciente_e_agendamento(repositories, dias=-2, id_externo="EXT-ROT-2")
+    repositories.atualizar_status_agendamento(com_desfecho["id"], "concluido")
+    _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-ROT-3")
+
+    assert repositories.contar_consultas_sem_desfecho(hoje_na_clinica()) == 1
 
 
 @pytest.mark.integracao
@@ -453,3 +535,71 @@ def test_senha_errada_e_email_inexistente_sao_indistinguiveis_no_supabase_real(d
         mensagens.append(str(exc.value))
 
     assert mensagens == [logic.MENSAGEM_CREDENCIAIS_INVALIDAS] * 2
+
+
+# --- canário do modelo (ADR-009) -----------------------------------------------
+
+
+@pytest.mark.integracao
+def test_estatisticas_de_modelo_contam_por_braco_e_so_desfecho_de_baixo_risco(db):
+    """As contagens que decidem o canário: por `model_version`, desde o
+    início dele, com o desfecho lido de `agendamentos` -- e só para baixo
+    risco, porque o lembrete altera o desfecho de quem o recebeu."""
+    import db.repositories as repositories
+
+    # Janela larga: o relógio do Postgres no container pode estar atrás do
+    # host (visto ~1 min depois de suspender o Docker Desktop), e `criado_em`
+    # é o `now()` dele. O isolamento vem da `model_version` própria do teste.
+    inicio = datetime.now(tz=fuso_da_clinica()) - timedelta(days=1)
+    casos = [
+        # (modelo, classe, desfecho)
+        ("canario-x", 1, "no_show"),
+        ("canario-x", 0, "no_show"),
+        ("canario-x", 0, "concluido"),
+        ("canario-x", 0, None),
+        ("campeao-y", 0, "no_show"),
+    ]
+    for i, (modelo, classe, desfecho) in enumerate(casos):
+        _, agendamento = _criar_paciente_e_agendamento(
+            repositories, dias=-1, id_externo=f"EXT-CAN-{i}"
+        )
+        repositories.gravar_predicao(
+            id_agendamento=agendamento["id"],
+            probabilidade=0.9 if classe else 0.1,
+            classe_prevista=classe,
+            threshold_usado=0.6,
+            explicacao_shap=[],
+            model_version=modelo,
+            fora_do_dominio=(i == 0),
+        )
+        if desfecho:
+            repositories.atualizar_status_agendamento(agendamento["id"], desfecho)
+
+    est = repositories.estatisticas_de_modelo("canario-x", inicio)
+
+    assert {k: v for k, v in est.items() if k != "primeira_predicao"} == {
+        "predicoes": 4,
+        "disparos": 1,
+        "fora_do_dominio": 1,
+        "desfechos_baixo_risco": 2,
+        "faltas_baixo_risco": 1,
+    }
+    assert est["primeira_predicao"] >= inicio
+    depois = datetime.now(tz=fuso_da_clinica()) + timedelta(days=1)
+    assert repositories.estatisticas_de_modelo("canario-x", depois)["predicoes"] == 0
+
+
+@pytest.mark.integracao
+def test_canario_revertido_faz_round_trip_e_a_primeira_gravacao_vale(db):
+    import db.repositories as repositories
+
+    try:
+        assert repositories.canario_revertido("canario-teste-int") is None
+        repositories.registrar_canario_revertido("canario-teste-int", "primeiro motivo")
+        repositories.registrar_canario_revertido("canario-teste-int", "segundo motivo")
+
+        linha = repositories.canario_revertido("canario-teste-int")
+        assert linha is not None
+        assert linha["motivo"] == "primeiro motivo"
+    finally:
+        db.table("canarios_revertidos").delete().eq("model_version", "canario-teste-int").execute()

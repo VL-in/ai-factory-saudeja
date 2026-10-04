@@ -1,8 +1,7 @@
 """
-SaúdeJá — schemas Pydantic da API de predição (Passo 3 do plano de
-implementação). PacienteConsultaIn espelha exatamente o payload cru que
-inference.construir_features() espera. PredictOut já reserva
-explicacao_texto: str | None (plug do LLM, Passo 2/13) para não exigir
+SaúdeJá — schemas Pydantic da API de predição. PacienteConsultaIn espelha
+exatamente o payload cru que inference.construir_features() espera. PredictOut já reserva
+explicacao_texto: str | None (plug do LLM, ver src/explain.py) para não exigir
 migração de schema quando ele for ativado -- fica None até lá.
 """
 from datetime import datetime

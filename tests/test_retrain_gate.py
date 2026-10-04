@@ -1,5 +1,5 @@
 """
-Testes do gate de promoção do re-treino mensal (Passo 9.1).
+Testes do gate de promoção do re-treino mensal.
 
 O gate decide se um modelo novo substitui o que está em produção — errar
 para o lado permissivo publica um modelo pior, e errar para o restritivo
@@ -21,6 +21,13 @@ O que cada bloco protege:
 - **sem re-treino efetivo**: mês sem desfecho novo falha (decisão de
   2026-09-21), em vez de reproduzir a mesma métrica e trocar a
   `model_version` em produção à toa.
+- **canário** (ADR-009): com campeão registrado, aprovar abre o canário
+  e não toca no campeão nem no `dvc.lock`; canário ativo impede o re-treino
+  (código 4); modelo já revertido num canário é bloqueado.
+
+A fixture `ambiente` desliga o canário (`canario.habilitado: false`): os
+testes da promoção direta exercitam o caminho que continua valendo no
+bootstrap e com o canário desligado. Os testes do canário o religam.
 """
 import json
 
@@ -29,7 +36,9 @@ import mlflow
 import numpy as np
 import pytest
 
+import canario
 import retrain_gate as gate
+from sanidade_modelo import ResultadoSanidade
 
 METRICAS_CAMPEAO = {
     "recall_1": 0.4286,
@@ -73,6 +82,20 @@ def ambiente(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "MODEL_PATH", str(model_path))
     monkeypatch.setattr(gate, "TEST_PATH", str(test_path))
     monkeypatch.setattr(gate, "DATASET_DVC_PATH", str(dvc_path))
+    monkeypatch.setattr(gate, "RELATORIO_DADOS_PATH", str(tmp_path / "relatorio_dados.json"))
+    # Canário inteiramente dentro de tmp_path -- nada do teste
+    # pode escrever em data/canario/ do repositório.
+    lock_path = tmp_path / "dvc.lock"
+    lock_path.write_text("schema: '2.0'\nstages: {}\n", encoding="utf-8")
+    monkeypatch.setattr(gate, "DVC_LOCK_PATH", str(lock_path))
+    monkeypatch.setattr(canario, "CANARIO_PATH", str(tmp_path / "canario.json"))
+    monkeypatch.setattr(canario, "CANARIO_DIR", str(tmp_path / "canario"))
+    monkeypatch.setattr(canario, "HISTORICO_PATH", str(tmp_path / "canario_historico.json"))
+    monkeypatch.setitem(gate.PARAMS, "canario", {**gate.PARAMS["canario"], "habilitado": False})
+    # O model.pkl daqui são bytes quaisquer: a suíte de sanidade e a taxa de
+    # disparo têm testes próprios abaixo, com modelo de verdade.
+    monkeypatch.setattr(gate, "verificar_sanidade", lambda *_: ResultadoSanidade())
+    monkeypatch.setattr(gate, "taxa_de_disparo_projetada", lambda *_: 0.29)
 
     class Ambiente:
         pass
@@ -84,10 +107,14 @@ def ambiente(tmp_path, monkeypatch):
     amb.model_path = model_path
     amb.test_path = test_path
     amb.tmp_path = tmp_path
+    amb.lock_path = lock_path
 
     def semear_champion(metricas=None):
         champion_path.write_text(
-            json.dumps({"metricas": metricas or METRICAS_CAMPEAO}, indent=2),
+            json.dumps(
+                {"model_version": "campeao00001", "metricas": metricas or METRICAS_CAMPEAO},
+                indent=2,
+            ),
             encoding="utf-8",
         )
         return champion_path
@@ -135,7 +162,7 @@ def test_promove_e_reescreve_o_campeao_quando_melhora(ambiente):
     champion = json.loads(ambiente.champion_path.read_text(encoding="utf-8"))
     assert champion["metricas"]["recall_1"] == pytest.approx(0.5714)
     assert champion["mlflow_run_id"] == run_id
-    # métricas fora do gate viajam junto (servem ao pitch do Passo 12),
+    # métricas fora do gate viajam junto (servem ao pitch),
     # mesmo sem serem critério de promoção
     assert champion["metricas"]["pr_auc"] == pytest.approx(0.48)
     # o threshold em que as métricas foram medidas fica registrado: comparar
@@ -350,3 +377,204 @@ def test_champion_do_repositorio_e_legivel_pelo_gate():
     for metrica in gate.METRICAS_DO_GATE:
         assert isinstance(champion["metricas"][metrica], float)
     assert champion["decision_threshold"] == gate.PARAMS["decision"]["threshold"]
+
+
+# --------------------------------------------------------------------------
+# Piso absoluto, suíte de sanidade, taxa de disparo, pipeline
+# --------------------------------------------------------------------------
+PISO = {"roc_auc": 0.60}
+TOL = {"recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02}
+
+
+def test_piso_absoluto_bloqueia_mesmo_sem_regressao_relativa():
+    """Efeito catraca: cada promoção pode regredir até a tolerância em relação
+    ao campeão da vez. Aqui o delta (-0.01) cabe na tolerância (0.02), mas o
+    desafiante fica abaixo do piso -- e é bloqueado."""
+    campeao = {"metricas": {"recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.605}}
+    desafiante = {"recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.595}
+
+    decisao = gate.decidir(campeao, desafiante, TOL, piso=PISO)
+
+    assert decisao.codigo_saida == gate.SAIDA_BLOQUEADO
+    assert "piso absoluto" in decisao.motivo
+    assert not any(c["regrediu"] for c in decisao.comparacoes)
+
+
+def test_piso_absoluto_vale_tambem_no_bootstrap():
+    decisao = gate.decidir(None, {"recall_1": 0.5, "f1_1": 0.5, "roc_auc": 0.55}, TOL, piso=PISO)
+
+    assert not decisao.promover
+    assert decisao.codigo_saida == gate.SAIDA_BLOQUEADO
+
+
+def test_piso_vem_de_params_yaml():
+    assert gate.pisos() == {"roc_auc": 0.60}
+
+
+def test_suite_de_sanidade_reprovada_bloqueia_e_nao_toca_no_campeao(ambiente, monkeypatch):
+    ambiente.semear_champion()
+    antes = ambiente.champion_path.read_bytes()
+    # métricas melhores que o campeão: só a sanidade pode bloquear
+    ambiente.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}, nome="gate-insano")
+    monkeypatch.setattr(
+        gate,
+        "verificar_sanidade",
+        lambda *_: ResultadoSanidade(falhas=["o modelo é constante: devolve 0.5000"]),
+    )
+
+    assert gate.main(["--sem-repro"]) == gate.SAIDA_BLOQUEADO
+    assert ambiente.champion_path.read_bytes() == antes
+
+
+def test_taxa_de_disparo_alta_avisa_mas_nao_bloqueia(ambiente, monkeypatch, tmp_path):
+    ambiente.semear_champion()
+    ambiente.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}, nome="gate-caro")
+    monkeypatch.setattr(gate, "taxa_de_disparo_projetada", lambda *_: 0.45)
+    relatorio = tmp_path / "relatorio.json"
+
+    assert gate.main(["--sem-repro", "--relatorio-json", str(relatorio)]) == gate.SAIDA_PROMOVIDO
+
+    conteudo = json.loads(relatorio.read_text(encoding="utf-8"))
+    assert conteudo["taxa_disparo_projetada"] == 0.45
+    assert any("taxa de disparo projetada" in a for a in conteudo["avisos"])
+    campeao = json.loads(ambiente.champion_path.read_text(encoding="utf-8"))
+    assert campeao["taxa_disparo_projetada"] == 0.45
+
+
+def test_taxa_de_disparo_projetada_com_o_modelo_real(tmp_path):
+    """Contra o data/model.pkl de verdade, sobre um fold sintético montado da
+    grade da suíte de sanidade (o test.pkl do DVC não existe no CI)."""
+    import inference
+    import sanidade_modelo
+
+    model, mapa = inference.carregar_modelo("data/model.pkl")
+    X = inference.construir_features_lote(sanidade_modelo.grade_de_casos(sorted(mapa)), mapa)
+    fold = tmp_path / "test.pkl"
+    joblib.dump({"X": X, "y": np.zeros(len(X))}, fold)
+
+    taxa = gate.taxa_de_disparo_projetada("data/model.pkl", str(fold))
+
+    esperado = float((inference.predizer(model, X) >= gate.PARAMS["decision"]["threshold"]).mean())
+    assert taxa == pytest.approx(esperado)
+    assert 0.0 <= taxa <= 1.0
+
+
+def test_dataset_barrado_pelo_validate_data_vira_codigo_3_com_o_motivo(ambiente, monkeypatch):
+    """`dvc repro` falhando no stage validate_data: o resumo diz o que barrou,
+    em vez de um traceback indistinguível de um bloqueio por regressão."""
+    import subprocess
+
+    ambiente.semear_champion()
+    antes = ambiente.champion_path.read_bytes()
+    (ambiente.tmp_path / "relatorio_dados.json").write_text(
+        json.dumps(
+            {
+                "aprovado": False,
+                "bloqueios": ["distribuição: taxa de positivos 3.0% fora da faixa [10%, 50%]"],
+                "alertas": [],
+                "resumo": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def repro_que_falha():
+        raise subprocess.CalledProcessError(1, ["dvc", "repro"])
+
+    monkeypatch.setattr(gate, "_dvc_repro", repro_que_falha)
+    relatorio = ambiente.tmp_path / "relatorio.json"
+
+    assert gate.main(["--relatorio-json", str(relatorio)]) == gate.SAIDA_FALHA_PIPELINE
+    assert ambiente.champion_path.read_bytes() == antes
+    conteudo = json.loads(relatorio.read_text(encoding="utf-8"))
+    assert "taxa de positivos" in conteudo["motivo"]
+
+
+# --------------------------------------------------------------------------
+# Canário (ADR-009)
+# --------------------------------------------------------------------------
+@pytest.fixture
+def com_canario(ambiente, monkeypatch):
+    monkeypatch.setitem(gate.PARAMS, "canario", {**gate.PARAMS["canario"], "habilitado": True})
+    return ambiente
+
+
+def test_aprovado_com_campeao_abre_canario_sem_tocar_no_campeao_nem_no_lock(com_canario):
+    com_canario.semear_champion()
+    campeao_antes = com_canario.champion_path.read_bytes()
+    lock_antes = com_canario.lock_path.read_bytes()
+    run_id = com_canario.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71})
+
+    assert gate.main(["--sem-repro"]) == gate.SAIDA_PROMOVIDO
+
+    assert com_canario.champion_path.read_bytes() == campeao_antes
+    assert com_canario.lock_path.read_bytes() == lock_antes
+    registro = canario.carregar()
+    assert registro["mlflow_run_id"] == run_id
+    assert registro["campeao_base"] == "campeao00001"
+    assert registro["model_version"] == gate.calcular_model_version(com_canario.model_path)
+    assert registro["dvc_lock_base_sha256"] == canario.sha256_de_arquivo(com_canario.lock_path)
+    assert registro["metricas"]["recall_1"] == 0.57
+    pasta = com_canario.tmp_path / "canario"
+    assert (pasta / canario.MODELO).read_bytes() == com_canario.model_path.read_bytes()
+    assert (pasta / canario.LOCK_SALVO).read_bytes() == lock_antes
+    assert (pasta / canario.DATASET_DVC_SALVO).exists()
+
+
+def test_resumo_e_relatorio_dizem_que_foi_para_canario(com_canario, monkeypatch, tmp_path):
+    com_canario.semear_champion()
+    com_canario.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71})
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    relatorio = tmp_path / "relatorio.json"
+
+    gate.main(["--sem-repro", "--relatorio-json", str(relatorio)])
+
+    assert "aprovado para canário" in summary.read_text(encoding="utf-8")
+    assert json.loads(relatorio.read_text(encoding="utf-8"))["canario"] is True
+
+
+def test_bootstrap_promove_direto_mesmo_com_canario_habilitado(com_canario):
+    """Sem campeão não há contra quem comparar o canário na fila."""
+    com_canario.semear_run({"recall_1": 0.5, "f1_1": 0.45, "roc_auc": 0.66})
+
+    assert gate.main(["--sem-repro"]) == gate.SAIDA_PROMOVIDO
+    assert com_canario.champion_path.exists()
+    assert not canario.ativo()
+
+
+def test_canario_ativo_impede_o_re_treino_antes_do_repro(com_canario, monkeypatch, tmp_path):
+    com_canario.semear_champion()
+    (tmp_path / "canario.json").write_text(
+        json.dumps({"model_version": "abc", "iniciado_em": "2026-10-01T09:00:00-03:00"}),
+        encoding="utf-8",
+    )
+
+    def repro_proibido():
+        raise AssertionError("o re-treino não pode rodar com canário ativo")
+
+    monkeypatch.setattr(gate, "_dvc_repro", repro_proibido)
+    relatorio = tmp_path / "relatorio.json"
+
+    assert gate.main(["--relatorio-json", str(relatorio)]) == gate.SAIDA_CANARIO_EM_OBSERVACAO
+    assert "canário em observação" in json.loads(relatorio.read_text(encoding="utf-8"))["motivo"]
+
+
+def test_modelo_ja_revertido_num_canario_e_bloqueado(com_canario):
+    com_canario.semear_champion()
+    antes = com_canario.champion_path.read_bytes()
+    com_canario.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71})
+    versao = gate.calcular_model_version(com_canario.model_path)
+    (com_canario.tmp_path / "canario_historico.json").write_text(
+        json.dumps({"canarios": [{"model_version": versao, "decisao": "revertido"}]}),
+        encoding="utf-8",
+    )
+
+    assert gate.main(["--sem-repro"]) == gate.SAIDA_BLOQUEADO
+    assert com_canario.champion_path.read_bytes() == antes
+    assert not canario.ativo()
+
+
+def test_params_do_repositorio_habilitam_o_canario():
+    assert canario.habilitado(gate.PARAMS)
+    assert 0 < canario.ler_config(gate.PARAMS)["fracao"] < 1

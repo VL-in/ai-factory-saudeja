@@ -1,0 +1,268 @@
+# CI.
+#
+# Gates por camada, do mais barato ao mais caro -- uma quebra de tipo falha
+# antes de gastar SAS do Azure ou baixar modelo:
+#
+#   script   -> ruff (inclui as regras S, flake8-bandit) e mypy
+#   dados    -> testes do contrato de features e do validate_data (pytest)
+#   features -> teste de skew treino-serving a partir do dado cru (pytest)
+#   modelo   -> suite de sanidade contra o data/model.pkl de main (pytest)
+#   imagem   -> docker build da imagem de deploy + smoke de saude e de LGPD
+#   integracao -> Supabase local + pipeline de treino no container
+#
+# Mesmos comandos que a maquina local, sem flags extras (architecture.md §8).
+#
+# Em PR para main que vai deployar, o job `versao` confere tambem a versao
+# SemVer do topo do CHANGELOG.
+#
+# Tres gatilhos, um para cada caminho por onde codigo chega a main:
+#   pull_request      -> PR para dev ou main;
+#   workflow_call     -> chamado pelo deploy.yml como primeiro job: o mesmo SHA
+#                        testado e' o deployado, e falha aqui bloqueia o deploy
+#                        por construcao;
+#   workflow_dispatch -> o PR de promocao do retrain.yml, aberto com o
+#                        GITHUB_TOKEN, nao dispara outros workflows; o
+#                        retrain.yml o aciona assim, que e' a excecao que a
+#                        documentacao abre para esse token.
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  # CI nao e' trafego de produto: nada vai para `eventos_app` (ADR-006).
+  OBSERVABILIDADE_ATIVA: "false"
+
+jobs:
+  mudancas:
+    name: decidir se a integracao e' obrigatoria
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      integracao: ${{ steps.filtro.outputs.integracao }}
+      deploya: ${{ steps.deploya.outputs.deploya }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Caminhos que exigem banco de verdade
+        id: filtro
+        # Em PR, a integracao so' e' obrigatoria quando o PR toca o que conversa
+        # com o Supabase: o CI rapido ja' cobre a logica, e subir o stack do
+        # Supabase custa minutos. Em main (via deploy) e por dispatch, sempre.
+        env:
+          EVENTO: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENTO" != "pull_request" ]; then
+            echo "integracao=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "origin/${BASE}...HEAD" \
+              | grep -qE '^(src/jobs/|src/db/|src/export_treino\.py|src/canario\.py|supabase/)'; then
+            echo "integracao=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "integracao=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: O merge deste PR dispara o deploy?
+        id: deploya
+        # O espelho do `paths-ignore` do deploy.yml (tests/test_coerencia_repo.py
+        # confere que os dois concordam). PR que so' mexe nesses caminhos nao
+        # deploya, e por isso nao precisa de versao nova.
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+          IGNORADOS_PELO_DEPLOY: '^(docs/|README\.md$|data/canario\.json$|data/canario/|data/canario_historico\.json$)'
+        # `grep -c` le a entrada inteira: com `-q` o grep sairia cedo e o
+        # SIGPIPE do `git diff` viraria falha do pipeline (pipefail).
+        run: |
+          fora=$(git diff --name-only "origin/${BASE}...HEAD" | grep -vcE "$IGNORADOS_PELO_DEPLOY" || true)
+          if [ "${fora:-0}" -gt 0 ]; then
+            echo "deploya=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploya=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  versao:
+    # Em PR para main que vai deployar: a versao do topo do CHANGELOG tem de
+    # ser nova, ou o deploy falharia depois do merge (scripts/versao_release.py).
+    # Pulado nos demais casos -- e check pulado conta como aprovado na protecao
+    # de branch. Os PRs automaticos do re-treino e do canario, que rodam o CI
+    # por workflow_dispatch, sobem o PATCH sozinhos.
+    name: versao da release (SemVer)
+    needs: mudancas
+    if: >-
+      github.event_name == 'pull_request' && github.base_ref == 'main'
+      && needs.mudancas.outputs.deploya == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # as tags
+          persist-credentials: false
+
+      - name: Versao nova no topo do CHANGELOG
+        run: python3 scripts/versao_release.py conferir
+
+  rapido:
+    name: lint, tipos e testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # SAS so' de leitura: o CI roda codigo de PR, e a credencial
+      # de escrita no remote fica so' no retrain.yml, o unico que faz `dvc push`.
+      DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10" # mesma minor das imagens (dockerfile, infra/)
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements/dev.txt
+
+      - name: Lint (ruff, com regras S)
+        run: ruff check src tests scripts
+
+      - name: Tipos (mypy)
+        run: mypy src scripts
+
+      - name: Baixar o modelo (so' ele)
+        # Os testes de API/inferencia/UI e a suite de sanidade carregam o
+        # data/model.pkl real, que nao esta' no git. `dvc pull` sempre com alvo:
+        # o dataset de treino nao tem o que fazer aqui.
+        run: |
+          dvc remote add --local -f azure "$DVC_REMOTE_URL"
+          dvc pull data/model.pkl
+
+      - name: Canario ativo -- alcancavel, coerente e sao (ADR-009)
+        # No PR que abre o canario (e em todo PR enquanto ele estiver ativo):
+        # o modelo foi publicado no remote, e' o registrado em canario.json,
+        # foi aprovado contra o campeao atual, as copias do lock/dataset que a
+        # promocao restaura existem, e a suite de sanidade o aprova.
+        run: |
+          if [ -f data/canario/model.pkl.dvc ]; then
+            dvc pull data/canario/model.pkl
+            python src/canario.py verificar --sanidade
+          else
+            echo "nenhum canario ativo"
+          fi
+
+      - name: Testes
+        run: pytest
+
+  imagem:
+    name: imagem de deploy (build + smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements/dvc.txt
+
+      - name: Baixar o modelo
+        # A imagem empacota o model.pkl (COPY data/model.pkl): sem ele o build
+        # falha de proposito.
+        run: |
+          pip install -r requirements/dvc.txt
+          dvc remote add --local -f azure "$DVC_REMOTE_URL"
+          dvc pull data/model.pkl
+
+      - name: Staging de lista fechada (o mesmo do deploy)
+        # Build a partir do staging, nao do checkout: e' o
+        # contexto exato que o Space builda. O deploy.yml roda este job no
+        # mesmo SHA antes de sincronizar, entao um COPY que dependa de arquivo
+        # fora da lista falha aqui -- antes de migrar o banco.
+        run: python scripts/montar_staging_space.py
+
+      - name: Build da imagem que vai para o Space
+        run: docker build -t saudeja-app build/space
+
+      - name: Smoke -- UI e API de pe, do jeito que o Space as sobe
+        # Sem Supabase de proposito: a UI tem de subir e responder saude mesmo
+        # sem banco (as abas que dependem dele mostram o erro, nao derrubam).
+        # --user 1000: o Space roda o container com esse uid, nao como
+        # root; explicito aqui para o smoke continuar valendo mesmo que o USER
+        # do Dockerfile mude. O script confere tambem que a API serve o
+        # model.pkl do staging.
+        run: |
+          docker run -d --name saudeja-app --user 1000 -e APP_ENV=prod \
+            -p 7860:7860 -p 8000:8000 saudeja-app
+          if ! python scripts/smoke_deploy.py local --modelo build/space/data/model.pkl; then
+            docker logs saudeja-app
+            exit 1
+          fi
+
+      - name: Nenhuma PII no log do container
+        # scripts/auditoria_lgpd.py sai 1 se achar algo (LGPD). O log do
+        # Space e' efemero, entao e' aqui que a varredura tem o que varrer.
+        if: always()
+        run: docker logs saudeja-app 2>&1 | python scripts/auditoria_lgpd.py -
+
+  integracao:
+    name: integracao (Supabase local + pipeline no container)
+    needs: mudancas
+    if: needs.mudancas.outputs.integracao == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements/dev.txt
+
+      - name: Baixar modelo e semente
+        # Excecao a regra "so' o model.pkl": o teste do pipeline de treino
+        # (tests/test_pipeline_dvc_integracao.py) roda as quatro etapas do
+        # dvc.yaml sobre a semente. O runner e' descartavel e nada daqui sobe
+        # para lugar nenhum -- a regra existe por causa do Space, nao do runner.
+        run: |
+          dvc remote add --local -f azure "$DVC_REMOTE_URL"
+          dvc pull data/model.pkl data/consultas-historicas.csv
+
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: 2.117.0 # fixa: o CLI muda o comportamento entre versoes
+
+      - name: Subir o Supabase local (aplica supabase/migrations/)
+        # Os testes leem `supabase status -o json` e falam com o PostgREST via
+        # supabase-py: precisam do stack, nao de um Postgres cru.
+        # Studio/edge/realtime ficam de fora so' para subir mais rapido.
+        run: supabase start -x studio,edge-runtime,realtime,imgproxy,logflare,vector,supavisor
+
+      - name: Testes de integracao
+        run: pytest -m integracao

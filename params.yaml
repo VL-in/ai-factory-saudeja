@@ -13,7 +13,7 @@ decision:
 features:
   temporais: true       # true | false -- inclui dia_de_semana e horario
 
-# Gate de promoção do re-treino mensal (Passo 9.1, src/retrain_gate.py).
+# Gate de promoção do re-treino mensal (src/retrain_gate.py).
 # Tolerância de REGRESSÃO relativa ao campeão (data/champion_metrics.json),
 # não alvo absoluto -- os alvos do SLO §3 (recall_1>=0.75, f1_1>=0.65) o
 # modelo vigente já viola, e se fossem critério de promoção nada jamais
@@ -23,10 +23,79 @@ features:
 # positivos, um único paciente move recall_1 em 1/21 ~= 0.048 -- tolerância
 # menor que isso bloquearia/promoveria por ruído de amostragem. roc_auc é
 # contínua e não sofre desse salto. Revisar quando o dataset crescer
-# (Passo 9.0): com >=50 positivos no fold cai para 0.02 -- o gate avisa
+# com desfechos reais: com >=50 positivos no fold cai para 0.02 -- o gate avisa
 # quando esse ponto chegar.
 gate:
   tolerancia:
     recall_1: 0.05
     f1_1: 0.05
     roc_auc: 0.02
+  # Piso ABSOLUTO, alem da comparacao relativa: sem ele, cada
+  # promocao pode regredir ate' a tolerancia em relacao ao campeao da vez e,
+  # somadas, as regressoes pequenas levam o modelo para perto do acaso (efeito
+  # catraca). 0.60 e' decisao da autora; o campeao vigente mede 0.643.
+  piso:
+    roc_auc: 0.60
+  # Fracao do fold de teste que o desafiante mandaria para lembrete pago no
+  # threshold vigente. So' NOTIFICA acima disto, nao bloqueia (decisao da
+  # autora): 0.30 e' o "cortar 70% do custo de mensageria" do BRIEFING. O
+  # campeao vigente marca 22 de 76 (29%).
+  taxa_disparo_alerta: 0.30
+
+# Contrato de dados (src/contrato_features.py e src/validate_data.py).
+# Especialidades que o cadastro oferece -- a lista vem daqui, e nao do mapa do
+# modelo, para o que a clinica atende ser configuracao e nao efeito colateral do
+# ultimo treino. tests/test_contrato_features.py trava que ela esta' contida no
+# mapa do modelo em producao, e a suite de sanidade faz o mesmo com o desafiante
+# do re-treino: especialidade do cadastro que o modelo nao conhece seria
+# quarentena garantida para todo paciente dela.
+cadastro:
+  especialidades:
+    - cardiologia
+    - clinica geral
+    - dermatologia
+    - ginecologia
+    - oftalmologia
+    - ortopedia
+    - pediatria
+
+# Checagens de distribuicao do stage validate_data, que BLOQUEIAM o re-treino
+# antes de treinar. O minimo de positivos no fold de teste nao mora aqui: e'
+# derivado de gate.tolerancia (1/tolerancia), pela mesma regra do SLO 3.1 --
+# com menos positivos que isso, a tolerancia do gate fica menor que o passo de
+# um unico paciente e ele decide por sorteio.
+dados:
+  taxa_positivos:
+    minimo: 0.10
+    maximo: 0.50
+  # PSI por feature (producao x semente) acima disto vira ALERTA no resumo do
+  # re-treino, sem bloquear. 0.2 e' o corte usual de "mudanca relevante".
+  psi_alerta: 0.2
+
+# Canario do modelo (ADR-009, src/canario.py). O desafiante que
+# passa no gate nao substitui o campeao de uma vez: decide `fracao` da fila do
+# job D-2 (sorteio estavel por paciente) e e' comparado ao campeao no MESMO
+# periodo, na fila real. Os guardrails sao de NAO-INFERIORIDADE: o canario pode
+# ser pior que o campeao por menos que a `margem` (pontos percentuais), com
+# significancia (z unilateral, Agresti-Caffo). Violacao reverte na hora; sem
+# evidencia ate' `dias_maximos`, reverte tambem -- o conservador e' o campeao.
+#
+# Os minimos de amostra sao PISOS, nao o criterio: quem decide e' o teste. Com
+# taxas iguais nos dois bracos, ~300 no canario (e 4x isso no campeao, com
+# fracao 0.2) ja' bastam para afirmar nao-inferioridade a 5 p.p. -- volume de
+# poucos dias com varias clinicas. Com o volume de uma clinica so' (~10
+# agendamentos/dia no canario) a evidencia nao fecha em 21 dias e o canario e'
+# revertido por prazo: o comportamento seguro, mas que congela o modelo.
+canario:
+  habilitado: true          # false = promocao direta pelo gate (comportamento anterior)
+  fracao: 0.20              # parte da fila decidida pelo canario
+  dias_minimos: 7           # cobre um ciclo semanal completo da agenda
+  dias_maximos: 21          # menor que o intervalo do re-treino mensal
+  predicoes_minimas: 300    # no braco do canario
+  desfechos_minimos: 300    # baixo risco com desfecho registrado, no canario
+  amostra_minima_por_braco: 30   # abaixo disto nenhum guardrail e' avaliado
+  z_critico: 1.645          # 95% unilateral
+  margem:
+    taxa_disparo: 0.05      # custo: lembrete pago (BRIEFING: cortar 70%)
+    falta_nao_avisada: 0.05 # erro que custa R$ 180: baixo risco que faltou
+    quarentena: 0.02        # fila que o modelo nao conseguiu predizer

@@ -1,6 +1,6 @@
-# Interface Streamlit (src/ui/) -- Passo 4. Fica separada de api.txt para a
+# Interface Streamlit (src/ui/). Fica separada de api.txt para a
 # imagem da API isolada (infra/api/dockerfile) continuar enxuta (cold start,
-# SLO §2); a imagem combinada do deploy (Passo 11) instala os dois.
+# SLO §2); a imagem combinada do deploy (HF Space) instala os dois.
 -r base.txt
 
 streamlit==1.56.0
@@ -9,7 +9,7 @@ streamlit==1.56.0
 # (default, ADR-005) a UI não abre rede nenhuma.
 httpx==0.28.1
 
-# src/db/ (Passo 5) -- "Fila do dia" e cadastro de paciente passam a usar
-# supabase-py de verdade. Fora de api.txt/base.txt porque a API (Passo 3) é
+# src/db/ -- "Fila do dia" e cadastro de paciente passam a usar
+# supabase-py de verdade. Fora de api.txt/base.txt porque a API é
 # stateless e não deve carregar dependência de banco no cold start (SLO §2).
 supabase==2.31.0

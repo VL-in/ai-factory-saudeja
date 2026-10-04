@@ -1,16 +1,20 @@
 # Ferramental de desenvolvimento -- NÃO entra em nenhuma imagem Docker
-# (nem a de treino, nem a da API). Usado localmente e pelo CI (Passo 10).
+# (nem a de treino, nem a da API). Usado localmente e pelo CI.
 -r train.txt
 -r api.txt
 -r ui.txt
 
+# DVC -- em arquivo proprio porque o deploy e o job D-2 do
+# GitHub Actions precisam dele SEM o resto do ambiente de desenvolvimento.
+-r dvc.txt
+
 # Lint/format -- configuração em ruff.toml (docs/architecture.md §8)
 ruff==0.16.7
 
-# DVC -- pipeline de treino (dvc.yaml) e gate de re-treino (Passo 9.1). Ate'
-# aqui o dvc existia so' no ambiente local da autora, nao declarado em
-# requirements nenhum: o retrain.yml do GitHub Actions roda `dvc repro`/
-# `dvc push` e precisa dele instalado. O extra [azure] traz o adlfs/
-# azure-storage-blob exigidos pelo remote azure:// -- sem ele o `dvc push`
-# falha com "missing dependencies: ['dvc-azure']", e nao com erro de rede.
-dvc[azure]==3.67.1
+# Type-check estatico -- configuracao em mypy.ini. Roda como
+# `mypy src scripts`, local e no CI, sem flags extras.
+mypy==2.3.1
+# Stubs do PyYAML: yaml.safe_load e' a porta de entrada do params.yaml
+# (config_projeto.carregar_params), o ponto mais central do repo a ficar sem
+# tipo. pandas-stubs fica de fora de proposito -- ver mypy.ini.
+types-PyYAML==6.0.12.20260906

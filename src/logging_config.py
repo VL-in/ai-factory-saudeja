@@ -1,5 +1,5 @@
 """
-SaúdeJá — logging estruturado com redação de PII (Passo 8, "Blindagem LGPD").
+SaúdeJá — logging estruturado com redação de PII ("Blindagem LGPD").
 
 O requisito é absoluto no BRIEFING.md ("Sem PII em logs. Nunca.") e mensurável
 no SLO §6 (0 ocorrências). O que este módulo resolve é a parte *preventiva*
@@ -191,7 +191,7 @@ def chave_de_pii(chave: str) -> bool:
     (`paciente_nome`).
 
     Público porque não serve só ao log: `src/explain.py` usa esta mesma função
-    para barrar PII no contexto enviado ao LLM (Passo 13). Duas noções de "o
+    para barrar PII no contexto enviado ao LLM (integração opcional). Duas noções de "o
     que é campo de PII" no repositório divergiriam, e a que divergisse em
     silêncio seria a que guarda a fronteira externa."""
     alvo = str(chave).lower()
@@ -334,8 +334,8 @@ def _silenciar_ruido_de_terceiros() -> None:
 
     Reduzir para WARNING é menos superfície de PII (query string de PostgREST
     carrega valor de filtro) e menos ruído num log que é efêmero e não tem
-    busca -- mesmo argumento que manteve `/health` fora da instrumentação do
-    Passo 8.5. Erro de HTTP continua aparecendo.
+    busca -- mesmo argumento que manteve `/health` fora da instrumentação de
+    `eventos_app` (ADR-006). Erro de HTTP continua aparecendo.
     """
     for nome in ("httpx", "httpcore", "hpack", "urllib3"):
         logging.getLogger(nome).setLevel(logging.WARNING)

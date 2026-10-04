@@ -105,7 +105,7 @@ def test_explicador_llm_e_interface_abstrata():
 
 class _ExplicadorEspiao(explain.ExplicadorLLM):
     """Implementação que só registra o que chegaria ao prompt. Faz o papel do
-    `ExplicadorLLMTrueFoundry` do Passo 13 sem nenhuma rede."""
+    futuro `ExplicadorLLMTrueFoundry` sem nenhuma rede."""
 
     def __init__(self):
         self.contexto_recebido = None
@@ -175,7 +175,7 @@ def test_nenhuma_implementacao_de_explicador_pode_pular_a_fronteira():
 
 def test_explicar_recusa_x_com_mais_de_uma_linha(explicacao_real):
     """Regressão: explicar() devolvia silenciosamente a explicação só da
-    primeira linha. No job diário (Passo 6), que roda sobre a fila de D+2,
+    primeira linha. No job diário, que roda sobre a fila de D+2,
     isso gravaria a explicação do paciente errado em todas as predições
     seguintes -- sem erro visível e violando o SLO §4 na prática."""
     _, explainer, X = explicacao_real

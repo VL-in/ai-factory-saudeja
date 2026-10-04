@@ -1,16 +1,35 @@
 """
-SaúdeJá — acesso a dados (Passo 5), sobre o schema de
+SaúdeJá — acesso a dados, sobre o schema de
 `supabase/migrations/20260919000000_init.sql` (pacientes, agendamentos,
 predicoes, mensagens_disparadas).
 
-Cada função encapsula uma consulta/gravação específica que a UI (Passo 4) e o
-job D-2 (Passo 6) precisam -- nada de query builder genérico aqui, só os
-acessos que o produto de fato usa (ver PLANO-IMPLEMENTACAO.md, Passo 5).
+Cada função encapsula uma consulta/gravação específica que a UI e o
+job D-2 precisam -- nada de query builder genérico aqui, só os
+acessos que o produto de fato usa.
 """
+import re
 from datetime import date, datetime, timedelta
+from typing import Any, cast
+
+from postgrest.types import CountMethod
 
 from config_projeto import fuso_da_clinica, hoje_na_clinica
 from db.client import obter_client
+
+Linha = dict[str, Any]
+
+
+def _linhas(dados: object) -> list[Linha]:
+    """`resposta.data` de um select/insert/update do PostgREST: sempre um
+    array JSON de objetos. O `supabase-py` o tipa como JSON genérico (`bool |
+    str | ... | None`); o cast aqui é a fronteira que diz ao type-check o que o
+    PostgREST garante, em vez de espalhar `# type: ignore` pelo módulo."""
+    return cast(list[Linha], dados or [])
+
+
+def _primeira(dados: object) -> Linha:
+    """Primeira linha devolvida por um insert/upsert/update com retorno."""
+    return _linhas(dados)[0]
 
 
 def _intervalo_do_dia(dia: date) -> tuple[str, str]:
@@ -53,7 +72,7 @@ def inserir_paciente(
     `ui/logic.py::_id_paciente_externo_de_cpf`), nunca o CPF em si -- esta
     função só persiste o que recebe. `data_nascimento` substitui `idade`
     (Sec4.1/cadastro realista): a idade em si é calculada sob demanda por
-    `features.calcular_idade`, nunca gravada. `telefone` (Passo 7, migration
+    `features.calcular_idade`, nunca gravada. `telefone` (migration
     `20260920020000_telefone_paciente.sql`) já chega normalizado
     (`ui/logic.py::normalizar_telefone`) -- é a exceção deliberada à
     minimização de PII: sem contato, o job D-2 não tem para onde mandar o
@@ -82,7 +101,7 @@ def inserir_paciente(
         .upsert(registro, on_conflict="id_paciente_externo")
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
 def contar_no_shows_anteriores(id_paciente: str) -> int:
@@ -94,7 +113,7 @@ def contar_no_shows_anteriores(id_paciente: str) -> int:
     client = obter_client()
     resposta = (
         client.table("agendamentos")
-        .select("id", count="exact")
+        .select("id", count=CountMethod.exact)
         .eq("id_paciente", id_paciente)
         .eq("status", "no_show")
         .execute()
@@ -109,7 +128,7 @@ def inserir_agendamento(
     data_hora_agendada: datetime,
     dias_entre_agendamento_consulta: int,
     historico_noshow: int,
-) -> dict:
+) -> Linha:
     client = obter_client()
     resposta = (
         client.table("agendamentos")
@@ -125,7 +144,7 @@ def inserir_agendamento(
         )
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
 _COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
@@ -135,27 +154,39 @@ _COLUNAS_AGENDAMENTO_PARA_INFERENCIA = (
 )
 
 
-def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
-    """Agendamentos de `data_referencia + 2 dias` (D-2, ver
-    architecture.md/glossário) ainda sem predição gravada -- o job (Passo 6)
-    roda uma vez ao dia e não deve reprocessar quem já tem `predicoes`.
+def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[Linha]:
+    """Agendamentos ainda `agendado`, **de amanhã até D+2**, sem predição
+    gravada e sem lembrete já enviado -- a fila do job diário.
 
-    Seleciona só as colunas que o job de inferência (`construir_features`)
-    de fato consome -- de `agendamentos` e do `pacientes` embutido
-    (data_nascimento, sexo) -- em vez de `select("*, pacientes(*)")`: evita trafegar/desserializar
-    colunas sem uso (ex. `criado_em`, `status`) numa consulta que roda sobre a
-    fila inteira do dia. O embed depende do índice em `agendamentos.id_paciente`
-    (ver migration `20260920000000_idx_agendamentos_id_paciente.sql`) para o
-    join não fazer full scan de `pacientes`."""
+    A janela era exatamente D+2 até 2026-09-29, e isso
+    tinha dois buracos: (a) se o cron falhasse ou fosse descartado num dia, os
+    pacientes daquele dia nunca eram preditos -- no dia seguinte já estavam em
+    D+1, fora da janela; (b) um agendamento feito com menos de dois dias de
+    antecedência nunca entrava em janela nenhuma. Com [amanhã, D+2], um dia
+    perdido é recuperado sozinho na execução seguinte. Hoje fica de fora: o
+    lembrete no próprio dia da consulta chegaria tarde demais para servir.
+
+    O filtro é idempotente em sequência: quem já tem `predicoes` ou já recebeu
+    lembrete (`lembrete_enviado`, inclusive o enviado sem predição por dado
+    inválido) não volta. Um agendamento em quarentena cujo envio falhou volta
+    no dia seguinte, e é o que se quer -- é uma nova tentativa de envio.
+
+    Seleciona só as colunas que o job consome, em vez de
+    `select("*, pacientes(*)")`. O embed depende do índice em
+    `agendamentos.id_paciente` (migration
+    `20260920000000_idx_agendamentos_id_paciente.sql`)."""
     client = obter_client()
-    inicio, fim = _intervalo_do_dia(data_referencia + timedelta(days=2))
+    inicio, _ = _intervalo_do_dia(data_referencia + timedelta(days=1))
+    _, fim = _intervalo_do_dia(data_referencia + timedelta(days=2))
 
-    agendamentos = (
+    agendamentos = _linhas(
         client.table("agendamentos")
         .select(_COLUNAS_AGENDAMENTO_PARA_INFERENCIA)
         .gte("data_hora_agendada", inicio)
         .lt("data_hora_agendada", fim)
         .eq("status", "agendado")
+        .eq("lembrete_enviado", False)
+        .order("data_hora_agendada")
         .execute()
         .data
     )
@@ -163,11 +194,23 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[dict]:
         return []
 
     ids = [a["id"] for a in agendamentos]
-    predicoes_existentes = (
+    predicoes_existentes = _linhas(
         client.table("predicoes").select("id_agendamento").in_("id_agendamento", ids).execute().data
     )
     ids_com_predicao = {p["id_agendamento"] for p in predicoes_existentes}
     return [a for a in agendamentos if a["id"] not in ids_com_predicao]
+
+
+def marcar_lembrete_enviado(id_agendamento: str) -> None:
+    """Grava no próprio agendamento que o paciente recebeu lembrete. Em
+    `agendamentos`, e não só em `mensagens_disparadas`, por
+    dois motivos: `mensagens_disparadas` é purgada em 365 dias (LGPD §5), e o
+    re-treino precisa do dado enquanto o agendamento existir -- o SMS é uma
+    intervenção que muda o desfecho (feedback loop); e é o filtro que impede
+    reenvio na janela de três dias do job."""
+    obter_client().table("agendamentos").update({"lembrete_enviado": True}).eq(
+        "id", id_agendamento
+    ).execute()
 
 
 def gravar_predicao(
@@ -175,10 +218,17 @@ def gravar_predicao(
     probabilidade: float,
     classe_prevista: int,
     threshold_usado: float,
-    explicacao_shap: list,
+    explicacao_shap: list[dict[str, Any]],
     model_version: str,
     explicacao_texto: str | None = None,
-) -> dict:
+    fora_do_dominio: bool | None = None,
+) -> Linha:
+    """`fora_do_dominio` (contrato de features, migration
+    `20260930000000_fora_do_dominio.sql`): o agendamento tinha algum campo que
+    o modelo não viu no treino (distância > 50 km, antecedência > 90 dias...).
+    A predição é gravada mesmo assim -- o contrato manda marcar, nunca
+    rejeitar -- e a marca aparece na fila do dia. `None` é "não verificado",
+    que é o que as predições anteriores à coluna carregam."""
     client = obter_client()
     resposta = (
         client.table("predicoes")
@@ -191,16 +241,17 @@ def gravar_predicao(
                 "explicacao_shap": explicacao_shap,
                 "explicacao_texto": explicacao_texto,
                 "model_version": model_version,
+                "fora_do_dominio": fora_do_dominio,
             }
         )
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
-def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> dict:
+def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> Linha:
     """Auditoria de disparo (SLA §6) -- uma linha por agendamento processado
-    pelo job D-2 (Passo 6), enviado ou não: `status_envio` distingue
+    pelo job D-2, enviado ou não: `status_envio` distingue
     'enviado' (probabilidade acima do threshold, lembrete pago disparado) de
     'nao_enviado' (abaixo do threshold, nenhum custo de mensageria), então a
     tabela sempre reflete a decisão tomada, não só os envios reais."""
@@ -210,51 +261,63 @@ def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> di
         .insert({"id_agendamento": id_agendamento, "canal": canal, "status_envio": status_envio})
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
 STATUSES_DESFECHO = ("concluido", "no_show", "cancelado")
 
 
-def atualizar_status_agendamento(id_agendamento: str, status: str) -> dict:
-    """Registra o desfecho real de um agendamento (Passo 9.0), acionado pela
-    aba "Fila do dia". Sem isto, `agendamentos.status` nunca sai de
-    'agendado': a coluna aceita 'no_show' desde a migration
-    `20260920010000_cadastro_pacientes.sql` e `contar_no_shows_anteriores` já
-    lê dela, mas nada no produto jamais escreveu esse valor -- o
-    `historico_noshow` automático do cadastro só passa a funcionar de
-    verdade a partir daqui. Também é a fonte, via `export_treino.py`, do
-    dataset real que alimenta o gate de re-treino mensal (Passo 9.1): sem
-    desfecho registrado, o re-treino reproduziria sempre a mesma métrica.
+class DesfechoForaDePrazo(Exception):
+    """Tentativa de registrar desfecho de consulta que ainda não aconteceu."""
 
-    Não revalida `status` contra `STATUSES_DESFECHO` aqui -- o check
-    constraint do Postgres já rejeita valor fora do domínio (mesmo critério
-    já usado para `sexo`/`historico_noshow` no schema)."""
+
+def atualizar_status_agendamento(
+    id_agendamento: str, status: str, hoje: date | None = None
+) -> Linha:
+    """Registra o desfecho real de um agendamento, acionado pela
+    aba "Fila do dia". É a fonte do `historico_noshow` automático do cadastro
+    e, via `export_treino.py`, do dataset real do re-treino mensal.
+
+    **Só para consulta de hoje ou anterior**: marcar
+    no-show numa consulta futura gravaria um rótulo que não aconteceu no
+    dataset de treino e ainda inflaria o `historico_noshow` dos próximos
+    cadastros do paciente. A UI já desabilita os botões; aqui é a defesa em
+    profundidade -- o filtro de data vai no próprio UPDATE, então não há
+    janela entre checar e gravar. Nenhuma linha afetada vira erro explícito.
+
+    Não revalida `status` contra `STATUSES_DESFECHO` -- o check constraint do
+    Postgres já rejeita valor fora do domínio."""
     client = obter_client()
+    _, fim_de_hoje = _intervalo_do_dia(hoje or hoje_na_clinica())
     resposta = (
         client.table("agendamentos")
         .update({"status": status})
         .eq("id", id_agendamento)
+        .lt("data_hora_agendada", fim_de_hoje)
         .execute()
     )
-    return resposta.data[0]
+    if not resposta.data:
+        raise DesfechoForaDePrazo(
+            "desfecho só pode ser registrado para consulta de hoje ou anterior"
+        )
+    return _primeira(resposta.data)
 
 
 _COLUNAS_AGENDAMENTO_PARA_EXPORT = (
     "id, especialidade, distancia_km, data_hora_agendada, "
-    "dias_entre_agendamento_consulta, status, "
+    "dias_entre_agendamento_consulta, historico_noshow, status, lembrete_enviado, "
     "pacientes(id_paciente_externo, data_nascimento, sexo)"
 )
 
 
-def buscar_agendamentos_com_desfecho() -> list[dict]:
+def buscar_agendamentos_com_desfecho() -> list[Linha]:
     """Agendamentos com desfecho real conhecido (`concluido` ou `no_show`,
-    Passo 9.0) -- fonte de dado real de `src/export_treino.py`. Sem
+    registrado na "Fila do dia") -- fonte de dado real de `src/export_treino.py`. Sem
     `telefone` no select, mesma minimização de PII de
     `buscar_agendamentos_d2_pendentes`: o export nunca deve ter como emitir
     essa coluna, mesmo por acidente."""
     client = obter_client()
-    return (
+    return _linhas(
         client.table("agendamentos")
         .select(_COLUNAS_AGENDAMENTO_PARA_EXPORT)
         .in_("status", ["concluido", "no_show"])
@@ -262,6 +325,22 @@ def buscar_agendamentos_com_desfecho() -> list[dict]:
         .execute()
         .data
     )
+
+
+def contar_consultas_sem_desfecho(antes_de: date) -> int:
+    """Consultas de antes de `antes_de` (dia civil da clínica) ainda
+    `agendado`: o desfecho não foi registrado. Completude de rótulo do
+    re-treino, medida no export porque só o banco a enxerga."""
+    inicio, _ = _intervalo_do_dia(antes_de)
+    resposta = (
+        obter_client()
+        .table("agendamentos")
+        .select("id", count=CountMethod.exact)
+        .eq("status", "agendado")
+        .lt("data_hora_agendada", inicio)
+        .execute()
+    )
+    return resposta.count or 0
 
 
 # Lista explícita, em vez do `*, pacientes(*), predicoes(*)` que vigorava até
@@ -274,11 +353,11 @@ _COLUNAS_FILA_DO_DIA = (
     "id, especialidade, data_hora_agendada, status, "
     "pacientes(id_paciente_externo, nome_completo), "
     "predicoes(criado_em, probabilidade, classe_prevista, explicacao_shap, "
-    "explicacao_texto, model_version)"
+    "explicacao_texto, model_version, fora_do_dominio)"
 )
 
 
-def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
+def buscar_fila_do_dia(dia: date | None = None) -> list[Linha]:
     """Agendamentos do dia (default hoje) com paciente e última predição
     embutidos, ordenados por probabilidade desc -- quem ainda não tem
     predição (job ainda não rodou/D-2 não bateu) vai para o fim da fila, não
@@ -290,7 +369,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
     client = obter_client()
     inicio, fim = _intervalo_do_dia(dia or hoje_na_clinica())
 
-    agendamentos = (
+    agendamentos = _linhas(
         client.table("agendamentos")
         .select(_COLUNAS_FILA_DO_DIA)
         .gte("data_hora_agendada", inicio)
@@ -300,7 +379,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
         .data
     )
 
-    def _probabilidade(agendamento: dict) -> float:
+    def _probabilidade(agendamento: Linha) -> float:
         predicoes = agendamento.get("predicoes") or []
         if not predicoes:
             return -1.0
@@ -309,7 +388,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[dict]:
     return sorted(agendamentos, key=_probabilidade, reverse=True)
 
 
-# --- observabilidade de aplicação (Passo 8.5, ADR-006) -------------------------
+# --- observabilidade de aplicação (ADR-006) -----------------------------------
 
 
 def inserir_evento_app(
@@ -318,8 +397,8 @@ def inserir_evento_app(
     origem: str,
     duracao_ms: int | None = None,
     model_version: str | None = None,
-    detalhe: dict | None = None,
-) -> dict:
+    detalhe: dict[str, Any] | None = None,
+) -> Linha:
     """Grava uma linha em `eventos_app` (migration
     `20260921000000_eventos_app.sql`). Chamada **só** pelo worker de
     `src/observabilidade.py`, nunca direto do caminho de uma predição: é lá que
@@ -343,10 +422,10 @@ def inserir_evento_app(
         )
         .execute()
     )
-    return resposta.data[0]
+    return _primeira(resposta.data)
 
 
-def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[dict]:
+def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[Linha]:
     """Eventos a partir de `desde`, mais recentes primeiro.
 
     `limite` é explícito porque a agregação (p95) é feita em Python sobre estas
@@ -355,7 +434,7 @@ def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[dict]:
     calculado sobre uma fatia silenciosamente cortada mentiria, e é justamente
     um número que vai para o pitch (SLO §2)."""
     client = obter_client()
-    return (
+    return _linhas(
         client.table("eventos_app")
         .select("criado_em, tipo, origem, duracao_ms, status, model_version, detalhe")
         .gte("criado_em", desde.isoformat())
@@ -366,7 +445,7 @@ def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[dict]:
     )
 
 
-def ultimo_evento_app(tipo: str, status: str | None = None) -> dict | None:
+def ultimo_evento_app(tipo: str, status: str | None = None) -> Linha | None:
     """Evento mais recente de um tipo -- usado para "última execução
     bem-sucedida do job D-2" na aba de observabilidade (SLO §5). O
     dead-man's-switch externo (Healthchecks.io) cobre o caso em que o job nem
@@ -375,7 +454,7 @@ def ultimo_evento_app(tipo: str, status: str | None = None) -> dict | None:
     consulta = client.table("eventos_app").select("*").eq("tipo", tipo)
     if status:
         consulta = consulta.eq("status", status)
-    linhas = consulta.order("criado_em", desc=True).limit(1).execute().data
+    linhas = _linhas(consulta.order("criado_em", desc=True).limit(1).execute().data)
     return linhas[0] if linhas else None
 
 
@@ -387,7 +466,7 @@ def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
     client = obter_client()
     total = (
         client.table("predicoes")
-        .select("id", count="exact")
+        .select("id", count=CountMethod.exact)
         .gte("criado_em", desde.isoformat())
         .execute()
         .count
@@ -395,7 +474,7 @@ def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
     )
     com_explicacao = (
         client.table("predicoes")
-        .select("id", count="exact")
+        .select("id", count=CountMethod.exact)
         .gte("criado_em", desde.isoformat())
         .not_.is_("explicacao_shap", "null")
         .execute()
@@ -407,7 +486,7 @@ def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
 
 def purgar_dados_derivados(anteriores_a: datetime) -> dict[str, int]:
     """Retenção das tabelas **derivadas** (`predicoes`,
-    `mensagens_disparadas`), política do Passo 8 / `docs/LGPD.md` §5.
+    `mensagens_disparadas`), política de `docs/LGPD.md` §5.
 
     Pendurada na mesma purga diária de `eventos_app` pelo mesmo motivo do
     ADR-006: o job já roda uma vez por dia, e agendador novo é peça de infra a
@@ -420,7 +499,7 @@ def purgar_dados_derivados(anteriores_a: datetime) -> dict[str, int]:
     nunca a probabilidade que o modelo previu.
     """
     client = obter_client()
-    removidas = {}
+    removidas: dict[str, int] = {}
     for tabela in ("predicoes", "mensagens_disparadas"):
         linhas = (
             client.table(tabela)
@@ -447,3 +526,100 @@ def purgar_eventos_app(anteriores_a: datetime) -> int:
         .data
     )
     return len(removidas or [])
+
+
+# --------------------------------------------------------------------------
+# canário do modelo (ADR-009)
+# --------------------------------------------------------------------------
+def estatisticas_de_modelo(model_version: str, desde: datetime) -> dict[str, Any]:
+    """Contagens de um braço do canário (`src/canario.py`): predições,
+    disparos por risco, fora do domínio e -- entre os de baixo risco, que não
+    receberam lembrete -- quantos já têm desfecho e quantos faltaram.
+
+    O desfecho vem de `agendamentos.status`, que a clínica registra na "Fila do
+    dia". Só baixo risco entra nesse par: quem recebeu lembrete
+    teve o desfecho alterado pela intervenção, e compará-lo entre braços
+    mediria o SMS, não o modelo.
+
+    Tudo com `count='exact'` e `head=True` -- o PostgREST devolve só o total,
+    sem trazer as linhas (o default dele corta em 1000 por resposta, o que
+    num canário com várias clínicas truncaria a contagem em silêncio)."""
+    client = obter_client()
+    inicio = desde.isoformat()
+
+    def contar(colunas: str = "id", **filtros: Any) -> int:
+        consulta = (
+            client.table("predicoes")
+            .select(colunas, count=CountMethod.exact, head=True)
+            .eq("model_version", model_version)
+            .gte("criado_em", inicio)
+        )
+        for coluna, valor in filtros.items():
+            coluna = coluna.replace("__", ".")
+            consulta = (
+                consulta.in_(coluna, list(valor))
+                if isinstance(valor, tuple)
+                else consulta.eq(coluna, valor)
+            )
+        return consulta.execute().count or 0
+
+    com_desfecho = "id, agendamentos!inner(status)"
+    primeira = _linhas(
+        client.table("predicoes")
+        .select("criado_em")
+        .eq("model_version", model_version)
+        .gte("criado_em", inicio)
+        .order("criado_em")
+        .limit(1)
+        .execute()
+        .data
+    )
+    return {
+        "predicoes": contar(),
+        "disparos": contar(classe_prevista=1),
+        "fora_do_dominio": contar(fora_do_dominio=True),
+        "desfechos_baixo_risco": contar(
+            com_desfecho, classe_prevista=0, agendamentos__status=("concluido", "no_show")
+        ),
+        "faltas_baixo_risco": contar(
+            com_desfecho, classe_prevista=0, agendamentos__status="no_show"
+        ),
+        "primeira_predicao": ler_timestamptz(primeira[0]["criado_em"]) if primeira else None,
+    }
+
+
+def ler_timestamptz(valor: str) -> datetime:
+    """O PostgREST devolve `timestamptz` com a fração de segundo sem os zeros
+    finais ("...T12:00:00.12345+00:00"), e o `fromisoformat` do Python 3.10 só
+    aceita 3 ou 6 dígitos. Completa a fração antes de ler. Toda leitura de
+    `timestamptz` vinda do banco passa por aqui: com `now()`, ~1 em cada 10
+    valores termina em zero, então o `fromisoformat` direto falha só às vezes."""
+    return datetime.fromisoformat(
+        re.sub(r"\.(\d{1,6})(?=[+-]|$)", lambda m: "." + m.group(1).ljust(6, "0"), valor)
+    )
+
+
+def canario_revertido(model_version: str) -> Linha | None:
+    """Linha de `canarios_revertidos` do canário, se ele já foi revertido.
+    É o estado que tira o canário da fila do job imediatamente, antes de o PR
+    de reversão chegar a `main`."""
+    linhas = _linhas(
+        obter_client()
+        .table("canarios_revertidos")
+        .select("model_version, motivo, revertido_em")
+        .eq("model_version", model_version)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return linhas[0] if linhas else None
+
+
+def registrar_canario_revertido(model_version: str, motivo: str) -> None:
+    """Idempotente: o job e o `canario.yml` podem chegar à mesma decisão no
+    mesmo dia, e a primeira gravação (com o primeiro motivo) é a que vale."""
+    obter_client().table("canarios_revertidos").upsert(
+        {"model_version": model_version, "motivo": motivo},
+        on_conflict="model_version",
+        ignore_duplicates=True,
+    ).execute()

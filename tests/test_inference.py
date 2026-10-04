@@ -6,7 +6,7 @@ import preprocess
 
 
 def _payload_da_linha(df, i):
-    """Monta o payload cru (dict) que a API/job (Passos 3/6) receberiam,
+    """Monta o payload cru (dict) que a API/job receberiam,
     a partir de uma linha do fixture já no schema de consultas-historicas.csv."""
     linha = df.iloc[i]
     return {
@@ -113,3 +113,44 @@ def test_pipeline_ponta_a_ponta_sem_retreinar(df_consultas):
         X = inference.construir_features(payload, mapa_esp, features_temporais=True)
         probabilidade = inference.predizer(model, X)[0]
         assert 0.0 <= probabilidade <= 1.0
+
+
+# --- assinatura do modelo conferida na carga --------------------------------
+
+
+def test_modelo_com_features_diferentes_do_codigo_e_recusado_na_carga():
+    """Modelo treinado com `features.temporais=true` carregado por um código
+    que monta só as colunas base: prediria sem erro sobre colunas trocadas."""
+    with pytest.raises(inference.ModeloIncompativelError, match="features"):
+        inference.carregar_modelo("data/model.pkl", features_temporais=False)
+
+
+def test_categoricas_do_modelo_conferem_com_o_codigo(monkeypatch):
+    model, _ = inference.carregar_modelo("data/model.pkl")
+    assert sorted(inference._categoricas_do_modelo(model)) == sorted(
+        inference.COLUNAS_CATEGORICAS
+    )
+
+    monkeypatch.setattr(inference, "COLUNAS_CATEGORICAS", ["sexo", "especialidade"])
+    with pytest.raises(inference.ModeloIncompativelError, match="categóricas"):
+        inference.verificar_assinatura(model)
+
+
+def test_construir_features_lote_bate_com_linha_a_linha():
+    _, mapa = inference.carregar_modelo("data/model.pkl")
+    payloads = [
+        {
+            "idade": 45,
+            "sexo": sexo,
+            "especialidade": sorted(mapa)[0],
+            "distancia_km": 5.5,
+            "dias_entre_agendamento_consulta": 14,
+            "historico_noshow": 1,
+            "data_hora_agendada": "2026-01-09 18:00:00",
+        }
+        for sexo in ("F", "M")
+    ]
+    lote = inference.construir_features_lote(payloads, mapa)
+    for i, payload in enumerate(payloads):
+        linha = inference.construir_features(payload, mapa)
+        assert lote.iloc[[i]].reset_index(drop=True).equals(linha.reset_index(drop=True))

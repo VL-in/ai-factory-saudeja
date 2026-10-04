@@ -1,5 +1,5 @@
 """
-Varredura de PII em log (Passo 8 -- "Blindagem LGPD").
+Varredura de PII em log ("Blindagem LGPD").
 
 Ferramenta de verificação **local**, deliberadamente não a evidência principal
 do SLO §6. O ADR-006 já registrou por quê: o log de runtime do Hugging Face
@@ -8,7 +8,7 @@ dia do pitch não haverá log de produção nenhum para varrer. A garantia de
 zero-PII é preventiva -- o filtro de `src/logging_config.py` e as guardas
 estáticas de `tests/test_coerencia_repo.py`. Este script serve para:
 
-1. conferir o resultado de um smoke test local ponta a ponta (Passo 11) antes
+1. conferir o resultado de um smoke test local ponta a ponta do deploy antes
    do pitch, que é o momento em que existe log de verdade para olhar;
 2. auditar o log de um workflow do GitHub Actions baixado como artifact;
 3. fechar o ciclo do próprio filtro -- varrer a saída de um processo já

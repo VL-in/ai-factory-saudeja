@@ -1,6 +1,5 @@
 """
-SaúdeJá — mensageria (disparo de lembrete), interface + stub + Infobip real
-(Passo 7).
+SaúdeJá — mensageria (disparo de lembrete), interface + stub + Infobip real.
 
 Mesmo padrão já usado em `src/explain.py` (`ExplicadorLLM`/
 `ExplicadorLLMDesativado`): uma interface + um stub que nunca faz rede, para
@@ -22,8 +21,8 @@ import httpx
 
 
 class MessagingClient(ABC):
-    """Contrato único para o job (Passo 6) disparar lembretes, com stub
-    (dev/test, sem custo) e implementação real (Passo 7) atrás da mesma
+    """Contrato único para o job D-2 disparar lembretes, com stub
+    (dev/test, sem custo) e implementação real (Infobip) atrás da mesma
     assinatura. `canal` identifica quem enviou, para
     `repositories.registrar_mensagem` auditar sem o job precisar saber o
     provedor concreto."""
@@ -55,17 +54,17 @@ class ConfiguracaoInfobipAusente(Exception):
 class ErroEnvioInfobip(Exception):
     """Infobip respondeu com erro (credenciais inválidas, número não
     verificado no sandbox de teste, payload rejeitado) ou não respondeu --
-    o job (Passo 6) trata isso como falha de envio de UM agendamento, não
+    o job D-2 trata isso como falha de envio de UM agendamento, não
     deixa a exceção crua derrubar o processamento do resto da fila do dia.
 
-    **A mensagem não carrega o corpo da resposta** (mudança do Passo 8): a
+    **A mensagem não carrega o corpo da resposta** (blindagem LGPD do log): a
     Infobip ecoa o payload enviado no corpo de erro, com o `to` -- o telefone
     do paciente -- dentro. Essa string ia inteira para `resultado["erros"]`
     do job, era exibida crua por `st.json` na aba de dev e vazaria em qualquer
     `logger.warning(f"...{exc}")` futuro. O que fica na mensagem é o par
     (status HTTP, `messageId` da Infobip), que é o que identifica a causa --
-    foi assim que se diagnosticou `EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL` no
-    Passo 7.
+    foi assim que se diagnosticou `EC_ACCOUNT_NOT_PROVISIONED_FOR_CHANNEL` na
+    validação contra a conta real.
 
     `corpo_bruto` guarda a resposta completa para inspeção em depurador, e
     **não deve ser logado nem exibido**: é o único lugar do repositório onde
@@ -81,7 +80,7 @@ class ErroEnvioInfobip(Exception):
 
 
 class InfobipClient(MessagingClient):
-    """Implementação real (Passo 7), via SMS da Infobip.
+    """Implementação real, via SMS da Infobip.
 
     SMS em vez de WhatsApp Business: WhatsApp exige sender/template
     pré-aprovados pela Meta, inconciliável com o prazo/sandbox da disciplina;

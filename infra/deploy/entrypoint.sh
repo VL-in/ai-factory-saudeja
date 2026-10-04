@@ -1,5 +1,5 @@
 #!/bin/bash
-# SaudeJa -- um container, dois processos (Passo 11, antecipado no Passo 4).
+# SaudeJa -- um container, dois processos (a imagem do HF Space).
 #
 # Por que os dois na mesma imagem: o Streamlit chama o modelo EM PROCESSO
 # (ADR-005 b), entao ele nao precisa da API para funcionar; a API existe ao

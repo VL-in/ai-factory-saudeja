@@ -1,7 +1,7 @@
 """
-SaúdeJá — testes do job de inferência diária D-2 (Passo 6 do plano de
-implementação). Mesma filosofia de tests/test_db.py: Supabase CLI local
-(`supabase start`), sem mock pesado, marcado `integracao` (pytest.ini).
+SaúdeJá — testes do job de inferência diária D-2. Mesma filosofia de
+tests/test_db.py: Supabase CLI local (`supabase start`), sem mock pesado,
+marcado `integracao` (pytest.ini).
 
 Usa o data/model.pkl real (já versionado via DVC, sem re-treinar -- mesma
 filosofia de tests/test_inference.py/test_api.py) e um cliente de mensageria
@@ -96,7 +96,7 @@ def _probabilidade_real(payload: dict) -> float:
 
 
 def _telefone_de_teste(id_externo: str) -> str:
-    """Telefone sintético determinístico (Passo 7) -- só precisa satisfazer
+    """Telefone sintético determinístico -- só precisa satisfazer
     o formato que `InfobipClient`/o schema esperam, não corresponder a um
     número real."""
     return "5511" + str(abs(hash(id_externo)) % 10**9).zfill(9)
@@ -159,15 +159,36 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
 
     predicoes = db.table("predicoes").select("*").execute().data
     por_agendamento = {p["id_agendamento"]: p for p in predicoes}
+    # A probabilidade GRAVADA tem de ser a do payload local. Comparar só a
+    # ordem entre os dois pacientes (como este teste fazia) deixava passar o
+    # bug de fuso corrigido em 2026-09-29: lido do banco em UTC, o `horario`
+    # dos dois deslocava 3h junto, e a ordem se mantinha com a probabilidade
+    # errada.
+    assert float(por_agendamento[agendamento_alto["id"]]["probabilidade"]) == pytest.approx(
+        max(prob_a, prob_b)
+    )
+    assert float(por_agendamento[agendamento_baixo["id"]]["probabilidade"]) == pytest.approx(
+        min(prob_a, prob_b)
+    )
     assert por_agendamento[agendamento_alto["id"]]["classe_prevista"] == 1
     assert por_agendamento[agendamento_baixo["id"]]["classe_prevista"] == 0
     assert por_agendamento[agendamento_alto["id"]]["explicacao_shap"]
     assert por_agendamento[agendamento_baixo["id"]]["explicacao_shap"]
+    # Contrato de features: os dois payloads estão no domínio do treino, e a marca é
+    # gravada explicitamente como `false` -- `null` ficou para "não verificado".
+    assert por_agendamento[agendamento_alto["id"]]["fora_do_dominio"] is False
+    assert por_agendamento[agendamento_baixo["id"]]["fora_do_dominio"] is False
 
     mensagens = db.table("mensagens_disparadas").select("*").execute().data
     status_por_agendamento = {m["id_agendamento"]: m["status_envio"] for m in mensagens}
     assert status_por_agendamento[agendamento_alto["id"]] == "enviado"
     assert status_por_agendamento[agendamento_baixo["id"]] == "nao_enviado"
+
+    lembrete = {
+        a["id"]: a["lembrete_enviado"]
+        for a in db.table("agendamentos").select("id, lembrete_enviado").execute().data
+    }
+    assert lembrete == {agendamento_alto["id"]: True, agendamento_baixo["id"]: False}
 
 
 @pytest.mark.integracao
@@ -202,7 +223,11 @@ def test_job_sem_agendamentos_d2_nao_toca_mensageria(db):
     assert resultado == {
         "agendamentos_encontrados": 0,
         "predicoes_gravadas": 0,
+        "quarentena": 0,
+        "fora_do_dominio": 0,
         "mensagens_disparadas": 0,
+        "lembretes_sem_predicao": 0,
+        "falhas_de_envio": 0,
         "erros": [],
     }
     assert espiao.chamadas == []

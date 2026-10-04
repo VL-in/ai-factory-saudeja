@@ -1,5 +1,5 @@
 """
-SaúdeJá — testes da lógica da interface (Passo 4). Não sobem o runtime do
+SaúdeJá — testes da lógica da interface. Não sobem o runtime do
 Streamlit: src/ui/logic.py existe justamente para ser testável assim.
 
 Filosofia do repositório (sem mock pesado): o backend em processo usa o
@@ -66,15 +66,20 @@ def test_payload_da_ui_satisfaz_o_schema_da_api(payload):
     assert validado.data_hora_agendada == payload["data_hora_agendada"]
 
 
-def test_listar_especialidades_vem_do_mapa_do_modelo(especialidade_valida):
-    especialidades = logic.listar_especialidades(MODEL_PATH)
+def test_listar_especialidades_vem_da_configuracao_do_cadastro():
+    """O que a clínica atende é configuração (params.yaml), não
+    efeito colateral do último treino."""
+    assert logic.listar_especialidades() == sorted(
+        inference.PARAMS["cadastro"]["especialidades"]
+    )
 
-    assert especialidade_valida in especialidades
 
+def test_especialidades_do_cadastro_estao_no_mapa_do_modelo_em_producao():
+    """Uma especialidade que o cadastro oferece e o modelo não conhece seria
+    quarentena garantida no job D-2 para todo paciente dela."""
+    _, mapa_especialidade = inference.carregar_modelo(MODEL_PATH)
 
-def test_listar_especialidades_sem_modelo_nao_derruba_a_ui(tmp_path):
-    """Formulário degrada para texto livre em vez de estourar exceção."""
-    assert logic.listar_especialidades(str(tmp_path / "inexistente.pkl")) == []
+    assert set(logic.listar_especialidades()) <= set(mapa_especialidade)
 
 
 # --- backend em processo (default, ADR-005 b) ---------------------------------
@@ -88,7 +93,7 @@ def test_em_processo_retorna_probabilidade_e_explicacao(payload):
         resultado.probabilidade >= resultado.threshold_usado
     )
     assert resultado.explicacao  # SLO §4 -- 100% das predições com explicação
-    assert resultado.explicacao_texto is None  # plug do LLM inativo (Passo 13)
+    assert resultado.explicacao_texto is None  # plug do LLM inativo
     assert resultado.model_version
 
 
@@ -203,7 +208,7 @@ def test_backends_produzem_a_mesma_predicao(payload):
     assert via_api.explicacao == em_processo.explicacao
 
 
-# --- fila do dia e cadastro (Passo 5), sem tocar no banco ----------------------
+# --- fila do dia e cadastro, sem tocar no banco ---------------------------------
 
 
 def _item(
@@ -312,6 +317,9 @@ def test_cadastro_repassa_o_nome_ao_repositorio(monkeypatch):
     monkeypatch.setattr(logic.repositories, "inserir_paciente", _inserir_paciente)
     monkeypatch.setattr(logic.repositories, "contar_no_shows_anteriores", lambda _id: 0)
     monkeypatch.setattr(logic.repositories, "inserir_agendamento", lambda **kw: {"id": "a1"})
+    # Data fixa da consulta exige "hoje" fixo: o
+    # cadastro recusa consulta no passado.
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
 
     logic.cadastrar_paciente_e_agendamento(
         cpf="529.982.247-25",
@@ -347,7 +355,7 @@ def test_banco_sem_a_migration_diz_o_que_fazer(monkeypatch):
     o dicionário cru do PostgREST -- que diz o que falta, mas não o que fazer.
 
     Não é erro de uso nem indisponibilidade: é ambiente fora de sincronia, e
-    volta a cada migration nova, inclusive no deploy do Passo 11."""
+    volta a cada migration nova, inclusive no deploy do HF Space."""
 
     def _coluna_inexistente(_dia):
         raise _ErroDeSchema("42703", "column pacientes_1.nome_completo does not exist")
@@ -397,7 +405,7 @@ def test_dias_ate_consulta_deriva_da_data_escolhida():
     assert logic.dias_ate_consulta(date(2026, 9, 19), hoje=date(2026, 9, 19)) == 0
 
 
-# --- registro de desfecho (Passo 9.0), sem tocar no banco -----------------------
+# --- registro de desfecho, sem tocar no banco -----------------------------------
 
 
 def test_atualizar_status_agendamento_delega_ao_repositorio(monkeypatch):
@@ -474,7 +482,7 @@ def test_backend_desconhecido_falha_alto_em_vez_de_cair_num_default(monkeypatch)
         logic.obter_cliente()
 
 
-# --- CPF: identificador automático do cadastro (Passo 5, ajuste de realismo) ---
+# --- CPF: identificador automático do cadastro -----------------------------------
 
 
 @pytest.mark.parametrize(
@@ -510,7 +518,7 @@ def test_id_paciente_externo_de_cpf_e_deterministico_e_nao_e_o_cpf_em_si():
     assert len(hash1) == 64  # sha256 em hexadecimal
 
 
-# --- telefone: contato de envio real do lembrete (Passo 7) -------------------
+# --- telefone: contato de envio real do lembrete ----------------------------
 
 
 @pytest.mark.parametrize(
@@ -655,8 +663,9 @@ def test_conta_banida_explica_que_o_acesso_foi_desativado():
         AuthApiError("boom", 500, "unexpected_failure"),
         AuthRetryableError("gateway", 503),
         httpx.ConnectError("sem rede"),
+        AuthApiError("Email logins are disabled", 422, "email_provider_disabled"),
     ],
-    ids=["limite-de-tentativas", "erro-500", "gateway", "sem-rede"],
+    ids=["limite-de-tentativas", "erro-500", "gateway", "sem-rede", "provedor-email-desligado"],
 )
 def test_falha_do_servico_de_auth_nao_culpa_quem_digitou(erro):
     with pytest.raises(logic.ErroAutenticacaoIndisponivel):
@@ -711,3 +720,80 @@ def test_registrar_uso_zera_o_relogio_de_inatividade():
 
     assert logic.sessao_ativa(renovada, agora=depois + logic.INATIVIDADE_MAXIMA)
     assert renovada.email == sessao.email
+
+
+# --- prazo do agendamento e do desfecho (2026-09-29) ----------------------------
+
+
+def _cadastrar(data_consulta):
+    logic.cadastrar_paciente_e_agendamento(
+        cpf="529.982.247-25",
+        telefone="(11) 98765-4321",
+        data_nascimento=date(1990, 1, 1),
+        sexo="F",
+        especialidade="cardiologia",
+        distancia_km=5.5,
+        data_consulta=data_consulta,
+        hora_consulta=time(10, 0),
+        nome_completo="Ana Souza",
+    )
+
+
+@pytest.mark.parametrize(
+    "data_consulta",
+    [date(2026, 9, 28), date(2026, 9, 29) + timedelta(days=181)],
+    ids=["passado", "alem-de-180-dias"],
+)
+def test_cadastro_recusa_consulta_no_passado_ou_alem_de_180_dias(monkeypatch, data_consulta):
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
+
+    def _nao_deveria_ser_chamado(**kwargs):
+        raise AssertionError("cadastro chegou ao banco com data inválida")
+
+    monkeypatch.setattr(logic.repositories, "inserir_paciente", _nao_deveria_ser_chamado)
+
+    with pytest.raises(logic.ErroValidacaoCadastro, match="Data da consulta"):
+        _cadastrar(data_consulta)
+
+
+def test_data_maxima_de_consulta_e_180_dias_a_frente():
+    assert logic.data_maxima_de_consulta(date(2026, 9, 29)) == date(2027, 3, 28)
+
+
+@pytest.mark.parametrize(
+    "consulta_utc, esperado",
+    [
+        ("2026-09-29T21:00:00+00:00", True),  # hoje 18h em SP
+        ("2026-09-28T13:00:00+00:00", True),  # ontem
+        # 30/09 00h30 UTC ainda é 29/09 21h30 em SP -- a data vale no fuso da
+        # clínica, não em UTC.
+        ("2026-09-30T00:30:00+00:00", True),
+        ("2026-09-30T13:00:00+00:00", False),  # amanhã
+    ],
+)
+def test_desfecho_so_para_consulta_de_hoje_ou_anterior(consulta_utc, esperado):
+    data_hora = datetime.fromisoformat(consulta_utc)
+    assert logic.pode_registrar_desfecho(data_hora, hoje=date(2026, 9, 29)) is esperado
+
+
+def test_desfecho_de_consulta_futura_nao_chega_ao_banco(monkeypatch):
+    def _nao_deveria_ser_chamado(id_agendamento, status):
+        raise AssertionError("desfecho de consulta futura chegou ao banco")
+
+    monkeypatch.setattr(
+        logic.repositories, "atualizar_status_agendamento", _nao_deveria_ser_chamado
+    )
+    amanha = datetime.now(timezone.utc) + timedelta(days=2)
+
+    with pytest.raises(logic.ErroDesfechoForaDePrazo):
+        logic.atualizar_status_agendamento("a1", logic.STATUS_NO_SHOW, data_hora_agendada=amanha)
+
+
+def test_recusa_do_repositorio_por_prazo_vira_erro_de_prazo_e_nao_de_persistencia(monkeypatch):
+    def _recusa(id_agendamento, status):
+        raise repositories.DesfechoForaDePrazo("fora do prazo")
+
+    monkeypatch.setattr(logic.repositories, "atualizar_status_agendamento", _recusa)
+
+    with pytest.raises(logic.ErroDesfechoForaDePrazo):
+        logic.atualizar_status_agendamento("a1", logic.STATUS_NO_SHOW)

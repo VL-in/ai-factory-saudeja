@@ -1,0 +1,23 @@
+-- SaudeJa - 2026-09-29: registrar no agendamento se o
+-- paciente recebeu lembrete.
+--
+-- Por que no agendamento: o SMS e' uma intervencao que muda o desfecho. O
+-- paciente de alto risco recebe o lembrete, comparece e e' rotulado
+-- 'concluido' -- sem saber que houve lembrete, o re-treino mensal aprende que
+-- aquele perfil comparece e deixa de lembra-lo (feedback loop). O dado ja
+-- existe em `mensagens_disparadas`, mas aquela tabela e' purgada em 365 dias
+-- (docs/LGPD.md Sec5); o re-treino precisa dele enquanto o agendamento existir.
+-- Tambem e' o filtro que impede reenvio: o job D-2 agora olha uma janela de
+-- tres dias (amanha ate D+2), e um paciente em quarentena que ja recebeu o
+-- lembrete sem predicao nao pode recebe-lo de novo no dia seguinte.
+--
+-- ADITIVA (migration aditiva pode ir no mesmo deploy do codigo; restritiva
+-- so' num deploy posterior): `not null default false` nao quebra o codigo
+-- antigo -- ele nao le a coluna e os inserts dele recebem o default. Pode ir
+-- no mesmo deploy do codigo que a usa, aplicada antes do sync.
+--
+-- Sem backfill a partir de `mensagens_disparadas`: o que ja foi enviado ate
+-- aqui e' trafego de desenvolvimento, e o default `false` so' faria o job
+-- reconsiderar agendamentos passados -- que a janela de datas ja exclui.
+
+alter table agendamentos add column lembrete_enviado boolean not null default false;

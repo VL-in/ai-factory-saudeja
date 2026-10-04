@@ -1,0 +1,9 @@
+# DVC -- pipeline de treino (dvc.yaml), gate de re-treino e o
+# `dvc pull data/model.pkl` do CI, do deploy e do job D-2.
+# Arquivo proprio para esses tres workflows instalarem so' isto, e nao o
+# requirements/dev.txt inteiro (jupyter, matplotlib...), com o pin num lugar so'.
+#
+# O extra [azure] traz o adlfs/azure-storage-blob exigidos pelo remote
+# azure:// -- sem ele o `dvc pull` falha com "missing dependencies:
+# ['dvc-azure']", e nao com erro de rede.
+dvc[azure]==3.67.1

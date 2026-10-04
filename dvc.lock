@@ -18,32 +18,32 @@ stages:
       size: 31132
     - path: docker-compose.yml
       hash: md5
-      md5: 507deb633df1312ddc163b5a0f5bcdbb
-      size: 3763
+      md5: d3fe8cc7bfa164e1a348a7e63980c075
+      size: 3668
     - path: dockerfile
       hash: md5
-      md5: 3fca62550e0100f9260cdac378b1229e
-      size: 580
+      md5: cb09473e637096045fcc78fea529be08
+      size: 561
     - path: requirements/base.txt
       hash: md5
-      md5: 089b285d924c1665c225d2e7659bdbaa
-      size: 630
+      md5: 24b9f3a8b902d9067b6e30d39e3429d3
+      size: 612
     - path: requirements/train.txt
       hash: md5
-      md5: 0b15c51731ec5c80e8f62393ba58ba20
-      size: 236
+      md5: 4b62798e08ad85a30e4561ad36a001b7
+      size: 229
     - path: src/config_projeto.py
       hash: md5
-      md5: 7ea1d495f0e3d32694af476372ec01f9
-      size: 2913
+      md5: 07d0d3c0fd4c78ba5ac3e96af56c777f
+      size: 5108
     - path: src/preprocess.py
       hash: md5
-      md5: 707efc2644c66857f83109d1549dcede
-      size: 3617
+      md5: 141286ccb64a46b5c8f2fd1271ae441c
+      size: 4485
     - path: src/train.py
       hash: md5
-      md5: d2c2cf0efb35ad4b6878f658b14b4bbb
-      size: 4573
+      md5: b23dae96e565ff072dd6fdd85656fa97
+      size: 4454
     params:
       params.yaml:
         balancing.k_neighbors: 3
@@ -72,34 +72,46 @@ stages:
       hash: md5
       md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
       size: 22841
+    - path: data/interim/dados_validados.json
+      hash: md5
+      md5: c6da6f5845f3bec01d1e69c98e20afa0
+      size: 93
     - path: docker-compose.yml
       hash: md5
-      md5: 507deb633df1312ddc163b5a0f5bcdbb
-      size: 3763
+      md5: d3fe8cc7bfa164e1a348a7e63980c075
+      size: 3668
     - path: dockerfile
       hash: md5
-      md5: 3fca62550e0100f9260cdac378b1229e
-      size: 580
+      md5: cb09473e637096045fcc78fea529be08
+      size: 561
     - path: requirements/base.txt
       hash: md5
-      md5: 089b285d924c1665c225d2e7659bdbaa
-      size: 630
+      md5: 24b9f3a8b902d9067b6e30d39e3429d3
+      size: 612
     - path: requirements/train.txt
       hash: md5
-      md5: 0b15c51731ec5c80e8f62393ba58ba20
-      size: 236
+      md5: 4b62798e08ad85a30e4561ad36a001b7
+      size: 229
+    - path: src/agenda_clinica.py
+      hash: md5
+      md5: 589eb0955aaebb2c8e71cb449ee2dcf1
+      size: 3108
     - path: src/config_projeto.py
       hash: md5
-      md5: 7ea1d495f0e3d32694af476372ec01f9
-      size: 2913
+      md5: 07d0d3c0fd4c78ba5ac3e96af56c777f
+      size: 5108
+    - path: src/contrato_features.py
+      hash: md5
+      md5: 6f662512187e4a2b32a61108452c80da
+      size: 11295
     - path: src/features.py
       hash: md5
-      md5: c031a16c040eabb8357daa7045d8262f
-      size: 1592
+      md5: 06d5980149eb17edf6386f33606929ad
+      size: 1943
     - path: src/preprocess.py
       hash: md5
-      md5: 707efc2644c66857f83109d1549dcede
-      size: 3617
+      md5: 141286ccb64a46b5c8f2fd1271ae441c
+      size: 4485
     params:
       params.yaml:
         features.temporais: true
@@ -137,28 +149,112 @@ stages:
       size: 225550
     - path: docker-compose.yml
       hash: md5
-      md5: 507deb633df1312ddc163b5a0f5bcdbb
-      size: 3763
+      md5: d3fe8cc7bfa164e1a348a7e63980c075
+      size: 3668
     - path: dockerfile
       hash: md5
-      md5: 3fca62550e0100f9260cdac378b1229e
-      size: 580
+      md5: cb09473e637096045fcc78fea529be08
+      size: 561
     - path: requirements/base.txt
       hash: md5
-      md5: 089b285d924c1665c225d2e7659bdbaa
-      size: 630
+      md5: 24b9f3a8b902d9067b6e30d39e3429d3
+      size: 612
     - path: requirements/train.txt
       hash: md5
-      md5: 0b15c51731ec5c80e8f62393ba58ba20
-      size: 236
+      md5: 4b62798e08ad85a30e4561ad36a001b7
+      size: 229
     - path: src/config_projeto.py
       hash: md5
-      md5: 7ea1d495f0e3d32694af476372ec01f9
-      size: 2913
+      md5: 07d0d3c0fd4c78ba5ac3e96af56c777f
+      size: 5108
     - path: src/validate.py
       hash: md5
-      md5: 30610c0fd328faed4357bf4eb5626e02
-      size: 5523
+      md5: 7b45329c527918e21bd4fa7a0819560b
+      size: 5390
     params:
       params.yaml:
         decision.threshold: 0.6
+  validate_data:
+    cmd: docker compose run --rm --build -T -e 
+      DATA_PATH=/app/data/consultas-treino.csv -e 
+      CONSULTAS_HISTORICAS_PATH=/app/data/consultas-historicas.csv -e 
+      SELO_DADOS_PATH=/app/data/interim/dados_validados.json -e 
+      RELATORIO_DADOS_PATH=/app/data/interim/relatorio_dados.json train 
+      src/validate_data.py
+    deps:
+    - path: data/consultas-historicas.csv
+      hash: md5
+      md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
+      size: 22841
+    - path: data/consultas-treino.csv
+      hash: md5
+      md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
+      size: 22841
+    - path: docker-compose.yml
+      hash: md5
+      md5: d3fe8cc7bfa164e1a348a7e63980c075
+      size: 3668
+    - path: dockerfile
+      hash: md5
+      md5: cb09473e637096045fcc78fea529be08
+      size: 561
+    - path: requirements/base.txt
+      hash: md5
+      md5: 24b9f3a8b902d9067b6e30d39e3429d3
+      size: 612
+    - path: requirements/train.txt
+      hash: md5
+      md5: 4b62798e08ad85a30e4561ad36a001b7
+      size: 229
+    - path: src/agenda_clinica.py
+      hash: md5
+      md5: 589eb0955aaebb2c8e71cb449ee2dcf1
+      size: 3108
+    - path: src/config_projeto.py
+      hash: md5
+      md5: 07d0d3c0fd4c78ba5ac3e96af56c777f
+      size: 5108
+    - path: src/contrato_features.py
+      hash: md5
+      md5: 6f662512187e4a2b32a61108452c80da
+      size: 11295
+    - path: src/features.py
+      hash: md5
+      md5: 06d5980149eb17edf6386f33606929ad
+      size: 1943
+    - path: src/preprocess.py
+      hash: md5
+      md5: 141286ccb64a46b5c8f2fd1271ae441c
+      size: 4485
+    - path: src/validate_data.py
+      hash: md5
+      md5: 472dcb1c5904fb2fa7c93e36ba2b0941
+      size: 13900
+    params:
+      params.yaml:
+        cadastro.especialidades:
+        - cardiologia
+        - clinica geral
+        - dermatologia
+        - ginecologia
+        - oftalmologia
+        - ortopedia
+        - pediatria
+        dados:
+          taxa_positivos:
+            minimo: 0.1
+            maximo: 0.5
+          psi_alerta: 0.2
+        gate.tolerancia:
+          recall_1: 0.05
+          f1_1: 0.05
+          roc_auc: 0.02
+    outs:
+    - path: data/interim/dados_validados.json
+      hash: md5
+      md5: c6da6f5845f3bec01d1e69c98e20afa0
+      size: 93
+    - path: data/interim/relatorio_dados.json
+      hash: md5
+      md5: a0ecdf6bb5d2871711eb6c649576101c
+      size: 310

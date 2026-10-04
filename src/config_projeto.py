@@ -18,6 +18,7 @@ do bind mount do container.
 import os
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import yaml
@@ -48,6 +49,26 @@ def hoje_na_clinica() -> date:
     em São Paulo, `date.today()` lá já é o dia seguinte, e a "fila do dia"
     do funcionário mostraria o dia errado."""
     return datetime.now(tz=fuso_da_clinica()).date()
+
+
+def para_horario_da_clinica(valor: str | datetime) -> datetime:
+    """Data/hora de consulta no fuso da clínica, venha de onde vier.
+
+    O Postgres devolve `timestamptz` normalizado em UTC ("...T21:00:00+00:00"
+    para uma consulta das 18h em São Paulo). Lido sem conversão, o `horario`
+    que o modelo vê fica 3h adiantado (21, que o treino nunca viu), o export
+    grava a hora UTC no dataset de treino e o SMS informa o horário errado ao
+    paciente (bug corrigido em 2026-09-29). Valor **sem** fuso é tratado
+    como já local: é o formato do dataset histórico e dos testes."""
+    if isinstance(valor, str):
+        convertido = datetime.fromisoformat(valor)
+    elif hasattr(valor, "to_pydatetime"):  # pd.Timestamp (subclasse de datetime)
+        convertido = valor.to_pydatetime()
+    else:
+        convertido = valor
+    if convertido.tzinfo is None:
+        return convertido.replace(tzinfo=fuso_da_clinica())
+    return convertido.astimezone(fuso_da_clinica())
 
 
 RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS = 365
@@ -82,9 +103,10 @@ def caminho_de_env(variavel: str, default_relativo: str) -> str:
     return os.environ.get(variavel) or str(REPO_ROOT / default_relativo)
 
 
-def carregar_params(path=None) -> dict:
+def carregar_params(path: str | Path | None = None) -> dict[str, Any]:
     """Lê params.yaml. Os módulos guardam o resultado em um `PARAMS` de
     nível de módulo -- os testes dependem desse nome para sobrescrever
     chaves via monkeypatch.setitem."""
     with open(path or PARAMS_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        params: dict[str, Any] = yaml.safe_load(f)
+    return params

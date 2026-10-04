@@ -9,10 +9,10 @@ tinha em conflito:
 
 - ADR-005 (b): "Streamlit e o job chamam o modelo em processo; a API FastAPI
   é para integrações externas" -- daí ClientePredicaoEmProcesso ser o DEFAULT:
-  em produção (Passo 11, Streamlit e API no mesmo container do HF Space) a UI
+  em produção (Streamlit e API no mesmo container do HF Space) a UI
   não depende de a API estar de pé nem paga round-trip HTTP interno.
-- Passo 4 / architecture.md §3.1: a UI como harness de teste visual da API do
-  Passo 3 -- daí ClientePredicaoAPI (PREDICT_BACKEND=api), que exercita
+- architecture.md §3.1: a UI como harness de teste visual da API FastAPI --
+  daí ClientePredicaoAPI (PREDICT_BACKEND=api), que exercita
   POST /predict de verdade, do formulário até a resposta.
 
 Os dois caminhos convergem para o MESMO src/inference.py (a API também o usa),
@@ -28,6 +28,7 @@ import sys
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from typing import NoReturn
 
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:
@@ -66,7 +67,7 @@ class ErroIndisponivel(ErroPredicao):
 
 
 class ErroValidacaoCadastro(Exception):
-    """Dado do formulário de cadastro (Passo 5) recusado antes de chegar ao
+    """Dado do formulário de cadastro recusado antes de chegar ao
     banco -- CPF com dígito verificador inválido, horário fora da grade de
     funcionamento da clínica (agenda_clinica). Mesma filosofia de
     ErroValidacao para a predição: culpa do preenchimento, não do sistema."""
@@ -110,22 +111,16 @@ def montar_payload(
     }
 
 
-def listar_especialidades(model_path: str | None = None) -> list:
-    """Especialidades do mapa fixado no treino, para o formulário oferecer um
-    selectbox em vez de texto livre (uma especialidade fora do mapa só poderia
-    virar erro 422, ver inference.EspecialidadeDesconhecidaError).
+def listar_especialidades() -> list[str]:
+    """Especialidades que o cadastro e o formulário de teste oferecem
+    (selectbox em vez de texto livre).
 
-    Lê o artefato local nos dois backends de propósito: a API não expõe um
-    endpoint de vocabulário, e a UI roda na mesma imagem que o modelo (Passo
-    11). Se o artefato não estiver disponível, devolve [] e app.py cai para
-    entrada de texto livre -- a UI não deve morrer por causa do formulário."""
-    try:
-        _, mapa_especialidade = inference.carregar_modelo(
-            model_path or caminho_de_env("MODEL_PATH", "data/model.pkl")
-        )
-    except Exception:  # artefato ausente/corrompido não pode derrubar a UI
-        return []
-    return sorted(mapa_especialidade)
+    Vêm de `params.yaml` (`cadastro.especialidades`), não mais do
+    mapa do modelo: o que a clínica atende é configuração, e não efeito
+    colateral do último treino. O teste de coerência trava que a lista está
+    contida no mapa do modelo em produção -- uma especialidade que o modelo não
+    conhece seria quarentena garantida no job D-2."""
+    return sorted(inference.PARAMS.get("cadastro", {}).get("especialidades", []))
 
 
 class ClientePredicaoEmProcesso:
@@ -160,7 +155,7 @@ class ClientePredicaoEmProcesso:
 
     def predizer(self, payload: dict) -> ResultadoPredicao:
         self._carregar()
-        # Instrumentado (Passo 8.5) tanto quanto a rota /predict da API: o
+        # Instrumentado (ADR-006) tanto quanto a rota /predict da API: o
         # ADR-005 (b) faz deste o caminho DEFAULT de produção -- medir só o
         # middleware do FastAPI calcularia o p95 do SLO §2 sobre uma rota que,
         # no Space, quase não recebe tráfego, enquanto a predição que o
@@ -192,7 +187,7 @@ class ClientePredicaoEmProcesso:
 
 
 class ClientePredicaoAPI:
-    """Backend REST (PREDICT_BACKEND=api): fala com a API do Passo 3 por HTTP.
+    """Backend REST (PREDICT_BACKEND=api): fala com a API FastAPI por HTTP.
     `cliente_http` é injetável para os testes passarem um TestClient do próprio
     app FastAPI -- serviço real, sem subir servidor nem mockar a resposta
     (mesma filosofia de tests/test_api.py)."""
@@ -297,6 +292,10 @@ class ItemFila:
     model_version: str | None = None
     status: str = "agendado"
     nome_completo: str | None = None
+    # Contrato de features: a predição foi feita sobre um agendamento com algum campo
+    # que o modelo não viu no treino -- a probabilidade é extrapolação. `None`
+    # = predição anterior à checagem, ou ainda sem predição.
+    fora_do_dominio: bool | None = None
 
     @property
     def tem_predicao(self) -> bool:
@@ -321,7 +320,7 @@ class ItemFila:
 _CODIGOS_DE_SCHEMA_DESATUALIZADO = frozenset({"42703", "42P01"})
 
 
-def _relatar_falha_persistencia(exc: Exception, acao: str):
+def _relatar_falha_persistencia(exc: Exception, acao: str) -> NoReturn:
     if isinstance(exc, ConfiguracaoSupabaseAusente):
         raise ErroPersistencia(str(exc)) from exc
     if getattr(exc, "code", None) in _CODIGOS_DE_SCHEMA_DESATUALIZADO:
@@ -332,7 +331,7 @@ def _relatar_falha_persistencia(exc: Exception, acao: str):
         # falta, mas não o que fazer. A distinção vale código porque não é um
         # erro de uso nem indisponibilidade: é ambiente fora de sincronia, e a
         # mesma situação volta a cada migration nova, inclusive no deploy do
-        # Passo 11.
+        # HF Space.
         raise ErroPersistencia(
             f"{acao}: o banco está desatualizado em relação às migrations do "
             f"repositório ({exc}). Aplique com `supabase db push` (projeto remoto) "
@@ -343,8 +342,7 @@ def _relatar_falha_persistencia(exc: Exception, acao: str):
 
 def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
     """Fila do dia ordenada por risco (probabilidade desc, ver
-    repositories.buscar_fila_do_dia) -- Passo 5, liga a aba antes placeholder
-    de app.py."""
+    repositories.buscar_fila_do_dia)."""
     try:
         linhas = repositories.buscar_fila_do_dia(dia or hoje_na_clinica())
     except Exception as exc:
@@ -362,7 +360,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
                 # O Postgres devolve timestamptz normalizado em UTC; sem o
                 # astimezone, a fila mostraria 11:30 para uma consulta das
                 # 08:30 da clínica.
-                data_hora_agendada=datetime.fromisoformat(
+                data_hora_agendada=repositories.ler_timestamptz(
                     linha["data_hora_agendada"]
                 ).astimezone(fuso_da_clinica()),
                 probabilidade=float(ultima["probabilidade"]) if ultima else None,
@@ -372,6 +370,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
                 model_version=ultima.get("model_version") if ultima else None,
                 status=linha["status"],
                 nome_completo=linha["pacientes"].get("nome_completo"),
+                fora_do_dominio=ultima.get("fora_do_dominio") if ultima else None,
             )
         )
     return itens
@@ -379,18 +378,44 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
 
 # Espelham db.repositories.STATUSES_DESFECHO -- rótulos que a aba "Fila do
 # dia" oferece para a clínica registrar o desfecho real de um agendamento
-# (Passo 9.0). Sem isto o re-treino mensal (Passo 9.1) nunca teria dado real
+# Sem isto o re-treino mensal nunca teria dado real
 # para aprender: agendamentos.status nunca sairia de 'agendado'.
 STATUS_CONCLUIDO = "concluido"
 STATUS_NO_SHOW = "no_show"
 STATUS_CANCELADO = "cancelado"
 
 
-def atualizar_status_agendamento(id_agendamento: str, status: str) -> None:
+class ErroDesfechoForaDePrazo(Exception):
+    """Desfecho pedido para consulta que ainda não aconteceu."""
+
+
+def pode_registrar_desfecho(data_hora_agendada: datetime, hoje: date | None = None) -> bool:
+    """Desfecho só para consulta de hoje ou anterior:
+    no-show marcado numa consulta futura é rótulo que não aconteceu -- entra
+    no re-treino e infla o `historico_noshow` dos próximos cadastros. A data é
+    a da clínica, não a UTC do banco."""
+    return data_hora_agendada.astimezone(fuso_da_clinica()).date() <= (
+        hoje or hoje_na_clinica()
+    )
+
+
+def atualizar_status_agendamento(
+    id_agendamento: str, status: str, data_hora_agendada: datetime | None = None
+) -> None:
     """Registra o desfecho real de um agendamento, acionado pela aba "Fila
-    do dia" (Passo 9.0)."""
+    do dia". A regra do prazo vale nos dois lados: aqui, quando a
+    tela informa a data, e no próprio UPDATE do repositório, que filtra por
+    data e não depende de quem chama."""
+    if data_hora_agendada is not None and not pode_registrar_desfecho(data_hora_agendada):
+        raise ErroDesfechoForaDePrazo(
+            "O desfecho só pode ser registrado no dia da consulta ou depois."
+        )
     try:
         repositories.atualizar_status_agendamento(id_agendamento, status)
+    except repositories.DesfechoForaDePrazo as exc:
+        raise ErroDesfechoForaDePrazo(
+            "O desfecho só pode ser registrado no dia da consulta ou depois."
+        ) from exc
     except Exception as exc:
         _relatar_falha_persistencia(exc, "Falha ao registrar desfecho do agendamento")
 
@@ -443,7 +468,7 @@ def _id_paciente_externo_de_cpf(cpf: str) -> str:
 
 
 def normalizar_telefone(telefone: str) -> str:
-    """Mantém só os dígitos e garante o código do país (Passo 7): a Infobip
+    """Mantém só os dígitos e garante o código do país: a Infobip
     espera o telefone em formato internacional sem "+" (ex. "5511987654321").
     O formulário só atende clínicas brasileiras, então um número com DDD
     (10-11 dígitos) sem "55" na frente recebe o prefixo automaticamente --
@@ -474,6 +499,12 @@ def proxima_data_disponivel(a_partir_de: date | None = None) -> date:
     """Data default do formulário de cadastro -- nunca um domingo sem
     nenhum horário para oferecer."""
     return agenda_clinica.proximo_dia_valido(a_partir_de or hoje_na_clinica())
+
+
+def data_maxima_de_consulta(hoje: date | None = None) -> date:
+    """Último dia que o cadastro oferece (`agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS`)."""
+    prazo = timedelta(days=agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS)
+    return (hoje or hoje_na_clinica()) + prazo
 
 
 def dias_ate_consulta(data_consulta: date, hoje: date | None = None) -> int:
@@ -524,7 +555,7 @@ def cadastrar_paciente_e_agendamento(
     hora_consulta: time,
     nome_completo: str | None = None,
 ) -> dict:
-    """Cadastro do paciente (visão Paciente, Passo 5 + ajuste de realismo) --
+    """Cadastro do paciente (visão Paciente) --
     upsert do paciente seguido do agendamento.
 
     `nome_completo` passou a ser parâmetro em 2026-09-28 (ADR-007) e **é
@@ -536,7 +567,7 @@ def cadastrar_paciente_e_agendamento(
     (ver `repositories.inserir_paciente`).
 
     **CPF segue não sendo gravado**: vira só o hash que identifica o paciente
-    (`_id_paciente_externo_de_cpf`). `telefone` (Passo 7) é a primeira exceção
+    (`_id_paciente_externo_de_cpf`). `telefone` é a primeira exceção
     deliberada à minimização de PII -- é gravado (normalizado), porque sem
     contato o job D-2 não tem para onde mandar o lembrete real via Infobip.
 
@@ -558,6 +589,11 @@ def cadastrar_paciente_e_agendamento(
     if not telefone_valido(telefone):
         raise ErroValidacaoCadastro(
             "Telefone inválido -- informe DDD + número (ex. (11) 98765-4321)."
+        )
+    if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje_na_clinica()):
+        raise ErroValidacaoCadastro(
+            "Data da consulta inválida -- escolha entre hoje e "
+            f"{agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS} dias à frente."
         )
     if not agenda_clinica.horario_valido(data_consulta, hora_consulta):
         raise ErroValidacaoCadastro(
@@ -589,7 +625,7 @@ def cadastrar_paciente_e_agendamento(
 
 
 def disparar_job_diario(dia: date | None = None) -> dict:
-    """Aciona o job D-2 (`src/jobs/inferencia_diaria.py`, Passo 6) a partir da
+    """Aciona o job D-2 (`src/jobs/inferencia_diaria.py`) a partir da
     aba "Dev: disparo manual" -- a mesma função que o cron real chamaria,
     disparada manualmente para acompanhar agendamentos encontrados/predições
     gravadas/mensagens disparadas sem precisar de CLI/cron separados."""
@@ -617,9 +653,9 @@ LIMITE_EVENTOS_OBSERVABILIDADE = 5000
 
 
 def resumo_observabilidade(janela_horas: int = 24) -> dict:
-    """Números do SLO §2/§4/§5 lidos de `eventos_app`/`predicoes` (Passo 8.5,
-    ADR-006) -- é daqui que sai a aba "Observabilidade" e, no Passo 12, os
-    valores da coluna "medido" do SLA/SLO.
+    """Números do SLO §2/§4/§5 lidos de `eventos_app`/`predicoes` (ADR-006)
+    -- é daqui que sai a aba "Observabilidade" e, na validação final para o
+    pitch, os valores da coluna "medido" do SLA/SLO.
 
     `truncado` não é detalhe de implementação: o p95 é calculado em Python
     sobre as linhas lidas (o PostgREST não expõe `percentile_cont`), então uma
@@ -658,7 +694,7 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
             "percentual": (com_explicacao / total_predicoes) if total_predicoes else None,
         },
         "ultimo_job_d2": (
-            datetime.fromisoformat(ultimo_job["criado_em"]).astimezone(fuso_da_clinica())
+            repositories.ler_timestamptz(ultimo_job["criado_em"]).astimezone(fuso_da_clinica())
             if ultimo_job
             else None
         ),
@@ -725,6 +761,13 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
         return ErroCredenciais(
             "Conta ainda não confirmada. Procure o administrador do sistema."
         )
+    if exc.code == "email_provider_disabled":
+        # Configuração do projeto, não da conta: vale para qualquer e-mail, então
+        # dizê-lo não ajuda a adivinhar quem é da equipe -- e "senha incorreta"
+        # mandaria todo mundo redefinir a senha à toa.
+        return ErroAutenticacaoIndisponivel(
+            "login por e-mail desligado no Supabase. Procure o administrador do sistema."
+        )
     if exc.status is not None and exc.status >= 500:
         return ErroAutenticacaoIndisponivel(f"serviço de autenticação respondeu {exc.status}.")
     return ErroCredenciais(MENSAGEM_CREDENCIAIS_INVALIDAS)
@@ -760,6 +803,11 @@ def autenticar_funcionario(
         ) from exc
 
     usuario = resposta.user
+    if usuario is None:
+        # O supabase-py levanta quando a senha não confere; resposta sem
+        # usuário não é "login recusado", é o serviço respondendo fora do
+        # contrato -- tratado como indisponível, nunca como sucesso.
+        raise ErroAutenticacaoIndisponivel("resposta do serviço de autenticação sem usuário.")
     # Revoga já o refresh token desta sessão do Supabase: a UI não o usa (ver
     # SessaoFuncionario), e um token válido que ninguém guarda é só superfície.
     # `local` e não o default `global`, que derrubaria as sessões do mesmo

@@ -1,9 +1,9 @@
 {
-  "_comentario": "Campeão em produção (Passo 9.1). Reescrito SOMENTE por src/retrain_gate.py ao promover. Versionado em git porque o MLflow deste repo é efêmero e não sobrevive entre execuções do workflow mensal.",
+  "_comentario": "Campeão em produção. Reescrito SOMENTE por src/retrain_gate.py ao promover. Versionado em git porque o MLflow deste repo é efêmero e não sobrevive entre execuções do workflow mensal.",
   "model_version": "6430cb3315da",
   "mlflow_run_id": "5fd459b2ece44d89905206d33b74fbac",
   "promovido_em": "2026-09-21T23:03:14-03:00",
-  "motivo": "semeadura inicial (Passo 9.1): campeão registrado a partir da run que gerou o model.pkl já em produção, medida no fold de teste isolado. Não passou por comparação porque não havia campeão anterior -- assim o primeiro ciclo do gate já compara contra estes números em vez de promover por bootstrap.",
+  "motivo": "semeadura inicial: campeão registrado a partir da run que gerou o model.pkl já em produção, medida no fold de teste isolado. Não passou por comparação porque não havia campeão anterior -- assim o primeiro ciclo do gate já compara contra estes números em vez de promover por bootstrap.",
   "decision_threshold": 0.6,
   "dataset": {
     "arquivo": "consultas-treino.csv",
@@ -22,5 +22,5 @@
     "recall_1": 0.42857142857142855,
     "roc_auc": 0.6432900432900432
   },
-  "excecao_slo_documentada": "recall_1/f1_1 abaixo dos alvos absolutos do SLO §3 (0.75/0.65). O gate protege contra regressão relativa; o gap absoluto é limite do dataset (ADR-003) e fecha no Passo 12 -- não é critério de promoção (SLO §3.1)."
+  "excecao_slo_documentada": "recall_1/f1_1 abaixo dos alvos absolutos do SLO §3 (0.75/0.65). O gate protege contra regressão relativa; o gap absoluto é limite do dataset (ADR-003) e será decidido na validação final para o pitch -- não é critério de promoção (SLO §3.1)."
 }

@@ -1,7 +1,7 @@
 """
-SaúdeJá — API FastAPI de predição de no-show (Passo 3 do plano de
-implementação). Expõe /predict e /health sobre o módulo de inferência
-(Passo 1) + explicabilidade (Passo 2), sem duplicar lógica.
+SaúdeJá — API FastAPI de predição de no-show. Expõe /predict e
+/health sobre o módulo de inferência (inference.py) + explicabilidade
+(explain.py), sem duplicar lógica.
 
 Bootstrap de sys.path abaixo: os módulos de src/ (inference.py, explain.py)
 são importados "soltos" (sem prefixo de pacote), o mesmo padrão que
@@ -49,7 +49,7 @@ explicador_llm = ExplicadorLLMDesativado()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Antes de qualquer outra coisa (Passo 8): o uvicorn já instalou os
+    # Antes de qualquer outra coisa (blindagem LGPD do log): o uvicorn já instalou os
     # handlers de `uvicorn.access`/`uvicorn.error` neste ponto, com
     # `propagate=False`, e é aqui que eles recebem o filtro de redação de PII.
     # Configurar depois do primeiro request deixaria o log de acesso inicial --
@@ -81,7 +81,7 @@ app = FastAPI(title="SaudeJá — API de predição de no-show", lifespan=lifesp
 
 @app.middleware("http")
 async def registrar_latencia(request: Request, call_next):
-    """Instrumentação do SLO §2 (Passo 8.5, ADR-006): mede o tempo de resposta
+    """Instrumentação do SLO §2 (ADR-006): mede o tempo de resposta
     de `/predict` e registra em `eventos_app`.
 
     Mede aqui, no middleware, e não dentro da rota, porque o p95 que o SLA

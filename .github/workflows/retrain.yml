@@ -1,20 +1,34 @@
-# Re-treino mensal + gate de promocao (Passo 9.1 do PLANO-IMPLEMENTACAO.md).
+# Re-treino mensal + gate de promocao.
 #
 # O ciclo, em uma frase: pega os desfechos que a clinica registrou na aba
-# "Fila do dia" (Passo 9.0), remonta o dataset de treino, reexecuta o pipeline
+# "Fila do dia", remonta o dataset de treino, reexecuta o pipeline
 # DVC e promove o modelo novo SO' se ele nao regredir alem da tolerancia do
 # SLO 3.1. Quem decide e' src/retrain_gate.py; aqui ficam as acoes que
 # exigem credencial (remote do DVC, git, Healthchecks) e que por isso nao
 # entram no modulo Python.
 #
-# Tres desfechos, lidos do codigo de saida do gate:
-#   0 -> promovido:  dvc push + branch + PR automatico (revisao humana leve)
-#   1 -> bloqueado:  nada e' publicado, o job FALHA (notificacao nativa do
-#                    GitHub) e o comparativo fica no summary + artifact
+# Cinco desfechos, lidos do codigo de saida do gate:
+#   0 -> aprovado:   dvc push + branch + PR automatico (revisao humana leve),
+#                    com o CI disparado no PR por workflow_dispatch. Com
+#                    campeao registrado e canario.habilitado
+#                    (ADR-009), o PR NAO troca o campeao: abre o CANARIO
+#                    (data/canario.json + data/canario/), que o job D-2 usa
+#                    numa fracao da fila e o canario.yml promove ou reverte.
+#                    Sem campeao (bootstrap) ou com o canario desligado, o PR
+#                    reescreve champion_metrics.json como antes
+#   1 -> bloqueado:  regressao, piso absoluto de roc_auc ou suite de sanidade
+#                    do desafiante. Nada e' publicado, o job FALHA (notificacao
+#                    nativa do GitHub) e o comparativo fica no summary + artifact
 #   2 -> sem dado novo: dataset com o mesmo hash, nada foi re-treinado. Tambem
 #                    FALHA, por decisao da autora (2026-09-21): um mes sem
 #                    desfecho registrado e' um problema de operacao da clinica
 #                    que precisa aparecer, nao uma nao-noticia.
+#   3 -> pipeline falhou: em geral o stage validate_data barrou o
+#                    dataset ANTES de treinar -- o motivo vai para o summary.
+#   4 -> canario em observacao: ha' um canario ativo em main; o re-treino nem
+#                    comeca (dois desafiantes dividiriam a fila em tres e nenhum
+#                    teria amostra). FALHA: canario sem decisao no dia do
+#                    re-treino e' PR de promocao/reversao esperando merge.
 #
 # Por que o job nao termina no passo do gate: os codigos 1 e 2 precisam de
 # tratamento diferente (summary, ping, artifact) ANTES de o job falhar. O
@@ -23,16 +37,19 @@ name: Re-treino mensal (gate de promocao)
 
 on:
   schedule:
-    # Dia 1 de cada mes, 06:00 UTC = 03:00 America/Sao_Paulo (SLO 5: 100% dos
-    # meses). Workflow agendado e' desativado pelo GitHub depois de 60 dias
-    # sem atividade no repositorio -- e' exatamente isso que o ping do
-    # Healthchecks no fim protege (ADR-006).
-    - cron: "0 6 1 * *"
+    # Dia 1 de cada mes, 06:17 UTC = 03:17 America/Sao_Paulo (SLO 5: 100% dos
+    # meses). Minuto "quebrado" de proposito: o GitHub atrasa e pode descartar
+    # eventos agendados no inicio da hora.
+    # Workflow agendado e' desativado pelo GitHub depois de 60 dias sem
+    # atividade no repositorio -- e' isso que o ping do Healthchecks no fim
+    # protege (ADR-006).
+    - cron: "17 6 1 * *"
   workflow_dispatch:
 
 permissions:
   contents: write        # branch de promocao
   pull-requests: write   # PR automatico
+  actions: write         # `gh workflow run ci.yml` no PR de promocao (ver o passo do PR)
 
 concurrency:
   # Dois re-treinos simultaneos disputariam o mesmo champion_metrics.json.
@@ -43,24 +60,34 @@ jobs:
   retrain:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Secrets de producao (Supabase, Infobip, ...) vivem no environment
+    # `production`, nao no repositorio. `deployment: false`: o job usa os
+    # secrets, mas nao entra no historico de deploys -- la' so' fica o deploy.yml.
+    # Por isso o environment de producao nao pode ter revisor obrigatorio: o
+    # revisor valeria tambem aqui e pararia o job agendado esperando aprovacao.
+    environment:
+      name: production
+      deployment: false
     env:
-      # Credencial do remote DVC (Azure Blob Storage). A URL vem separada, em
-      # DVC_REMOTE_URL: .dvc/config e' versionado e nao guarda nem uma nem a
-      # outra (ver .dvc/config e .env.example).
-      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+      # Credencial do remote DVC (Azure Blob Storage): SAS do container com
+      # read, list, create e write (o adlfs sobe com overwrite=True), sem
+      # delete: grava, mas nao apaga nada do remote (ver .env.example). A URL
+      # vem separada, em DVC_REMOTE_URL: .dvc/config e' versionado e nao guarda
+      # nem uma nem a outra (ver .dvc/config).
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_ESCRITA }}
       DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
-      # Supabase: e' de onde saem os desfechos reais do Passo 9.0.
+      # Supabase: e' de onde saem os desfechos reais registrados pela clinica.
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       HEALTHCHECKS_RETRAIN_URL: ${{ secrets.HEALTHCHECKS_RETRAIN_URL }}
       # O re-treino nao e' trafego de produto: nao deve poluir `eventos_app`
-      # (Passo 8.5), de onde saem os numeros de latencia/cobertura do SLO.
+      # (ADR-006), de onde saem os numeros de latencia/cobertura do SLO.
       OBSERVABILIDADE_ATIVA: "false"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.10"   # mesma minor da imagem de treino (dockerfile)
           cache: pip
@@ -81,9 +108,12 @@ jobs:
         # em git, so' no remote, e src/export_treino.py nao roda sem ela.
         run: dvc pull
 
-      - name: Exportar desfechos reais registrados pela clinica (Passo 9.0)
+      - name: Exportar desfechos reais registrados pela clinica
         # Remonta data/consultas-treino.csv = semente intocada + producao real,
-        # com historico_noshow point-in-time e sem telefone.
+        # sem telefone, com o historico_noshow gravado no cadastro (o que o
+        # modelo viu em producao) e sem as linhas fora do contrato de features
+        # (src/contrato_features.py). Mede tambem a completude de rotulo -- consultas
+        # passadas sem desfecho -- e a publica no summary.
         run: python src/export_treino.py
 
       - name: Versionar o dataset remontado
@@ -95,7 +125,9 @@ jobs:
         id: gate
         # O `dvc repro` daqui builda a imagem de treino e sobe o mlflow-server
         # via docker compose -- sem cache de layer entre runs, sao alguns
-        # minutos por ciclo. Aceitavel para algo mensal.
+        # minutos por ciclo. Aceitavel para algo mensal. O primeiro stage e' o
+        # validate_data: dataset quebrado para aqui, antes de
+        # treinar, e o gate sai com codigo 3 e o motivo no summary.
         run: |
           set +e
           python src/retrain_gate.py --relatorio-json "$RUNNER_TEMP/gate-report.json"
@@ -109,46 +141,83 @@ jobs:
         # destruido junto com o runner (ADR-006 -- o coletor nao pode morar
         # dentro daquilo que ele mede).
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gate-report
           path: ${{ runner.temp }}/gate-report.json
           if-no-files-found: warn
 
+      - name: Registrar o canario no DVC
+        if: steps.gate.outputs.codigo == '0'
+        # Canario (ADR-009): a copia do desafiante em data/canario/ vira um .dvc
+        # proprio -- e' por ele que o job D-2 e o CI baixam o canario, sem
+        # tocar no data/model.pkl, que em main continua sendo o campeao.
+        run: |
+          if [ -f data/canario.json ]; then
+            dvc add data/canario/model.pkl
+          fi
+
       - name: Publicar o modelo promovido no remote
         if: steps.gate.outputs.codigo == '0'
         # Antes do commit: se o push falhar, nao existe PR apontando para um
-        # model.pkl que ninguem consegue baixar (o deploy.yml do Passo 10 faz
-        # `dvc pull` deste remote para levar o modelo ao HF Space).
+        # model.pkl que ninguem consegue baixar (o deploy.yml faz
+        # `dvc pull` deste remote para levar o modelo ao HF Space). Leva junto
+        # o canario e as saidas do treino dele, que a promocao vai restaurar.
         run: dvc push
 
       - name: Abrir PR de promocao
         if: steps.gate.outputs.codigo == '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fork publico: sem isto o `gh` pode resolver o
+          # upstream como repositorio padrao, e o PR automatico cairia la'.
+          GH_REPO: ${{ github.repository }}
+          # Quem recebe o pedido de revisao (e a notificacao) do PR. Sem a
+          # variavel, o dono do repositorio.
+          REVISOR: ${{ vars.REVISOR_PRS_MODELO || github.repository_owner }}
         # So' o que e' de fato versionado em git: champion_metrics.json (a
         # fonte de verdade do campeao), dvc.lock (qual codigo+dado gerou qual
         # modelo) e o .dvc do dataset. O model.pkl NAO vai no commit -- e' out
         # do DVC, coberto por *.pkl no .gitignore, e chega ao Space pelo
         # `dvc pull` do deploy.yml.
         #
-        # Ressalva conhecida: PR aberto com o GITHUB_TOKEN nao dispara outros
-        # workflows, entao o ci.yml (Passo 10) nao roda sozinho neste PR. O
-        # merge, sim, dispara o deploy.yml (evento de push feito por humano).
-        # Se rodar o CI no proprio PR passar a importar, troque por um PAT.
+        # PR aberto com o GITHUB_TOKEN nao dispara outros workflows -- o ci.yml
+        # nao rodaria sozinho neste PR, e com `main` protegida exigindo o check
+        # o PR ficaria pendente para sempre. A excecao que a documentacao abre
+        # para esse token e' o workflow_dispatch: o ultimo comando abaixo
+        # dispara o CI no mesmo commit, o que satisfaz a protecao sem PAT
+        # sem PAT. O merge, feito por humano, dispara o deploy.yml.
         run: |
           set -euo pipefail
-          branch="retrain/$(date -u +%Y-%m)-${GITHUB_RUN_NUMBER}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
-          git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc
-          git commit -m "(resultado) data/champion_metrics.json, dvc.lock: modelo promovido pelo gate de re-treino mensal"
+          if [ -f data/canario.json ]; then
+            # Canario (ADR-009): so' data/canario*. O dvc.lock e o .dvc do
+            # dataset ficam FORA -- em main eles descrevem o campeao, e a
+            # promocao os restaura das copias em data/canario/.
+            branch="canario/inicio-$(date -u +%Y-%m)-${GITHUB_RUN_NUMBER}"
+            git checkout -b "$branch"
+            git add data/canario.json data/canario
+            git commit -m "(resultado) data/canario.json, data/canario/: desafiante aprovado pelo gate entra como canario"
+            titulo="(resultado) desafiante aprovado pelo gate entra como canario ($(date -u +%Y-%m))"
+            efeito="O merge deste PR em \`main\` NAO troca o campeao nem rebuilda o Space: o job D-2 passa a mandar $(jq -r '.fracao * 100 | floor' data/canario.json)% da fila (por paciente) para este modelo, e o \`canario.yml\` o promove ou reverte pelos guardrails de producao (ADR-009)."
+          else
+            branch="retrain/$(date -u +%Y-%m)-${GITHUB_RUN_NUMBER}"
+            git checkout -b "$branch"
+            # A promocao deploya: precisa de versao nova (PATCH), que o
+            # deploy de producao confere e vira a tag da Release.
+            python scripts/versao_release.py subir-patch \
+              --item "Modelo \`$(jq -r .model_version data/champion_metrics.json)\` promovido pelo re-treino mensal."
+            git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc docs/logs/CHANGELOG.md
+            git commit -m "(resultado) data/champion_metrics.json, dvc.lock, docs/logs/CHANGELOG.md: modelo promovido pelo gate de re-treino mensal"
+            titulo="(resultado) modelo promovido pelo gate de re-treino ($(date -u +%Y-%m))"
+            efeito="O merge deste PR em \`main\` dispara o \`deploy.yml\`, que faz \`dvc pull\` do modelo promovido, sincroniza o HF Space e publica a Release da versao PATCH."
+          fi
           git push origin "$branch"
 
           relatorio="$RUNNER_TEMP/gate-report.json"
           {
-            echo "Promocao automatica pelo gate de re-treino mensal (Passo 9.1)."
+            echo "Aprovacao automatica pelo gate de re-treino mensal."
             echo
             echo "**Motivo:** $(jq -r '.motivo' "$relatorio")"
             echo
@@ -156,16 +225,27 @@ jobs:
             echo '|---|---:|---:|---:|---:|'
             jq -r '.comparacoes[] | "| `\(.metrica)` | \(.campeao) | \(.desafiante) | \(.delta) | \(.tolerancia) |"' "$relatorio"
             echo
+            # O numero que liga o modelo ao custo de mensageria.
+            echo "**Taxa de disparo projetada no fold de teste:** $(jq -r 'if .taxa_disparo_projetada == null then "n/d" else "\(.taxa_disparo_projetada * 100 | floor)%" end' "$relatorio")"
+            echo
+            jq -r '.avisos[] | "> **Aviso:** \(.)"' "$relatorio"
+            echo
             echo "Comparativo completo e avisos: [run #${GITHUB_RUN_NUMBER}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
             echo
-            echo "O merge deste PR em \`main\` dispara o \`deploy.yml\` (Passo 10), que faz \`dvc pull\` do modelo promovido e sincroniza o HF Space."
+            echo "$efeito"
           } > "$RUNNER_TEMP/pr-body.md"
 
           gh pr create \
-            --title "(resultado) modelo promovido pelo gate de re-treino ($(date -u +%Y-%m))" \
+            --title "$titulo" \
             --body-file "$RUNNER_TEMP/pr-body.md" \
             --base "${GITHUB_REF_NAME}" \
             --head "$branch"
+
+          gh workflow run ci.yml --ref "$branch"
+          # Depois do CI, e sem derrubar o passo: o pedido de revisao falha se
+          # o revisor nao for colaborador, e isso nao pode deixar o PR sem check.
+          gh pr edit "$branch" --add-reviewer "$REVISOR" \
+            || echo "::warning::nao foi possivel pedir revisao a $REVISOR -- confira vars.REVISOR_PRS_MODELO"
 
       - name: Ping do dead-man's-switch (sucesso)
         if: steps.gate.outputs.codigo == '0' && env.HEALTHCHECKS_RETRAIN_URL != ''
@@ -175,14 +255,14 @@ jobs:
         # Bloqueio e "sem dado novo" avisam pelo mesmo canal: o check deixa de
         # receber o sinal de sucesso e recebe /fail, que dispara o e-mail. Nada
         # de src/messaging aqui -- enviar_lembrete() foi desenhada para
-        # paciente, por SMS pago (decisao 4 do Passo 9).
+        # paciente, por SMS pago, e nao ha destinatario de equipe cadastrado.
         if: steps.gate.outputs.codigo != '0' && env.HEALTHCHECKS_RETRAIN_URL != ''
         run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_RETRAIN_URL/fail" || true
 
       - name: Propagar o resultado do gate
-        # E' este passo que faz o job falhar nos codigos 1 e 2, depois de todo
+        # E' este passo que faz o job falhar nos codigos 1 a 4, depois de todo
         # o registro ja' ter sido publicado.
         if: steps.gate.outputs.codigo != '0'
         run: |
-          echo "::error::gate de re-treino terminou com codigo ${{ steps.gate.outputs.codigo }} (1=regressao, 2=nenhum re-treino efetivo) -- ver o resumo do run"
+          echo "::error::gate de re-treino terminou com codigo ${{ steps.gate.outputs.codigo }} (1=bloqueado: regressao, piso, sanidade ou modelo ja' revertido num canario; 2=nenhum re-treino efetivo; 3=pipeline falhou, ex. validate_data; 4=canario em observacao) -- ver o resumo do run"
           exit 1

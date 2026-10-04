@@ -1,0 +1,64 @@
+# Alerta ativo sobre a observabilidade interna (ADR-006).
+#
+# A aba "Observabilidade" so' mostra degradacao para quem a abre. Este
+# workflow le as ultimas 24h de `eventos_app` e `predicoes` e FALHA quando um
+# limite e' violado (src/alerta_observabilidade.py) -- a falha e' o alerta:
+# e-mail nativo do GitHub e /fail no Healthchecks, os mesmos canais do job D-2
+# e do re-treino. Nenhum dado de paciente: so' contadores e percentis.
+name: Alerta de observabilidade
+
+on:
+  schedule:
+    # 13:17 UTC = 10:17 em Sao Paulo: depois do job D-2 (08h17) e do canario
+    # (09h47), para a janela ja' conter a execucao do dia. Minuto "quebrado"
+    # pelo mesmo motivo dos outros crons.
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alerta-observabilidade
+  cancel-in-progress: false
+
+jobs:
+  alerta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Le o Supabase de producao. Mesmo arranjo dos outros jobs agendados:
+    # environment `production` sem criar deploy.
+    environment:
+      name: production
+      deployment: false
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      HEALTHCHECKS_ALERTA_URL: ${{ secrets.HEALTHCHECKS_ALERTA_URL }}
+      # A leitura nao e' trafego de produto: nao deve gravar em `eventos_app`.
+      OBSERVABILIDADE_ATIVA: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Instalar dependencias
+        # ui.txt traz o supabase-py; o modelo nao e' necessario.
+        run: pip install -r requirements/ui.txt
+
+      - name: Avaliar a janela
+        run: python src/alerta_observabilidade.py --janela-horas 24
+
+      - name: Ping do dead-man's-switch (sucesso)
+        if: success() && env.HEALTHCHECKS_ALERTA_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_ALERTA_URL"
+
+      - name: Ping do dead-man's-switch (falha)
+        if: failure() && env.HEALTHCHECKS_ALERTA_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_ALERTA_URL/fail" || true

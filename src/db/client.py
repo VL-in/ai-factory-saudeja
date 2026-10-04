@@ -1,5 +1,5 @@
 """
-SaúdeJá — cliente único do Supabase (Passo 5).
+SaúdeJá — cliente único do Supabase.
 
 Wrapper fino sobre `supabase-py`: nada aqui sabe sobre pacientes/agendamentos
 /predições (isso é `src/db/repositories.py`) -- só resolve `SUPABASE_URL`/

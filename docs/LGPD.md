@@ -1,6 +1,6 @@
 # LGPD — SaúdeJá (Classificador de No-show)
 
-> **Status:** primeira versão (Passo 8 do [PLANO-IMPLEMENTACAO.md](PLANO-IMPLEMENTACAO.md)), 2026-09-27. Fecha duas pendências que os passos anteriores declararam explicitamente e adiaram para cá: a base legal da transferência internacional do remote do DVC ([ADR-005](adr/adr-005-integracoes-implicitas.md), emenda do Passo 9.1) e a política de retenção dos dados derivados. É insumo direto do item 4 do [BRIEFING.md](BRIEFING.md) (riscos LGPD no pitch ao Conselho, Semana 16).
+> **Status:** primeira versão, 2026-09-27, escrita junto da blindagem de PII no log (`src/logging_config.py`). Fecha duas pendências que decisões anteriores declararam explicitamente e adiaram para cá: a base legal da transferência internacional do remote do DVC ([ADR-005](adr/adr-005-integracoes-implicitas.md), emenda de 2026-09-21) e a política de retenção dos dados derivados. É insumo direto do item 4 do [BRIEFING.md](BRIEFING.md) (riscos LGPD no pitch ao Conselho, Semana 16).
 >
 > **Precisa de validação jurídica antes de virar compromisso externo.** O que está aqui é a análise técnica de quem construiu o sistema: qual dado existe, onde ele fica, por quanto tempo e o que o protege. O enquadramento legal está fundamentado, mas não substitui parecer de quem responde por ele.
 
@@ -33,7 +33,7 @@ O produto foi desenhado com minimização de PII desde o schema (`architecture.m
 |---|---|---|
 | `id_paciente_externo` (hash sha256 de CPF) | `pacientes` (Supabase) | **Pessoal pseudonimizado** — Art. 12/13. Não é anônimo: o hash é reversível por força bruta sobre o espaço de CPFs válidos. |
 | `data_nascimento`, `sexo` | `pacientes` | Pessoal |
-| `telefone` | `pacientes` | **Pessoal, identificador direto** — exceção deliberada da minimização (Passo 7): sem contato não existe o produto (lembrete pago). |
+| `telefone` | `pacientes` | **Pessoal, identificador direto** — exceção deliberada da minimização: sem contato não existe o produto (lembrete pago). |
 | `nome_completo` | `pacientes` | **Pessoal, identificador direto** — segunda exceção deliberada (ADR-007): sem nome a fila do dia não é operável por quem atende. Ver §2.1 |
 | `especialidade` do agendamento | `agendamentos` | **Sensível (Art. 5º, II)** — ver abaixo |
 | `distancia_km`, `dias_entre_agendamento_consulta`, `historico_noshow`, `data_hora_agendada` | `agendamentos` | Pessoal (operacional) |
@@ -46,7 +46,7 @@ O produto foi desenhado com minimização de PII desde o schema (`architecture.m
 
 ### 2.1 As duas exceções à minimização, e o que as justifica
 
-`telefone` (Passo 7) e `nome_completo` ([ADR-007](adr/adr-007-nome-do-paciente.md)) são identificadores diretos gravados de propósito. O critério é o mesmo nos dois casos, e é o princípio da **necessidade** (Art. 6º, III), não conveniência:
+`telefone` e `nome_completo` ([ADR-007](adr/adr-007-nome-do-paciente.md)) são identificadores diretos gravados de propósito. O critério é o mesmo nos dois casos, e é o princípio da **necessidade** (Art. 6º, III), não conveniência:
 
 | Coluna | Sem ela, o que deixa de funcionar |
 |---|---|
@@ -65,7 +65,7 @@ O produto foi desenhado com minimização de PII desde o schema (`architecture.m
 | Dataset de treino (sai do Brasil, §4) | `COLUNAS_SAIDA` de `src/export_treino.py` |
 | API `/predict` (integrações externas) | Campo inexistente em `src/api/schemas.py` |
 | SMS via Infobip (processador externo) | Select do job D-2 não traz a coluna |
-| **LLM/TrueFoundry** (Passo 13) | `explain.contexto_sem_pii`, aplicada pela classe-base de `ExplicadorLLM` |
+| **LLM/TrueFoundry** (integração opcional, ainda não ligada) | `explain.contexto_sem_pii`, aplicada pela classe-base de `ExplicadorLLM` |
 
 A última merece nota, porque foi a preocupação que motivou a decisão: **cifrar a coluna no banco não protegeria o nome do LLM.** A chamada ao provedor sai de dentro do mesmo processo que já leu o nome para desenhar a tela — a chave estaria na mesma memória. O que protege é o nome não entrar no dicionário que vira prompt, e isso é garantido por construção: `explicar_em_texto` é concreta e sanitiza o contexto antes de delegar à implementação, que sobrescreve `_gerar_texto`. Um teste impede qualquer subclasse de pular essa fronteira.
 
@@ -91,9 +91,9 @@ Dois níveis, porque a LGPD trata dado sensível em artigo separado.
 
 ## 4. Transferência internacional (Art. 33)
 
-**O fato.** O banco de produção (Supabase) fica em **São Paulo (`sa-east-1`)**: pacientes, agendamentos, predições, mensagens e eventos não saem do Brasil. O remote do DVC, porém, é um container de **Azure Blob Storage na região Chile Central** (Passo 9.1) — e é para lá que vão o **dataset de treino** (`data/consultas-treino.csv`, que desde o Passo 9.0 contém desfechos reais de consultas) e o **`model.pkl`** derivado dele.
+**O fato.** O banco de produção (Supabase) fica em **São Paulo (`sa-east-1`)**: pacientes, agendamentos, predições, mensagens e eventos não saem do Brasil. O remote do DVC, porém, é um container de **Azure Blob Storage na região Chile Central** — e é para lá que vão o **dataset de treino** (`data/consultas-treino.csv`, que inclui os desfechos reais registrados pela clínica de consultas) e o **`model.pkl`** derivado dele.
 
-Isso é transferência internacional de dado derivado de dado de saúde, e precisa ser dito em voz alta. **A afirmação "os dados do SaúdeJá não saem do Brasil" é verdadeira para o banco de produção e falsa para o artefato de treino.** O pitch do Passo 12 tem de usar a formulação correta.
+Isso é transferência internacional de dado derivado de dado de saúde, e precisa ser dito em voz alta. **A afirmação "os dados do SaúdeJá não saem do Brasil" é verdadeira para o banco de produção e falsa para o artefato de treino.** O pitch tem de usar a formulação correta.
 
 **Enquadramento.** Art. 33, II, alínea "d" — cláusulas contratuais padrão: o tratamento se apoia no acordo de processamento de dados (DPA) do provedor de nuvem, que é o instrumento contratual que acompanha o serviço e prevê as garantias de proteção exigidas pela lei. A transferência é necessária à finalidade (re-treino mensal acordado com Produto, BRIEFING) e o provedor é o mesmo tanto para o dado quanto para o artefato.
 
@@ -107,6 +107,8 @@ Isso é transferência internacional de dado derivado de dado de saúde, e preci
 **O que não é mitigado, e precisa constar do risco residual (§9):** um dataset pseudonimizado continua sendo dado pessoal (Art. 12 só equipara a anônimo o que é irreversível), e `especialidade` + desfecho continuam sendo dado sensível. Pseudonimização reduz a gravidade de um incidente; não tira a transferência do escopo do Art. 33.
 
 **A alternativa segue aberta e custa pouco.** O [ADR-005](adr/adr-005-integracoes-implicitas.md) registra o caminho: criar um container em Brazil South, apontar `DVC_REMOTE_URL`/`.dvc/config.local` para ele e rodar `dvc push`. Nada no código depende da região. Enquanto a decisão atual vigora, este documento é o registro dela.
+
+**Processamento do job D-2 no GitHub Actions** (2026-09-30, [ADR-005](adr/adr-005-integracoes-implicitas.md)). O job diário roda num runner hospedado pelo GitHub, fora do Brasil, e lê do banco o que a predição e o envio precisam: data de nascimento, sexo, especialidade, distância, antecedência, histórico de faltas e o **telefone** para o lembrete — nunca nome nem CPF (o select do job não traz `nome_completo`). Nada é gravado no runner além do `model.pkl`, e ele é descartado ao fim da execução. É a mesma classe de transferência que o Space já implicava, mas **um operador a mais** (o GitHub), com a mesma base: Art. 33, II, "d", pelas cláusulas do contrato do provedor. A formulação do pitch fica mais estreita: "os dados **armazenados** não saem do Brasil" continua verdadeira para o banco; o processamento diário acontece fora.
 
 ---
 
@@ -172,7 +174,7 @@ O requisito é absoluto no BRIEFING e mensurável no [SLO §6](SLO.md) (0 ocorr�
 
 1. **Filtro de redação em todo handler do processo** (`src/logging_config.py`). Mora no handler, não num logger nosso, e é aplicado a **todos** os handlers já instalados — inclusive os do `uvicorn`, que põe `propagate=False` e os do `streamlit`. Isso importa porque o log que de fato existe em volume em produção não é o nosso: é o de acesso (que carrega IP de cliente) e o de erro dessas bibliotecas. Duas famílias de regra, porque PII tem duas naturezas: CPF/telefone/e-mail/IP têm forma reconhecível; **nome não tem** — "Ana Souza" é indistinguível de qualquer par de palavras —, então o que se reconhece é a chave que o anuncia (`nome=`, `"nome":`, `extra={"nome": ...}`).
 2. **Guarda estática sobre o código** (`tests/test_coerencia_repo.py::test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii`). Percorre a AST de todo `src/*.py`, acha as chamadas de log e falha se alguma referenciar campo proibido — por variável, atributo, índice ou chave de `extra`. Mesmo espírito da guarda que já bloqueia coluna proibida nas migrations: a proibição vale desde a estrutura, não por convenção de revisão. Tem controle negativo próprio, porque uma varredura que deixa de reconhecer as chamadas daria verde sem verificar nada.
-3. **`scripts/auditoria_lgpd.py`** — varredura de log, rebaixada de evidência principal a **ferramenta de verificação**. Serve para o smoke test local do Passo 11 (o momento em que existe log de verdade), para auditar log baixado do GitHub Actions e para fechar o ciclo: a saída de um processo já configurado, varrida por ele, dá zero achado. Compartilha as regras com o filtro (`REGRAS_DE_PII`), não uma segunda cópia — duas listas de regex sobre o mesmo requisito divergiriam, e a que divergisse em silêncio seria justamente a que dá o veredito.
+3. **`scripts/auditoria_lgpd.py`** — varredura de log, rebaixada de evidência principal a **ferramenta de verificação**. Serve para o smoke test local do deploy (o momento em que existe log de verdade), para auditar log baixado do GitHub Actions e para fechar o ciclo: a saída de um processo já configurado, varrida por ele, dá zero achado. Compartilha as regras com o filtro (`REGRAS_DE_PII`), não uma segunda cópia — duas listas de regex sobre o mesmo requisito divergiriam, e a que divergisse em silêncio seria justamente a que dá o veredito.
 
 **Direção de erro escolhida**: quando a redação falha, a linha é substituída por um marcador visível em vez de sair crua; e a regra numérica redige de mais em vez de de menos — um IP de cliente no log de acesso do uvicorn é redigido, o que não é dano colateral, já que endereço IP é dado pessoal.
 
@@ -182,10 +184,10 @@ O requisito é absoluto no BRIEFING e mensurável no [SLO §6](SLO.md) (0 ocorr�
 
 ## 9. Riscos residuais e pendências declaradas
 
-Nada aqui é surpresa oculta — cada item é para constar do slide de risco do Passo 12:
+Nada aqui é surpresa oculta — cada item é para constar do slide de risco do pitch:
 
 1. **Transferência internacional do artefato de treino** (§4). Mitigada pelo conteúdo (pseudonimizado, sem contato), não eliminada. Reversível a baixo custo se a decisão mudar.
-2. **A superfície de reidentificação cresceu com o nome gravado** ([ADR-007](adr/adr-007-nome-do-paciente.md), §2.1). Um vazamento do banco agora expõe nome + telefone + especialidade + desfecho, o que identifica a pessoa diretamente; antes exigia quebrar o hash de CPF. É o custo assumido de ter uma fila do dia operável, e vai para o slide de risco do Passo 12 em voz alta — **o pitch não pode mais usar "não temos nome de paciente" como argumento de redução de risco**. A formulação correta: "temos nome, restrito à tela da equipe, com sete portas de saída fechadas e testadas".
+2. **A superfície de reidentificação cresceu com o nome gravado** ([ADR-007](adr/adr-007-nome-do-paciente.md), §2.1). Um vazamento do banco agora expõe nome + telefone + especialidade + desfecho, o que identifica a pessoa diretamente; antes exigia quebrar o hash de CPF. É o custo assumido de ter uma fila do dia operável, e vai para o slide de risco do pitch em voz alta — **o pitch não pode mais usar "não temos nome de paciente" como argumento de redução de risco**. A formulação correta: "temos nome, restrito à tela da equipe, com sete portas de saída fechadas e testadas".
 3. **A tela da recepção fica visível para a sala de espera.** A "Fila do dia" mostra a fila inteira com nome, e quem espera pode ler o monitor — exposição a terceiros que não assinaram confidencialidade nenhuma. Mitigado por aviso na própria tela, **não por mecanismo**: onde posicionar o monitor é decisão da clínica. A alternativa (nome abreviado na tabela, completo só na linha selecionada) foi avaliada e recusada por custo de operação (ADR-007).
 4. **Eliminação de titular é operação manual.** O `on delete cascade` existe e funciona, mas não há interface nem script para o pedido do Art. 18, VI. Enquanto o volume é o de um protótipo, é aceitável; não é aceitável em operação real.
 5. **Dataset versionado não tem purga.** O DVC guarda histórico por construção — é o que dá rastreabilidade de qual dado gerou qual modelo (SLO §5). Um pedido de eliminação de titular não alcança as versões antigas do dataset sem reescrever o histórico. Tensão real entre rastreabilidade de ML e Art. 18, VI, sem solução implementada.
@@ -194,12 +196,18 @@ Nada aqui é surpresa oculta — cada item é para constar do slide de risco do 
    - **O login da equipe inteira pode ser travado de fora.** O limite de tentativas do Supabase Auth é por IP, e todo login chega pelo IP do servidor. Quem tentar senhas em massa pela tela bloqueia o login de todos por alguns minutos.
    - **A tela aberta não se fecha sozinha.** A sessão expira depois de 30 minutos sem uso, mas o Streamlit só reage a interação: a fila continua visível no monitor até alguém tocar na tela, e aí aparece o login. O risco 3 continua mitigado por aviso, não por mecanismo.
    - **A API FastAPI não tem autenticação.** `/predict` não lê o banco nem devolve dado de paciente, mas é uma porta aberta.
-   - **O cadastro fechado do projeto remoto é configuração manual** no Dashboard do Supabase (checklist do Passo 11), não versionada.
+   - **O cadastro fechado do projeto remoto é configuração manual** no Dashboard do Supabase (checklist do primeiro deploy, ver [ADR-008](adr/adr-008-login-da-equipe.md)), não versionada.
 7. **Criptografia em repouso é herdada do provedor**, não verificada por nós.
 8. **Este documento não tem validação jurídica** (ver cabeçalho).
 9. **`especialidade` é o campo que carrega a sensibilidade** (§2). Se o produto crescer para aceitar motivo da consulta, diagnóstico ou medicação, esta análise precisa ser refeita do zero — não é um "mais um campo".
 
 ---
+
+### 9.1 Riscos acrescentados pelo CI/CD (2026-09-30)
+
+10. **O log do job D-2 é público.** O repositório é público, e o log do GitHub Actions também. O job processa telefone de paciente; o que impede o número de aparecer no log é o filtro de redação de `src/logging_config.py` (§8), que aqui deixa de ser defesa em profundidade e vira **a última barreira**. Mitigações: o job loga só contadores e identificadores internos (`id_agendamento`), a lista de erros com motivo nunca vai para o log nem para o resumo do run, e a guarda estática sobre a AST de `src/` impede que código novo passe campo de PII a uma chamada de log. O CI ainda varre o log da imagem de deploy com `scripts/auditoria_lgpd.py`. **Não mitigado**: um bug de terceiro que logue o corpo de uma requisição antes do filtro existir no processo.
+11. **Processamento fora do Brasil num operador a mais** (§4): o runner do GitHub. Sem gravação local que sobreviva ao job.
+12. **Credencial do remote do DVC no CI.** O CI roda código de PR. Por isso CI, deploy e job D-2 usam uma SAS **só de leitura** (e só do container); a credencial de escrita fica só no workflow de re-treino, e também é uma SAS do container, que cria arquivos novos mas não sobrescreve nem apaga os existentes. A account key, que dá acesso à conta inteira, não chega a nenhum workflow. PR de fork não recebe secret nenhum.
 
 ## 10. Incidentes
 
@@ -220,4 +228,4 @@ O que existe de capacidade de investigação hoje: `eventos_app` (90 dias, sobre
 
 ## Revisão
 
-Revisar sempre que: (a) uma coluna nova entrar em `supabase/migrations/`, (b) a região de qualquer armazenamento mudar, (c) uma integração externa nova passar a receber dado de paciente — o LLM do Passo 13 é o próximo candidato —, ou (d) o [SLO.md](SLO.md)/[SLA.md](SLA.md)/[architecture.md](architecture.md) mudarem. Última geração: 2026-09-27 (Passo 8); revisado em 2026-09-28 (§2/§2.1/§6/§7/§9 — nome do paciente gravado e visível à equipe, ADR-007); revisado de novo em 2026-09-28 (§2/§7/§9 — login da equipe, ADR-008).
+Revisar sempre que: (a) uma coluna nova entrar em `supabase/migrations/`, (b) a região de qualquer armazenamento mudar, (c) uma integração externa nova passar a receber dado de paciente — o LLM opcional (TrueFoundry) é o próximo candidato —, ou (d) o [SLO.md](SLO.md)/[SLA.md](SLA.md)/[architecture.md](architecture.md) mudarem. Última geração: 2026-09-27; revisado em 2026-09-28 (§2/§2.1/§6/§7/§9 — nome do paciente gravado e visível à equipe, ADR-007); revisado de novo em 2026-09-28 (§2/§7/§9 — login da equipe, ADR-008); revisado em 2026-09-30 (§4/§9.1 — job D-2 no runner do GitHub Actions e log público).

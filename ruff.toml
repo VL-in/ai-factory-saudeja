@@ -22,10 +22,18 @@ select = [
     "SIM",  # flake8-simplify
     "C4",   # flake8-comprehensions
     "RUF",  # regras do proprio ruff (ex.: RUF013 Optional implicito)
+    # flake8-bandit: a camada "script" dos gates do CI. Cobre o que
+    # o template Bandit do GitHub cobriria (subprocess, hash fraco, bind em
+    # 0.0.0.0, SQL montado por string, segredo hardcoded), sem workflow a mais.
+    "S",
 ]
 
 [lint.per-file-ignores]
 # Os testes importam modulos de src/ que so entram no sys.path via
 # tests/conftest.py, e alguns instanciam mlflow dentro da funcao de
 # proposito (fixture cara) -- import no topo da funcao e intencional aqui.
-"tests/*" = ["E402"]
+#
+# S101 (assert) e' como o pytest funciona. S603/S607: os testes de coerencia e
+# de integracao chamam git/docker/supabase pelo PATH de proposito, com
+# argumentos literais.
+"tests/*" = ["E402", "S101", "S603", "S607"]

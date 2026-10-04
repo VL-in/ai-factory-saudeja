@@ -1,5 +1,5 @@
 """
-SaúdeJá — smoke test da interface Streamlit (Passo 4), via
+SaúdeJá — smoke test da interface Streamlit, via
 streamlit.testing.v1.AppTest: roda o script de verdade, sem browser.
 
 Escopo deliberado: a casca (app carrega sem exceção, abas certas existem,
@@ -9,6 +9,8 @@ são cobertas por tests/test_ui_logic.py -- aqui o que se testa é a tela.
 """
 from datetime import datetime, timedelta, timezone
 
+import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from ui import logic
@@ -86,7 +88,7 @@ def test_aba_de_dev_some_fora_do_ambiente_de_dev(monkeypatch):
 
 
 def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
-    """Passo 5 liga a persistência de verdade -- sem SUPABASE_URL/
+    """O cadastro usa a persistência de verdade -- sem SUPABASE_URL/
     SUPABASE_SECRET_KEY no ambiente de teste, submeter com um CPF válido e um
     horário dentro da grade da clínica falha com uma mensagem amigável
     (ErroPersistencia), não com traceback."""
@@ -118,7 +120,7 @@ def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypat
 
 
 def test_aba_observabilidade_sem_supabase_avisa_sem_derrubar_a_tela(monkeypatch):
-    """Passo 8.5: o painel é diagnóstico passivo (mesma escolha do status do
+    """O painel de observabilidade é diagnóstico passivo (mesma escolha do status do
     banco na sidebar), então sem Supabase ele avisa -- não derruba a tela nem
     impede a predição manual, que não depende de banco nenhum."""
     at = _rodar(monkeypatch)
@@ -128,7 +130,7 @@ def test_aba_observabilidade_sem_supabase_avisa_sem_derrubar_a_tela(monkeypatch)
 
 
 def test_aba_dev_dispara_job_e_mostra_erro_amigavel_sem_supabase(monkeypatch):
-    """Passo 6 liga o botão ao job de verdade (`disparar_job_diario`). Sem
+    """O botão está ligado ao job de verdade (`disparar_job_diario`). Sem
     SUPABASE_URL/SUPABASE_SECRET_KEY no ambiente de teste da UI (mesma
     convenção das demais abas), clicar não derruba a tela -- mostra
     ErroPersistencia traduzido, não um traceback."""
@@ -242,3 +244,105 @@ def test_sessao_inativa_volta_para_o_login_com_aviso(monkeypatch):
     assert not at.exception
     assert not at.tabs
     assert any("sem uso" in info.value for info in at.info)
+
+
+# --- caminhos felizes das abas que dependem do banco ----------------------------
+# Os testes acima cobrem essas abas só SEM Supabase (o erro amigável). O que a
+# clínica vê em produção -- a fila com dados, o painel com números, o job que
+# rodou -- não tinha nenhum smoke. O banco é trocado por funções falsas em
+# `ui.logic`, o mesmo módulo que o app importa.
+
+
+@pytest.fixture
+def caches_do_streamlit_limpos():
+    """`_resumo_observabilidade` e `_status_banco` usam `st.cache_data`, que
+    vive no processo inteiro: um resumo falso cacheado aqui apareceria no
+    teste "sem Supabase" seguinte."""
+    st.cache_data.clear()
+    yield
+    st.cache_data.clear()
+
+
+def _item_fila(n, probabilidade, classe, **kwargs):
+    return logic.ItemFila(
+        id_agendamento=f"ag-{n}",
+        id_paciente_externo=f"{n:064x}",
+        especialidade="cardiologia",
+        data_hora_agendada=datetime(2026, 10, 2, 9 + n, 0),
+        probabilidade=probabilidade,
+        classe_prevista=classe,
+        explicacao=[{"feature": "historico_noshow", "valor": 3, "contribuicao": 0.8}],
+        model_version="abc123",
+        **kwargs,
+    )
+
+
+def test_fila_do_dia_com_agendamentos_mostra_os_contadores(monkeypatch, caches_do_streamlit_limpos):
+    fila = [
+        _item_fila(0, 0.81, 1, nome_completo="Paciente Teste Um"),
+        _item_fila(1, 0.12, 0, fora_do_dominio=True),
+        logic.ItemFila(
+            id_agendamento="ag-2",
+            id_paciente_externo="f" * 64,
+            especialidade="dermatologia",
+            data_hora_agendada=datetime(2026, 10, 2, 15, 0),
+            probabilidade=None,
+            classe_prevista=None,
+        ),
+    ]
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", lambda dia: fila)
+
+    at = _rodar(monkeypatch)
+
+    assert not at.exception
+    contadores = {m.label: m.value for m in at.metric}
+    assert contadores["Agendamentos"] == "3"
+    assert contadores["Alto risco"] == "1"
+    assert contadores["Sem predição"] == "1"
+    assert not [e for e in at.error if "fila" in e.value.lower()]
+
+
+def test_observabilidade_com_numeros_acusa_violacao_de_slo(monkeypatch, caches_do_streamlit_limpos):
+    """p95 acima de 2 s e predição sem explicação são as duas violações que o
+    painel tem de gritar -- testadas com o resumo no formato de
+    `logic.resumo_observabilidade`."""
+    resumo = {
+        "janela_horas": 24,
+        "predicoes": 40,
+        "p50_ms": 900.0,
+        "p95_ms": 2500.0,
+        "erros": 2,
+        "por_origem": {"job": 30, "processo": 10},
+        "cobertura_explicacao": {"predicoes": 30, "com_explicacao": 29, "percentual": 29 / 30},
+        "ultimo_job_d2": datetime(2026, 10, 2, 8, 17, tzinfo=timezone.utc),
+        "truncado": True,
+    }
+    monkeypatch.setattr(logic, "resumo_observabilidade", lambda janela_horas: resumo)
+
+    at = _rodar(monkeypatch)
+
+    assert not at.exception
+    contadores = {m.label: m.value for m in at.metric}
+    assert contadores["p95 de latência"] == "2500 ms"
+    assert contadores["Cobertura de explicação (SLO §4)"] == "97%"
+    erros = " ".join(e.value for e in at.error)
+    assert "SLO §2" in erros and "SLO §4" in erros
+    assert any("truncada" in w.value for w in at.warning)
+
+
+def test_aba_dev_com_job_bem_sucedido_mostra_os_contadores(monkeypatch, caches_do_streamlit_limpos):
+    resultado = {
+        "agendamentos_encontrados": 5,
+        "predicoes_gravadas": 5,
+        "mensagens_disparadas": 2,
+        "erros": [],
+    }
+    monkeypatch.setattr(logic, "disparar_job_diario", lambda dia=None: resultado)
+    at = _rodar(monkeypatch)
+
+    _botao(at, "Disparar job D-2 agora").click().run()
+
+    assert not at.exception
+    contadores = {m.label: m.value for m in at.metric}
+    assert contadores["Mensagens disparadas"] == "2"
+    assert any("sem erros" in s.value for s in at.success)

@@ -221,7 +221,11 @@ web3 = 30
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
-enable_signup = false
+# true de propósito: apesar do comentário acima, o CLI repassa esta chave como
+# GOTRUE_EXTERNAL_EMAIL_ENABLED, que liga/desliga o *provedor* de e-mail -- com
+# false, nem a conta criada pelo administrador entra ("Email logins are
+# disabled"). A trava de cadastro do ADR-008 é o `[auth] enable_signup` acima.
+enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true

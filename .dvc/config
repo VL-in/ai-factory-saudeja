@@ -1,11 +1,11 @@
-# Remote do DVC -- Azure Blob Storage (Passo 9.1). Ver README, secao
+# Remote do DVC -- Azure Blob Storage. Ver README, secao
 # "Remote do DVC (Azure Blob Storage)".
 #
 # Este arquivo E' versionado, e por isso nao guarda nem credencial nem a URL
 # do remote. A credencial e' evidente (AZURE_STORAGE_CONNECTION_STRING, por
 # variavel de ambiente/secret), mas a URL tambem fica fora: ela carrega o nome
-# do container onde o dataset de treino -- que depois do Passo 9.0 contem
-# desfechos reais de pacientes, ainda que pseudonimizados -- esta' versionado.
+# do container onde o dataset de treino -- que inclui os
+# desfechos reais registrados pela clinica de pacientes, ainda que pseudonimizados -- esta' versionado.
 # Nome de conta/container em repositorio e' reconhecimento de graca para quem
 # encontrar o repo, sem nenhum ganho em troca. Decisao da autora, 2026-09-21.
 #

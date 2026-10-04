@@ -2,9 +2,9 @@
 SaúdeJá — interface Streamlit.
 Casca inicial, desenhada para CRESCER sem trocar de estrutura: as abas do
 funcionário já existem todas, plugadas conforme cada capacidade fica pronta
-("Fila do dia" -> Passo 5/banco; "Dev: disparo manual" -> Passo 6/job). Assim
-cada capacidade nova é plugada numa aba já testada visualmente, em vez de só
-ser validada por pytest/curl até o fim do plano.
+("Fila do dia" -> banco; "Dev: disparo manual" -> job D-2). Assim cada
+capacidade nova é plugada numa aba já testada visualmente, em vez de só ser
+validada por pytest/curl.
 
 Toda a lógica (backends de predição, montagem de payload, tradução de erro)
 vive em src/ui/logic.py, que não importa streamlit e é testado sem o runtime
@@ -34,15 +34,15 @@ import streamlit as st  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
 from ui import logic  # noqa: E402
 
-# No topo do módulo, não dentro de um callback (Passo 8): o Streamlit reexecuta
+# No topo do módulo, não dentro de um callback: o Streamlit reexecuta
 # este script inteiro a cada interação, e já instalou os handlers dele antes de
 # chegar aqui. `configurar_logging` é idempotente -- não duplica handler nem
 # linha -- e a cada rerun reaplica o filtro de redação em handler que tenha
 # aparecido no meio do caminho.
 configurar_logging()
 
-# 'dev' como default: em produção o Passo 11 define APP_ENV=prod
-# explicitamente no Space, e rodar local não exige configurar nada para ver
+# 'dev' como default: em produção a imagem do Space define APP_ENV=prod
+# explicitamente, e rodar local não exige configurar nada para ver
 # a aba de acompanhamento do job.
 APP_ENV = os.environ.get("APP_ENV", "dev")
 
@@ -86,8 +86,8 @@ def _aba_testar_predicao():
     st.subheader("Testar predição de no-show")
     st.caption(
         "Formulário manual sobre o mesmo módulo de inferência que o job diário "
-        "usará (Passo 6). Enquanto não há banco (Passo 5), esta aba é o harness "
-        "de teste visual do núcleo de ML."
+        "usa. Sem banco configurado, esta aba é o harness de teste visual do "
+        "núcleo de ML."
     )
 
     especialidades = logic.listar_especialidades()
@@ -160,7 +160,7 @@ def _mostrar_resultado(resultado):
 
     if resultado.classe_prevista:
         st.error(
-            "Acima do threshold: o job diário (Passo 6) dispararia lembrete pago "
+            "Acima do threshold: o job diário dispararia lembrete pago "
             "para este agendamento."
         )
     else:
@@ -211,17 +211,21 @@ def _mostrar_contribuicoes(explicacao, explicacao_texto=None):
     else:
         st.caption(
             "Explicação em linguagem natural (LLM) ainda desativada -- plug "
-            "reservado para o Passo 13."
+            "reservado para a integração opcional com LLM."
         )
 
 
 def _registrar_desfecho(item):
     """Ação da clínica registrar o que de fato aconteceu com o agendamento
-    (Passo 9.0) -- sem isto, `agendamentos.status` nunca sai de 'agendado' e
-    o re-treino mensal (Passo 9.1) nunca tem dado real para aprender, além do
+    -- sem isto, `agendamentos.status` nunca sai de 'agendado' e
+    o re-treino mensal nunca tem dado real para aprender, além do
     `historico_noshow` automático do cadastro nunca contar nada de verdade."""
     st.write(f"**Registrar desfecho de {item.rotulo_paciente}**")
     st.caption(f"Status atual: `{item.status}`")
+
+    if not logic.pode_registrar_desfecho(item.data_hora_agendada):
+        st.info("O desfecho só pode ser registrado no dia da consulta ou depois.")
+        return
 
     col1, col2, col3 = st.columns(3)
     acoes = (
@@ -238,8 +242,10 @@ def _registrar_desfecho(item):
             disabled=item.status == status,
         ):
             try:
-                logic.atualizar_status_agendamento(item.id_agendamento, status)
-            except logic.ErroPersistencia as exc:
+                logic.atualizar_status_agendamento(
+                    item.id_agendamento, status, data_hora_agendada=item.data_hora_agendada
+                )
+            except (logic.ErroPersistencia, logic.ErroDesfechoForaDePrazo) as exc:
                 st.error(f"Não foi possível registrar o desfecho: {exc}")
             else:
                 st.success(f"Desfecho registrado: {rotulo.lower()}.")
@@ -250,7 +256,7 @@ def _aba_fila_do_dia():
     st.subheader("Fila do dia")
     st.caption(
         "Agendamentos ordenados por risco (probabilidade de no-show). Quem "
-        "ainda não tem predição aparece no fim -- o job D-2 (Passo 6) ainda "
+        "ainda não tem predição aparece no fim -- o job D-2 ainda "
         "não rodou para esse agendamento."
     )
     # Aviso na tela, não só no ADR: quem opera precisa saber que a tela carrega
@@ -292,6 +298,7 @@ def _aba_fila_do_dia():
                 "Horário": item.data_hora_agendada,
                 "Probabilidade": item.probabilidade,
                 "Alto risco": bool(item.classe_prevista) if item.tem_predicao else None,
+                "Fora do domínio": item.fora_do_dominio,
                 "Status": item.status,
             }
             for item in fila
@@ -313,6 +320,13 @@ def _aba_fila_do_dia():
                 format="percent", min_value=0.0, max_value=1.0
             ),
             "Alto risco": st.column_config.CheckboxColumn(),
+            "Fora do domínio": st.column_config.CheckboxColumn(
+                help=(
+                    "O agendamento tem algum dado que o modelo não viu no treino "
+                    "(ex.: distância acima de 50 km, antecedência acima de 90 dias). "
+                    "A probabilidade é extrapolação -- leia com cautela."
+                )
+            ),
         },
     )
 
@@ -332,7 +346,7 @@ def _aba_fila_do_dia():
     st.caption(f"identificador interno: `{item.id_paciente_externo}`")
     if not item.tem_predicao:
         st.info(
-            "Este agendamento ainda não foi predito pelo job D-2 (Passo 6) -- "
+            "Este agendamento ainda não foi predito pelo job D-2 -- "
             "não há explicação gravada."
         )
         return
@@ -341,6 +355,11 @@ def _aba_fila_do_dia():
         f"probabilidade {item.probabilidade:.1%} · modelo `{item.model_version}` · "
         "explicação lida de `predicoes.explicacao_shap`, gravada junto da predição"
     )
+    if item.fora_do_dominio:
+        st.warning(
+            "Este agendamento tem dados fora do que o modelo viu no treino -- a "
+            "probabilidade acima é uma extrapolação e merece menos confiança que as demais."
+        )
     _mostrar_contribuicoes(item.explicacao, item.explicacao_texto)
 
 
@@ -360,7 +379,7 @@ def _aba_observabilidade():
     st.subheader("Observabilidade")
     st.caption(
         "Números do SLO medidos em produção, lidos da tabela `eventos_app` "
-        "(Passo 8.5, ADR-006). Uptime (§1) e execução dos jobs agendados (§5) "
+        "(ADR-006). Uptime (§1) e execução dos jobs agendados (§5) "
         "são medidos **de fora** — por sonda externa e dead-man's-switch —, "
         "porque um coletor que mora dentro do Space some junto com ele quando "
         "hiberna, inclusive a evidência de que caiu."
@@ -435,9 +454,10 @@ def _aba_observabilidade():
 def _aba_dev():
     st.subheader("Dev: disparo manual do job de inferência")
     st.caption(
-        "Roda `src/jobs/inferencia_diaria.py` (Passo 6) para a data de hoje na "
+        "Roda `src/jobs/inferencia_diaria.py` para a data de hoje na "
         "clínica: busca a fila D-2, prediz, grava em `predicoes` e decide o "
-        "disparo de lembrete (stub até o Passo 7) por agendamento."
+        "disparo de lembrete (stub, a menos que MESSAGING_PROVIDER=infobip) por "
+        "agendamento."
     )
     if st.button("Disparar job D-2 agora", type="primary"):
         try:
@@ -495,7 +515,7 @@ def _visao_paciente():
         "calculado pela clínica, não autodeclarado. Nome completo e telefone "
         "**são** gravados: o nome para a equipe conseguir chamar o paciente na "
         "fila do dia (ADR-007) e o telefone porque é para onde o lembrete real "
-        "é enviado (Infobip, Passo 7). Nenhum dos dois sai para log, para o "
+        "é enviado (Infobip). Nenhum dos dois sai para log, para o "
         "dataset de treino, para a API pública ou para o LLM -- ver "
         "docs/LGPD.md."
     )
@@ -506,7 +526,13 @@ def _visao_paciente():
     # oferecer só os horários que a clínica atende naquele dia (seg-sex,
     # sábado de manhã, nunca domingo) -- dentro de um form isso só
     # atualizaria no submit, um passo tarde demais.
-    data_consulta = st.date_input("Data da consulta", value=logic.proxima_data_disponivel())
+    hoje = logic.hoje_na_clinica()
+    data_consulta = st.date_input(
+        "Data da consulta",
+        value=logic.proxima_data_disponivel(),
+        min_value=hoje,
+        max_value=logic.data_maxima_de_consulta(hoje),
+    )
     horarios = logic.horarios_disponiveis(data_consulta)
     if not horarios:
         st.warning("A clínica não atende aos domingos -- escolha outra data.")
@@ -589,7 +615,7 @@ def _visao_paciente():
     )
     st.caption(
         "A predição de no-show deste agendamento será calculada pelo job D-2 "
-        "(Passo 6), dois dias antes da consulta."
+        "até dois dias antes da consulta."
     )
 
 
