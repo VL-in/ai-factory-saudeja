@@ -1,6 +1,6 @@
 # Plano de Implementação — SaudeJá: do pipeline de treino ao produto deployável
 
-> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação; em 2026-09-29 com a revisão do Passo 10 contra o repositório e a documentação do GitHub Actions; em 2026-10-01 com o Passo 10.7 — canário do modelo com rollback automático, [ADR-009](adr/adr-009-canario-do-modelo.md)). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
+> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação; em 2026-09-29 com a revisão do Passo 10 contra o repositório e a documentação do GitHub Actions; em 2026-10-01 com o Passo 10.7 — canário do modelo com rollback automático, [ADR-009](adr/adr-009-canario-do-modelo.md); em 2026-10-04 com o primeiro deploy em dev, Fase 2 do 11.2). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
 
 ## Contexto
 
@@ -894,7 +894,7 @@ Juntam as verificações já descritas no corpo deste passo, no 10.1, nas revis�
 - O remote do DVC **ainda responde `AuthorizationFailure`** com a credencial do `.env`. É bloqueante e é o passo 1 da Fase 1.
 - Continua aberto, sem bloquear o piloto, o `414 URI too long` (achado 1 do 10.7). O `enable_signup` em `[auth.email]` (achado 2) foi corrigido em 2026-10-04, depois de derrubar a integração no primeiro deploy de `dev`.
 
-**O que entrou no código (Fase A2, sem commit ainda):**
+**O que entrou no código (Fase A2, enviada a `dev` em 2026-10-04):**
 - `scripts/versao_release.py`, que lê a versão do topo do CHANGELOG.
 - `deploy.yml`:
   - roda em push em `dev` e em `main`;
@@ -956,7 +956,7 @@ gh secret list; gh secret list --env dev; gh secret list --env production; gh va
    - Crie **dois Spaces à mão**, por exemplo `saudeja-dev` e `saudeja`, com Docker, template *Blank*, CPU basic e visibilidade pública. O smoke do deploy consulta a URL pública sem token.
    - Em cada Space, cadastre os secrets `SUPABASE_URL` e `SUPABASE_SECRET_KEY` do projeto correspondente.
    - No Space de dev, a variável `APP_ENV=dev` é opcional e mostra a aba de disparo manual. Sem `MESSAGING_PROVIDER`, o provedor é o stub.
-   - Gere dois tokens *fine-grained*, cada um com escrita só no seu Space.
+   - Gere dois tokens *fine-grained*, cada um com escrita só no seu Space: em *Repositories permissions*, selecione o Space e marque a escrita no conteúdo. Sem ela, o sync falha com `403` em `.../xet-write-token/main`. Para conferir um token antes de cadastrá-lo, `curl -s -H "Authorization: Bearer <token>" https://huggingface.co/api/whoami-v2` deve listar o Space com `repo.write` em `auth.accessToken.fineGrained.scoped`.
 4. **GitHub.**
    - Rode `gh repo set-default VL-in/ai-factory-saudeja`.
    - Em *Settings → Actions → General → Workflow permissions*, mantenha "Read" e **marque "Allow GitHub Actions to create and approve pull requests"**.
@@ -965,23 +965,34 @@ gh secret list; gh secret list --env dev; gh secret list --env production; gh va
      - `production`: *Selected* → `main`. Em *Required reviewers*, coloque você, **só até a Fase 4**, e deixe "Prevent self-review" desmarcado, senão você não consegue aprovar o próprio deploy.
    - Cadastre os secrets e as variáveis da tabela, exceto `MESSAGING_PROVIDER` e `HEALTHCHECKS_*`.
 
-#### Fase 2 — primeiro deploy em dev (juntas)
+#### Fase 2 — primeiro deploy em dev (juntas) — concluída em 2026-10-04
+
+**Verificado em 2026-10-04:**
+- O deploy de `dev` terminou verde no run `37232685067`.
+- `https://vl-in-saudeja-dev.hf.space` responde 200, e o login com uma conta de dev funciona (conferido pela autora).
+- O Space de dev tem os 7 itens esperados e mais o `.gitattributes`, que o Hugging Face cria junto com o Space. O sync enviou 35 arquivos, e o Space tem 36.
 
 1. Faça o commit das mudanças da Fase A2. A mensagem é preparada pelo Claude, e você roda o commit.
 2. `git push origin dev`. **Agora isso dispara o deploy de dev**: é o primeiro CI com secrets, aplica a `20261001000000` no Supabase de dev, sincroniza o Space de dev e roda o smoke. Acompanhe com `gh run watch`.
 3. Confira o Space de dev:
    - a URL `https://<usuario>-saudeja-dev.hf.space` abre e o login com uma conta de dev funciona;
-   - a aba *Files* tem **exatamente** `Dockerfile`, `README.md`, `requirements/`, `src/`, `params.yaml`, `infra/deploy/entrypoint.sh` e `data/model.pkl`.
+   - a aba *Files* tem **exatamente** `Dockerfile`, `README.md`, `requirements/`, `src/`, `params.yaml`, `infra/deploy/entrypoint.sh` e `data/model.pkl`, além do `.gitattributes`, que o Hugging Face cria junto com o Space.
 
    Se algo falhar, corrija em `dev` e envie de novo. A produção não foi tocada.
 
    **O que falhou nos primeiros envios (2026-10-04):**
    - **Integração.** Falhou por dois bugs antigos que só o push em `dev` expôs, porque nele a integração é sempre obrigatória: o `[auth.email] enable_signup` (achado 2 do 10.7) e a fixture `db` de `test_observabilidade.py`, que não religava a `OBSERVABILIDADE_ATIVA` desligada pelo `ci.yml`.
    - **`db push`.** Falhou com "IPv6 is not supported on your current network". O host direto do banco só tem IPv6, o runner não tem IPv6, e o `supabase link` grava a URL do pooler (IPv4) como *best-effort*: quando a consulta falha, ele não avisa. O `deploy.yml` agora busca essa URL na API de gerenciamento e falha com o status HTTP, onde 401/403 é o `SUPABASE_ACCESS_TOKEN` e 404 é o `SUPABASE_PROJECT_REF`. O mesmo vale para produção, que também não tem o add-on de IPv4. No envio seguinte, a consulta deu **403**: o token do environment `dev` é um token com escopo sem *Connection Pooling: Read* (`database_pooling_config_read` na API). É a mesma consulta que o `link` faz, então o `link` já falhava por isso. A correção é no token, não no código; o `deploy.yml` passou a mostrar o corpo da resposta no log.
+   - **Teste intermitente.** `test_resumo_de_observabilidade_agrega_o_que_a_aba_mostra` falhou com `Invalid isoformat string`. O PostgREST corta os zeros finais da fração de segundo, e o `fromisoformat` do Python 3.10 só aceita 3 ou 6 dígitos. Com `now()`, isso acontece com ~1 em cada 10 valores. Toda leitura de `timestamptz` da UI passou a usar `repositories.ler_timestamptz`, que já existia para o canário.
+   - **Sync.** Falhou duas vezes com `403` em `.../xet-write-token/main`. Na primeira, a variável `HF_SPACE_ID` do environment `dev` apontava para o Space de **produção**, e o `HF_TOKEN` de dev, sem escrita nele, barrou a gravação: nada chegou à produção. Na segunda, já no Space de dev, o `HF_TOKEN` não tinha escrita no conteúdo do Space. As duas correções foram de configuração, não de código.
 
 #### Fase 3 — release v2.0.0 em produção (juntas)
 
-1. No CHANGELOG, renomeie `## [Não publicado] (Vanessa + Claude) - 2026-10-02` para `## [v2.0.0] (Vanessa + Claude) - <data do merge>`. O pronto, local, é `python scripts/versao_release.py conferir` responder `v2.0.0: nova`. Depois, commit e push em `dev`.
+0. **Confira o environment `production` com o que falhou em dev**, porque o primeiro deploy de produção passa pelos mesmos passos:
+   - `SUPABASE_ACCESS_TOKEN` com escopo no projeto de produção e **Read** em *Project Settings*, *API Keys*, *API Key Secrets* e *Connection Pooling*;
+   - `HF_TOKEN` com escrita no conteúdo de `SaudeJa-prod` (conferir com o `whoami-v2` da Fase 1);
+   - `HF_SPACE_ID` = o Space de produção (`gh variable list --env production`).
+1. No CHANGELOG, renomeie `## [Não publicado] (Vanessa + Claude) - <data>` para `## [v2.0.0] (Vanessa + Claude) - <data do merge>`. O formato é `v2.0.0`, sem ponto depois do `v`, senão o `versao_release.py` não reconhece a versão. O pronto, local, é `python scripts/versao_release.py conferir` responder `v2.0.0: nova`. Depois, commit e push em `dev`.
 2. Rode `gh pr create --base main --head dev --title "Release v2.0.0" -R VL-in/ai-factory-saudeja`. Pela web, confira que o *base repository* não é o upstream. O CI roda, incluindo `versao da release (SemVer)`.
 3. Faça o merge com **"Create a merge commit"**. **Logo em seguida**, rode `gh workflow disable job_d2.yml`, `gh workflow disable canario.yml`, `gh workflow disable retrain.yml` e `gh workflow disable alerta_observabilidade.yml`. A partir do merge, os quatro existem em `main` com cron.
 4. O deploy roda o CI e para em *Review deployments*. Você aprova, e ele segue esta ordem:
