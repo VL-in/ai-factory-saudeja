@@ -594,6 +594,7 @@ def test_filtro_de_deploy_do_ci_espelha_o_paths_ignore_do_deploy():
         "dvc.lock",
         "src/jobs/inferencia_diaria.py",
         "README.md",
+        "src/README.md",
         "data/canario.json.salvo",
     ):
         assert bool(filtro.search(caminho)) == ignorado_pelo_deploy(caminho), caminho
@@ -608,3 +609,39 @@ def test_release_so_depois_do_space_no_ar_e_so_em_main():
     versao = next(i for i, n in enumerate(nomes) if "Versao da release" in n)
     migracao = next(i for i, n in enumerate(nomes) if "Migrations" in n)
     assert versao < migracao, "versão inválida tem de parar o deploy antes de migrar o banco"
+
+
+# --- operação: alertas e pontos humanos -------------------------------------------
+
+
+def test_todo_workflow_agendado_pinga_o_healthchecks_no_sucesso_e_na_falha():
+    """Workflow agendado é desativado em silêncio depois de inatividade do
+    repositório (ADR-006). Só um ping que deixa de chegar denuncia isso, então
+    todo cron tem o próprio dead-man's-switch."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        conteudo = yaml.safe_load(arquivo.read_text(encoding="utf-8"))
+        if "schedule" not in conteudo[True]:
+            continue
+        for nome, job in conteudo["jobs"].items():
+            comandos = [p.get("run", "") for p in job.get("steps", [])]
+            pings = [c for c in comandos if "curl" in c and "HEALTHCHECKS_" in c]
+            assert any("/fail" not in c for c in pings), (
+                f"{arquivo.name}::{nome} sem ping de sucesso"
+            )
+            assert any("/fail" in c for c in pings), f"{arquivo.name}::{nome} sem ping de falha"
+
+
+def test_prs_automaticos_pedem_revisao_sem_arriscar_o_ci():
+    """PR do robô parado bloqueia o re-treino seguinte (código 4) sem ninguém
+    ver. O pedido de revisão notifica a pessoa, mas vem depois do
+    `gh workflow run ci.yml` e não derruba o passo: se falhar, o PR ainda
+    precisa do check que a proteção de `main` exige."""
+    for nome in ("retrain.yml", "canario.yml"):
+        texto = (WORKFLOWS / nome).read_text(encoding="utf-8")
+        assert "--add-reviewer" in texto, nome
+        assert texto.index("gh workflow run ci.yml") < texto.index("--add-reviewer"), nome
+        linhas = texto.splitlines()
+        i = next(i for i, linha in enumerate(linhas) if "--add-reviewer" in linha)
+        assert linhas[i + 1].strip().startswith("||"), (
+            f"{nome}: pedido de revisão não pode falhar o passo"
+        )

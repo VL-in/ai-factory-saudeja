@@ -854,7 +854,7 @@ Nesta ordem, porque cada item destrava o seguinte:
    - *Variables*: `INFOBIP_REMETENTE` e `CANARIO_DESLIGADO` (vazia). **`MESSAGING_PROVIDER` fica sem definir até a Fase D**: sem ela, o `job_d2.yml` falha no primeiro passo, antes de tocar no banco ou mandar SMS. É a trava de segurança enquanto a operação não começa.
    - Proteção de `main`, **depois** do primeiro PR (os nomes dos checks só aparecem para seleção depois de rodarem uma vez): exigir PR e os checks `lint, tipos e testes`, `imagem de deploy (build + smoke)` e `dependency-review`, com **zero aprovações** (a autora não aprova o próprio PR). O job `integracao` pode ficar de fora, já que é condicional.
    - CodeQL pelo *default setup* (opcional).
-5. **Healthchecks.io**: os dois checks (job D-2 e re-treino) podem ser criados a qualquer momento. As URLs viram os secrets `HEALTHCHECKS_*`. O UptimeRobot só entra depois da Fase C, porque precisa da URL pública.
+5. **Healthchecks.io**: os quatro checks (job D-2, canário, re-treino e alerta de observabilidade), um por workflow agendado, podem ser criados a qualquer momento. As URLs viram os secrets `HEALTHCHECKS_*`. O UptimeRobot só entra depois da Fase C, porque precisa da URL pública.
 
 #### Fase C — PRs e primeiro deploy
 
@@ -919,8 +919,12 @@ Juntam as verificações já descritas no corpo deste passo, no 10.1, nas revis�
 | `SUPABASE_DB_PASSWORD` | secret | | ✅ | ✅ | senha do banco de cada projeto |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | secret | | | ✅ | projeto de produção (*Settings → API Keys*). Nenhum job do Actions lê o banco de dev |
 | `INFOBIP_BASE_URL`, `INFOBIP_CHAVE_API` | secret | | | ✅ | painel da Infobip |
-| `HEALTHCHECKS_JOB_D2_URL`, `HEALTHCHECKS_RETRAIN_URL` | secret | | | ✅ | Healthchecks.io (Fase 4) |
+| `HEALTHCHECKS_JOB_D2_URL` | secret | | | ✅ | Healthchecks.io (Fase 4): check do `job_d2.yml`, cron `17 11 * * *` |
+| `HEALTHCHECKS_CANARIO_URL` | secret | | | ✅ | Healthchecks.io (Fase 4): check do `canario.yml`, cron `47 12 * * *` |
+| `HEALTHCHECKS_ALERTA_URL` | secret | | | ✅ | Healthchecks.io (Fase 4): check do `alerta_observabilidade.yml`, cron `17 13 * * *` |
+| `HEALTHCHECKS_RETRAIN_URL` | secret | | | ✅ | Healthchecks.io (Fase 4): check do `retrain.yml`, cron `17 6 1 * *` |
 | `INFOBIP_REMETENTE`, `CANARIO_DESLIGADO` | variável | | | ✅ | `SaudeJa`; vazia |
+| `REVISOR_PRS_MODELO` | variável | | | ✅ | `VL-in`, ou vazia: recebe o pedido de revisão dos PRs do re-treino e do canário; vazia = dono do repositório |
 | `MESSAGING_PROVIDER` | variável | | | ✅ **só na Fase 4** | `infobip`. Enquanto não existir, o job D-2 falha no primeiro passo, que funciona como trava |
 
 Nos Spaces, e não no GitHub, cada um recebe em *Settings → Variables and secrets* o `SUPABASE_URL` e o `SUPABASE_SECRET_KEY` **do seu projeto**.
@@ -932,6 +936,8 @@ gh secret set DVC_REMOTE_URL                         # repositório
 gh secret set HF_TOKEN --env dev                     # environment dev
 gh secret set HF_TOKEN --env production              # environment production
 gh variable set HF_SPACE_ID --env dev --body "<usuario>/saudeja-dev"
+gh variable set REVISOR_PRS_MODELO --env production --body "VL-in"
+gh secret set HEALTHCHECKS_CANARIO_URL --env production   # só na Fase 4
 gh secret list; gh secret list --env dev; gh secret list --env production; gh variable list --env production
 ```
 
@@ -973,7 +979,7 @@ gh secret list; gh secret list --env dev; gh secret list --env production; gh va
 
 1. No CHANGELOG, renomeie `## [Não publicado] (Vanessa + Claude) - 2026-10-02` para `## [v2.0.0] (Vanessa + Claude) - <data do merge>`. O pronto, local, é `python scripts/versao_release.py conferir` responder `v2.0.0: nova`. Depois, commit e push em `dev`.
 2. Rode `gh pr create --base main --head dev --title "Release v2.0.0" -R VL-in/ai-factory-saudeja`. Pela web, confira que o *base repository* não é o upstream. O CI roda, incluindo `versao da release (SemVer)`.
-3. Faça o merge com **"Create a merge commit"**. **Logo em seguida**, rode `gh workflow disable job_d2.yml`, `gh workflow disable canario.yml` e `gh workflow disable retrain.yml`. A partir do merge, os três existem em `main` com cron.
+3. Faça o merge com **"Create a merge commit"**. **Logo em seguida**, rode `gh workflow disable job_d2.yml`, `gh workflow disable canario.yml`, `gh workflow disable retrain.yml` e `gh workflow disable alerta_observabilidade.yml`. A partir do merge, os quatro existem em `main` com cron.
 4. O deploy roda o CI e para em *Review deployments*. Você aprova, e ele segue esta ordem:
    1. guarda do campeão;
    2. `v2.0.0: nova`;
@@ -1004,8 +1010,9 @@ gh secret list; gh secret list --env dev; gh secret list --env production; gh va
 2. Confira a produção: a URL pública abre, o login funciona e o cadastro está fechado. Meça o cold start contra o SLO §2.
 3. **Tire o revisor obrigatório de `production`.** Com ele, o job D-2 esperaria aprovação todo dia.
 4. Prepare a operação:
-   - crie a variável `MESSAGING_PROVIDER=infobip` e os secrets `HEALTHCHECKS_*`;
-   - reative os três workflows com `gh workflow enable`;
+   - crie a variável `MESSAGING_PROVIDER=infobip`;
+   - no Healthchecks.io, crie os quatro checks do tipo *Cron*, um por workflow agendado, com o cron da tabela acima, fuso UTC e tolerância de 1 h (o GitHub atrasa os eventos agendados). Cadastre a URL de cada um no secret `HEALTHCHECKS_*` correspondente;
+   - reative os quatro workflows com `gh workflow enable`;
    - faça o ensaio do job D-2 do 11.1: paciente de teste com o seu telefone, porque a Infobip trial só manda para número verificado, e dois `workflow_dispatch` seguidos sem SMS em dobro;
    - remova o paciente de teste depois.
 5. **Re-treino.** Com o banco de produção vazio, o `retrain.yml` sai com o código 2 ("nenhum dado novo") até a clínica registrar desfechos. É o comportamento esperado, e não dá para ensaiar o PR do canário antes disso.
@@ -1018,7 +1025,9 @@ gh secret list; gh secret list --env dev; gh secret list --env production; gh va
   - MINOR: funcionalidade nova ou migration aditiva.
   - PATCH: correção.
 - **Release de modelo.** O PR do re-treino ou da promoção do canário já traz a seção PATCH. Depois do merge, rode `git merge origin/main` em `dev`. Esse merge não é *fast-forward* e pode dar conflito no CHANGELOG, que se resolve mantendo as duas seções.
-- **Rollback.** É um PR de `git revert` com versão PATCH nova. O deploy reenvia só o HEAD de `main`, e `workflow_dispatch` em `main` refaz o deploy da versão atual sem criar outra Release. A migration não volta, e é a regra do 10.1 (só aditiva junto do código) que mantém o código anterior compatível com o schema novo.
+- **Rollback.** O passo a passo de cada caso (canário, campeão e código) está na seção "Rollback" do [README](../README.md#rollback).
+  - De código, é um PR de `git revert` com versão PATCH nova. O deploy reenvia só o HEAD de `main`, e `workflow_dispatch` em `main` refaz o deploy da versão atual sem criar outra Release. A migration não volta, e é a regra do 10.1 (só aditiva junto do código) que mantém o código anterior compatível com o schema novo.
+  - De modelo, **não** é `git revert`: o revert apagaria a versão do CHANGELOG, que já tem tag, e na promoção de um canário recriaria `data/canario/`. O PR restaura `champion_metrics.json`, `dvc.lock` e o `.dvc` do dataset do commit anterior à promoção.
 
 ---
 

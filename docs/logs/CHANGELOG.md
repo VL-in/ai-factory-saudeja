@@ -13,11 +13,15 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 ### Adicionado
 - **Ambientes de desenvolvimento e de produção separados**, cada um com Space, banco e credenciais próprios ([ADR-010](../adr/adr-010-ambientes-e-releases.md)). Enviar código ao branch `dev` publica no ambiente de desenvolvimento e aplica as migrations no banco de desenvolvimento primeiro. A produção usa um banco novo, que nunca recebe dado de teste.
 - **Releases numeradas (SemVer).** Cada publicação em produção vira uma versão `vX.Y.Z` no GitHub, com estas notas. A versão vem do topo deste arquivo e é conferida antes de o banco de produção ser migrado. A troca do modelo pelo re-treino ou pelo canário sobe a versão PATCH automaticamente.
+- **Alerta diário de observabilidade.** Todo dia às 10h17, um workflow confere as últimas 24 horas e avisa por e-mail se alguma predição ficou sem explicação, se houve erro (inclusive paciente em quarentena), se o job D-2 não rodou ou se ele levou mais de 10 minutos. Antes, essa degradação só aparecia para quem abrisse a aba "Observabilidade".
 
 ### Modificado
 - A imagem de deploy roda como usuário não-root (uid 1000), a mesma condição do Space, e já traz o código compilado.
 - **O deploy só termina verde quando o Space está no ar com a versão nova.** Antes, o workflow terminava logo depois de enviar os arquivos, mesmo que o build do Space falhasse. Agora ele espera o Space buildar o commit enviado e responder na URL pública, e falha se o build ou a inicialização quebrarem.
 - O CI builda e testa a imagem a partir dos mesmos arquivos que vão para o Space, e não do repositório inteiro.
+- Os pedidos de mudança abertos pelo re-treino e pelo canário pedem revisão à mantenedora, que passa a ser notificada. Um pedido parado bloqueia o re-treino seguinte.
+- A avaliação diária do canário também avisa quando deixa de rodar, como já faziam o job D-2 e o re-treino.
+- Mudanças só no `README.md` não republicam mais o Space nem exigem versão nova.
 - **O re-treino grava no remote do DVC com uma credencial restrita.** O secret `AZURE_STORAGE_CONNECTION_STRING`, que levava a chave da conta Azure inteira, foi substituído por `AZURE_STORAGE_CONNECTION_STRING_ESCRITA`, no environment `production`: uma SAS só do container, que cria arquivos novos mas não sobrescreve nem apaga os já publicados. Nenhum workflow recebe mais a chave da conta.
 
 ### Corrigido

@@ -75,6 +75,10 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       OBSERVABILIDADE_ATIVA: "false"
+      # Dead-man's-switch proprio (ADR-006): com o workflow desativado, o
+      # canario seguiria com a fracao dele da fila sem ninguem avalia-lo -- so'
+      # os guardrails de dentro do job D-2 continuariam valendo.
+      HEALTHCHECKS_CANARIO_URL: ${{ secrets.HEALTHCHECKS_CANARIO_URL }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -132,9 +136,12 @@ jobs:
           branch="canario/${acao}-${VERSAO}"
           existe=false
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-            # PR ja' aberto num dia anterior: nao abre outro, so' avisa.
+            # PR ja' aberto num dia anterior: nao abre outro, so' avisa. Aviso, e
+            # nao notice: PR de canario parado bloqueia o proximo re-treino
+            # (codigo 4) e, se for promocao, adia o modelo novo.
             existe=true
-            echo "::notice::o branch $branch ja' existe -- PR pendente de merge"
+            echo "::warning::o branch $branch ja' existe -- PR pendente de merge"
+            echo "**PR pendente de merge** no branch $branch, aberto num dia anterior." >> "$GITHUB_STEP_SUMMARY"
           fi
           {
             echo "acao=$acao"
@@ -183,6 +190,9 @@ jobs:
           ACAO: ${{ steps.acao.outputs.acao }}
           BRANCH: ${{ steps.acao.outputs.branch }}
           VERSAO: ${{ steps.avaliacao.outputs.model_version }}
+          # Quem recebe o pedido de revisao (e a notificacao) do PR. Sem a
+          # variavel, o dono do repositorio.
+          REVISOR: ${{ vars.REVISOR_PRS_MODELO || github.repository_owner }}
         # PR, nunca push em main: a promocao muda o modelo em producao, e o
         # merge humano e' o mesmo ponto de revisao do PR de promocao direta. O
         # CI e' disparado por workflow_dispatch porque PR aberto com o
@@ -219,3 +229,15 @@ jobs:
           gh pr create --title "$titulo" --body-file "$RUNNER_TEMP/pr-body.md" \
             --base "${GITHUB_REF_NAME}" --head "$BRANCH"
           gh workflow run ci.yml --ref "$BRANCH"
+          # Depois do CI, e sem derrubar o passo: o pedido de revisao falha se
+          # o revisor nao for colaborador, e isso nao pode deixar o PR sem check.
+          gh pr edit "$BRANCH" --add-reviewer "$REVISOR" \
+            || echo "::warning::nao foi possivel pedir revisao a $REVISOR -- confira vars.REVISOR_PRS_MODELO"
+
+      - name: Ping do dead-man's-switch (sucesso)
+        if: success() && env.HEALTHCHECKS_CANARIO_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_CANARIO_URL"
+
+      - name: Ping do dead-man's-switch (falha)
+        if: failure() && env.HEALTHCHECKS_CANARIO_URL != ''
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_CANARIO_URL/fail" || true

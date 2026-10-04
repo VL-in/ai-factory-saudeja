@@ -48,6 +48,9 @@ on:
     # no Space. A PROMOCAO muda champion_metrics.json e dvc.lock, e deploya.
     paths-ignore:
       - "docs/**"
+      # O README do GitHub nao vai para o Space: o staging escreve um README
+      # proprio, com o front-matter do SDK (scripts/montar_staging_space.py).
+      - "README.md"
       - "data/canario.json"
       - "data/canario/**"
       - "data/canario_historico.json"

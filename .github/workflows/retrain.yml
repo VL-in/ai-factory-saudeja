@@ -172,6 +172,9 @@ jobs:
           # Fork publico: sem isto o `gh` pode resolver o
           # upstream como repositorio padrao, e o PR automatico cairia la'.
           GH_REPO: ${{ github.repository }}
+          # Quem recebe o pedido de revisao (e a notificacao) do PR. Sem a
+          # variavel, o dono do repositorio.
+          REVISOR: ${{ vars.REVISOR_PRS_MODELO || github.repository_owner }}
         # So' o que e' de fato versionado em git: champion_metrics.json (a
         # fonte de verdade do campeao), dvc.lock (qual codigo+dado gerou qual
         # modelo) e o .dvc do dataset. O model.pkl NAO vai no commit -- e' out
@@ -239,6 +242,10 @@ jobs:
             --head "$branch"
 
           gh workflow run ci.yml --ref "$branch"
+          # Depois do CI, e sem derrubar o passo: o pedido de revisao falha se
+          # o revisor nao for colaborador, e isso nao pode deixar o PR sem check.
+          gh pr edit "$branch" --add-reviewer "$REVISOR" \
+            || echo "::warning::nao foi possivel pedir revisao a $REVISOR -- confira vars.REVISOR_PRS_MODELO"
 
       - name: Ping do dead-man's-switch (sucesso)
         if: steps.gate.outputs.codigo == '0' && env.HEALTHCHECKS_RETRAIN_URL != ''
