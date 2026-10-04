@@ -975,6 +975,10 @@ gh secret list; gh secret list --env dev; gh secret list --env production; gh va
 
    Se algo falhar, corrija em `dev` e envie de novo. A produção não foi tocada.
 
+   **O que falhou nos primeiros envios (2026-10-04):**
+   - **Integração.** Falhou por dois bugs antigos que só o push em `dev` expôs, porque nele a integração é sempre obrigatória: o `[auth.email] enable_signup` (achado 2 do 10.7) e a fixture `db` de `test_observabilidade.py`, que não religava a `OBSERVABILIDADE_ATIVA` desligada pelo `ci.yml`.
+   - **`db push`.** Falhou com "IPv6 is not supported on your current network". O host direto do banco só tem IPv6, o runner não tem IPv6, e o `supabase link` grava a URL do pooler (IPv4) como *best-effort*: quando a consulta falha, ele não avisa. O `deploy.yml` agora busca essa URL na API de gerenciamento e falha com o status HTTP, onde 401/403 é o `SUPABASE_ACCESS_TOKEN` e 404 é o `SUPABASE_PROJECT_REF`. O mesmo vale para produção, que também não tem o add-on de IPv4.
+
 #### Fase 3 — release v2.0.0 em produção (juntas)
 
 1. No CHANGELOG, renomeie `## [Não publicado] (Vanessa + Claude) - 2026-10-02` para `## [v2.0.0] (Vanessa + Claude) - <data do merge>`. O pronto, local, é `python scripts/versao_release.py conferir` responder `v2.0.0: nova`. Depois, commit e push em `dev`.

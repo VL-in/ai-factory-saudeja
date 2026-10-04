@@ -142,8 +142,27 @@ jobs:
       - name: Migrations no Supabase do ambiente
         # Falha aqui (senha errada, migration quebrada) para o deploy ANTES do
         # sync: o codigo novo nunca chega ao Space contra schema antigo.
+        #
+        # Sem o add-on de IPv4, o host direto do banco so' tem IPv6, e o runner
+        # nao tem IPv6: o `db push` so' conecta pelo pooler, cuja URL o CLI le de
+        # supabase/.temp/pooler-url. O `supabase link` grava esse arquivo como
+        # best-effort -- se a consulta falha, ele engole o erro, diz "Finished" e
+        # o `db push` morre com "IPv6 is not supported". Por isso a URL vem da
+        # mesma API aqui, falhando alto: 401/403 e' o token, 404 e' o ref. O CLI
+        # tira o placeholder da senha e forca a porta 5432 (modo sessao) ao ler o
+        # arquivo, e a senha continua vindo de SUPABASE_DB_PASSWORD, nunca da URL.
         run: |
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
+          curl --fail-with-body -sS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/database/pooler" \
+            > "$RUNNER_TEMP/pooler.json"
+          jq -r 'map(select(.database_type == "PRIMARY"))[0].connection_string // empty' \
+            "$RUNNER_TEMP/pooler.json" > supabase/.temp/pooler-url
+          if [ ! -s supabase/.temp/pooler-url ]; then
+            echo "::error::A API do Supabase nao devolveu pooler PRIMARY para o projeto."
+            exit 1
+          fi
           supabase db push
 
       - name: Sync do staging para o Space
