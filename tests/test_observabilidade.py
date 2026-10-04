@@ -314,6 +314,9 @@ def _status_supabase_local() -> dict:
 
 @pytest.fixture
 def db(monkeypatch):
+    # Mesmo motivo de `eventos_capturados`: o ci.yml desliga a observabilidade
+    # no workflow inteiro, e sem isto nada chega à tabela no runner.
+    monkeypatch.setenv("OBSERVABILIDADE_ATIVA", "true")
     status = _status_supabase_local()
     monkeypatch.setenv("SUPABASE_URL", status["API_URL"])
     monkeypatch.setenv("SUPABASE_SECRET_KEY", status["SECRET_KEY"])

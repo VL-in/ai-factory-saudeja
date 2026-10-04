@@ -776,7 +776,7 @@ retrain.yml (dia 1)  gate aprova + há campeão -> data/canario/ + dvc add + dvc
 #### Achados ao implementar (não são do canário, mas afetam o argumento dele)
 
 1. **O job D-2 quebra com o volume que justifica o canário** (anterior a este passo). `buscar_agendamentos_d2_pendentes` filtra as predições existentes com `.in_("id_agendamento", ids)`, que manda **todos** os ids da janela na URL. Com ~300 agendamentos pendentes, o PostgREST respondeu `414 URI too long` e o job morreu antes de predizer qualquer um (reproduzido no ensaio). Com várias clínicas, isso é o caso normal. Correção sugerida, fora deste passo: consultar em lotes (ex. 100 ids) ou trocar por um `not exists` numa view/RPC. **Precisa ser resolvido antes de habilitar várias clínicas.**
-2. **Login local quebrado pelo `supabase/config.toml`** (anterior, ADR-008). `[auth.email] enable_signup = false` faz o CLI subir o GoTrue com `GOTRUE_EXTERNAL_EMAIL_ENABLED=false` ("Email logins are disabled"). O que se queria é `[auth] enable_signup = false`, mantendo o provedor de e-mail ligado. Só aparece depois de reiniciar o stack local, por isso `test_login_real_nao_troca_a_identidade_das_consultas_do_backend` passava antes. Não afeta o projeto remoto, que é configurado pelo Dashboard.
+2. **Login local quebrado pelo `supabase/config.toml`** (anterior, ADR-008). `[auth.email] enable_signup = false` faz o CLI subir o GoTrue com `GOTRUE_EXTERNAL_EMAIL_ENABLED=false` ("Email logins are disabled"). O que se queria é `[auth] enable_signup = false`, mantendo o provedor de e-mail ligado. Só aparece depois de reiniciar o stack local, por isso `test_login_real_nao_troca_a_identidade_das_consultas_do_backend` passava antes. Não afeta o projeto remoto, que é configurado pelo Dashboard. **Resolvido em 2026-10-04**: `[auth.email] enable_signup = true`, com a trava só em `[auth]`. Foi o que derrubou a integração no primeiro deploy de `dev`.
 3. **Supabase local no Windows**: as portas 54321–54324 caíram numa faixa reservada pelo Windows (`netsh interface ipv4 show excludedportrange protocol=tcp` mostra 54269–54368). Os containers subiam sem publicar as portas. Correção, em PowerShell de administrador: `net stop winnat; net start winnat` e depois `supabase start`.
 
 #### Pendências
@@ -892,7 +892,7 @@ Juntam as verificações já descritas no corpo deste passo, no 10.1, nas revis�
 - 482 testes rápidos verdes. Eram 467, e os 15 novos cobrem versão e ambiente.
 - O Supabase atual, que vira dev, tem migrations até `20260930000000`.
 - O remote do DVC **ainda responde `AuthorizationFailure`** com a credencial do `.env`. É bloqueante e é o passo 1 da Fase 1.
-- Continuam abertos, sem bloquear o piloto, o `414 URI too long` e o `enable_signup` em `[auth.email]`, que só afeta o ambiente local (achados 1 e 2 do 10.7).
+- Continua aberto, sem bloquear o piloto, o `414 URI too long` (achado 1 do 10.7). O `enable_signup` em `[auth.email]` (achado 2) foi corrigido em 2026-10-04, depois de derrubar a integração no primeiro deploy de `dev`.
 
 **O que entrou no código (Fase A2, sem commit ainda):**
 - `scripts/versao_release.py`, que lê a versão do topo do CHANGELOG.

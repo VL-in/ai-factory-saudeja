@@ -27,6 +27,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 ### Corrigido
 - O CI do GitHub falharia na primeira execução: quatro testes de observabilidade dependiam de uma variável que o próprio CI desliga.
 - Os pedidos de mudança abertos pelo re-treino e pelo canário ficam presos a este repositório e não podem cair no repositório de origem do fork.
+- Com o login por e-mail desligado na configuração do Supabase, a tela de login dizia "E-mail ou senha incorretos." a qualquer funcionário. Agora informa que o login está indisponível e pede para procurar o administrador. O Supabase local também voltou a aceitar login por e-mail: a trava de auto-cadastro ([ADR-008](../adr/adr-008-login-da-equipe.md)) estava desligando o provedor de e-mail inteiro.
 
 ## [v1.14] (Vanessa + Claude) - 2026-10-01
 

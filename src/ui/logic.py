@@ -761,6 +761,13 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
         return ErroCredenciais(
             "Conta ainda não confirmada. Procure o administrador do sistema."
         )
+    if exc.code == "email_provider_disabled":
+        # Configuração do projeto, não da conta: vale para qualquer e-mail, então
+        # dizê-lo não ajuda a adivinhar quem é da equipe -- e "senha incorreta"
+        # mandaria todo mundo redefinir a senha à toa.
+        return ErroAutenticacaoIndisponivel(
+            "login por e-mail desligado no Supabase. Procure o administrador do sistema."
+        )
     if exc.status is not None and exc.status >= 500:
         return ErroAutenticacaoIndisponivel(f"serviço de autenticação respondeu {exc.status}.")
     return ErroCredenciais(MENSAGEM_CREDENCIAIS_INVALIDAS)

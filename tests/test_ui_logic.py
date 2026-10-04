@@ -663,8 +663,9 @@ def test_conta_banida_explica_que_o_acesso_foi_desativado():
         AuthApiError("boom", 500, "unexpected_failure"),
         AuthRetryableError("gateway", 503),
         httpx.ConnectError("sem rede"),
+        AuthApiError("Email logins are disabled", 422, "email_provider_disabled"),
     ],
-    ids=["limite-de-tentativas", "erro-500", "gateway", "sem-rede"],
+    ids=["limite-de-tentativas", "erro-500", "gateway", "sem-rede", "provedor-email-desligado"],
 )
 def test_falha_do_servico_de_auth_nao_culpa_quem_digitou(erro):
     with pytest.raises(logic.ErroAutenticacaoIndisponivel):
