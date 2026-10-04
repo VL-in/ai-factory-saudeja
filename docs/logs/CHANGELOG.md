@@ -8,7 +8,9 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 
-## [Não publicado] (Vanessa + Claude) - 2026-10-02
+## [Não publicado] (Vanessa + Claude) - 2026-10-04
+
+Primeiro deploy do SaudeJá em produção. O SaudeJá prevê quais pacientes têm alta chance de faltar à consulta e manda lembrete por SMS só para eles, dois dias antes do atendimento, sem o custo de avisar todo mundo. A partir desta versão, cada publicação em produção ganha um número de versão e uma página de Release com as mudanças.
 
 ### Adicionado
 - **Ambientes de desenvolvimento e de produção separados**, cada um com Space, banco e credenciais próprios ([ADR-010](../adr/adr-010-ambientes-e-releases.md)). Enviar código ao branch `dev` publica no ambiente de desenvolvimento e aplica as migrations no banco de desenvolvimento primeiro. A produção usa um banco novo, que nunca recebe dado de teste.
