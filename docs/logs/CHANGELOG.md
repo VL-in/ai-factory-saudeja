@@ -22,7 +22,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](../adr/).
 - Os pedidos de mudança abertos pelo re-treino e pelo canário pedem revisão à mantenedora, que passa a ser notificada. Um pedido parado bloqueia o re-treino seguinte.
 - A avaliação diária do canário também avisa quando deixa de rodar, como já faziam o job D-2 e o re-treino.
 - Mudanças só no `README.md` não republicam mais o Space nem exigem versão nova.
-- **O re-treino grava no remote do DVC com uma credencial restrita.** O secret `AZURE_STORAGE_CONNECTION_STRING`, que levava a chave da conta Azure inteira, foi substituído por `AZURE_STORAGE_CONNECTION_STRING_ESCRITA`, no environment `production`: uma SAS só do container, que cria arquivos novos mas não sobrescreve nem apaga os já publicados. Nenhum workflow recebe mais a chave da conta.
+- **O re-treino grava no remote do DVC com uma credencial restrita.** O secret `AZURE_STORAGE_CONNECTION_STRING`, que levava a chave da conta Azure inteira, foi substituído por `AZURE_STORAGE_CONNECTION_STRING_ESCRITA`, no environment `production`: uma SAS só do container, que grava arquivos mas não apaga nenhum. Como cada arquivo do remote é nomeado pelo próprio conteúdo, uma regravação escreve os mesmos bytes e não altera o que já foi publicado. Nenhum workflow recebe mais a chave da conta.
 
 ### Corrigido
 - O CI do GitHub falharia na primeira execução: quatro testes de observabilidade dependiam de uma variável que o próprio CI desliga.
