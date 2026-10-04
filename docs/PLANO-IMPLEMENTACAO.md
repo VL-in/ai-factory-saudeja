@@ -914,7 +914,7 @@ Juntam as verificações já descritas no corpo deste passo, no 10.1, nas revis�
 | `AZURE_STORAGE_CONNECTION_STRING_ESCRITA` | secret | | | ✅ | SAS `rlcw` do container, assinada com a `key2`; só o re-treino usa. A account key não vai para o GitHub |
 | `HF_TOKEN` | secret | | ✅ | ✅ | token *fine-grained* com escrita **só** no Space daquele ambiente |
 | `HF_SPACE_ID` | variável | | ✅ | ✅ | `<usuário>/<space>` de cada ambiente |
-| `SUPABASE_ACCESS_TOKEN` | secret | | ✅ | ✅ | token pessoal do CLI; gerar dois (`github-dev`, `github-prod`) para revogar um sem afetar o outro |
+| `SUPABASE_ACCESS_TOKEN` | secret | | ✅ | ✅ | token pessoal do CLI; gerar dois (`github-dev`, `github-prod`) para revogar um sem afetar o outro. Token com escopo, restrito ao projeto do environment, com **Read** em *Project Settings*, *API Keys*, *API Key Secrets* e *Connection Pooling* |
 | `SUPABASE_PROJECT_REF` | secret | | ✅ | ✅ | *Project Settings → General* de cada projeto |
 | `SUPABASE_DB_PASSWORD` | secret | | ✅ | ✅ | senha do banco de cada projeto |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | secret | | | ✅ | projeto de produção (*Settings → API Keys*). Nenhum job do Actions lê o banco de dev |
@@ -977,7 +977,7 @@ gh secret list; gh secret list --env dev; gh secret list --env production; gh va
 
    **O que falhou nos primeiros envios (2026-10-04):**
    - **Integração.** Falhou por dois bugs antigos que só o push em `dev` expôs, porque nele a integração é sempre obrigatória: o `[auth.email] enable_signup` (achado 2 do 10.7) e a fixture `db` de `test_observabilidade.py`, que não religava a `OBSERVABILIDADE_ATIVA` desligada pelo `ci.yml`.
-   - **`db push`.** Falhou com "IPv6 is not supported on your current network". O host direto do banco só tem IPv6, o runner não tem IPv6, e o `supabase link` grava a URL do pooler (IPv4) como *best-effort*: quando a consulta falha, ele não avisa. O `deploy.yml` agora busca essa URL na API de gerenciamento e falha com o status HTTP, onde 401/403 é o `SUPABASE_ACCESS_TOKEN` e 404 é o `SUPABASE_PROJECT_REF`. O mesmo vale para produção, que também não tem o add-on de IPv4.
+   - **`db push`.** Falhou com "IPv6 is not supported on your current network". O host direto do banco só tem IPv6, o runner não tem IPv6, e o `supabase link` grava a URL do pooler (IPv4) como *best-effort*: quando a consulta falha, ele não avisa. O `deploy.yml` agora busca essa URL na API de gerenciamento e falha com o status HTTP, onde 401/403 é o `SUPABASE_ACCESS_TOKEN` e 404 é o `SUPABASE_PROJECT_REF`. O mesmo vale para produção, que também não tem o add-on de IPv4. No envio seguinte, a consulta deu **403**: o token do environment `dev` é um token com escopo sem *Connection Pooling: Read* (`database_pooling_config_read` na API). É a mesma consulta que o `link` faz, então o `link` já falhava por isso. A correção é no token, não no código; o `deploy.yml` passou a mostrar o corpo da resposta no log.
 
 #### Fase 3 — release v2.0.0 em produção (juntas)
 

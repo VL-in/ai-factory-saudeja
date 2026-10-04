@@ -148,15 +148,21 @@ jobs:
         # supabase/.temp/pooler-url. O `supabase link` grava esse arquivo como
         # best-effort -- se a consulta falha, ele engole o erro, diz "Finished" e
         # o `db push` morre com "IPv6 is not supported". Por isso a URL vem da
-        # mesma API aqui, falhando alto: 401/403 e' o token, 404 e' o ref. O CLI
-        # tira o placeholder da senha e forca a porta 5432 (modo sessao) ao ler o
+        # mesma API aqui, falhando alto: 401 e' o token, 403 e' token com escopo
+        # sem "Connection Pooling: Read" (database_pooling_config_read), 404 e' o
+        # ref. O corpo da resposta vai para o log: com `-o`, o --fail-with-body
+        # grava o erro no arquivo e o log so' mostraria o status. O CLI tira o
+        # placeholder da senha e forca a porta 5432 (modo sessao) ao ler o
         # arquivo, e a senha continua vindo de SUPABASE_DB_PASSWORD, nunca da URL.
         run: |
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
-          curl --fail-with-body -sS \
-            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/database/pooler" \
-            > "$RUNNER_TEMP/pooler.json"
+          if ! curl --fail-with-body -sS -o "$RUNNER_TEMP/pooler.json" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/database/pooler"; then
+            cat "$RUNNER_TEMP/pooler.json"; echo
+            echo "::error::A API do Supabase recusou a consulta do pooler (403: o SUPABASE_ACCESS_TOKEN com escopo precisa de Connection Pooling: Read)."
+            exit 1
+          fi
           jq -r 'map(select(.database_type == "PRIMARY"))[0].connection_string // empty' \
             "$RUNNER_TEMP/pooler.json" > supabase/.temp/pooler-url
           if [ ! -s supabase/.temp/pooler-url ]; then
