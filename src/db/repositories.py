@@ -584,14 +584,16 @@ def estatisticas_de_modelo(model_version: str, desde: datetime) -> dict[str, Any
         "faltas_baixo_risco": contar(
             com_desfecho, classe_prevista=0, agendamentos__status="no_show"
         ),
-        "primeira_predicao": _ler_timestamptz(primeira[0]["criado_em"]) if primeira else None,
+        "primeira_predicao": ler_timestamptz(primeira[0]["criado_em"]) if primeira else None,
     }
 
 
-def _ler_timestamptz(valor: str) -> datetime:
-    """`criado_em` vem com a fração de segundo sem os zeros finais
-    ("...T12:00:00.12345+00:00"), e o `fromisoformat` do Python 3.10 só aceita
-    3 ou 6 dígitos. Completa a fração antes de ler."""
+def ler_timestamptz(valor: str) -> datetime:
+    """O PostgREST devolve `timestamptz` com a fração de segundo sem os zeros
+    finais ("...T12:00:00.12345+00:00"), e o `fromisoformat` do Python 3.10 só
+    aceita 3 ou 6 dígitos. Completa a fração antes de ler. Toda leitura de
+    `timestamptz` vinda do banco passa por aqui: com `now()`, ~1 em cada 10
+    valores termina em zero, então o `fromisoformat` direto falha só às vezes."""
     return datetime.fromisoformat(
         re.sub(r"\.(\d{1,6})(?=[+-]|$)", lambda m: "." + m.group(1).ljust(6, "0"), valor)
     )

@@ -30,6 +30,7 @@ Primeiro deploy do SaudeJá em produção. O SaudeJá prevê quais pacientes tê
 - O CI do GitHub falharia na primeira execução: quatro testes de observabilidade dependiam de uma variável que o próprio CI desliga.
 - Os pedidos de mudança abertos pelo re-treino e pelo canário ficam presos a este repositório e não podem cair no repositório de origem do fork.
 - Com o login por e-mail desligado na configuração do Supabase, a tela de login dizia "E-mail ou senha incorretos." a qualquer funcionário. Agora informa que o login está indisponível e pede para procurar o administrador. O Supabase local também voltou a aceitar login por e-mail: a trava de auto-cadastro ([ADR-008](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-008-login-da-equipe.md)) estava desligando o provedor de e-mail inteiro.
+- A aba "Observabilidade" podia falhar ao abrir, de vez em quando, com `Invalid isoformat string`. O horário da última execução do job vem do banco às vezes com menos casas decimais nos segundos, e a leitura recusava esse formato.
 
 ## [v1.14] (Vanessa + Claude) - 2026-10-01
 

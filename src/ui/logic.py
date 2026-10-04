@@ -360,7 +360,7 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
                 # O Postgres devolve timestamptz normalizado em UTC; sem o
                 # astimezone, a fila mostraria 11:30 para uma consulta das
                 # 08:30 da clínica.
-                data_hora_agendada=datetime.fromisoformat(
+                data_hora_agendada=repositories.ler_timestamptz(
                     linha["data_hora_agendada"]
                 ).astimezone(fuso_da_clinica()),
                 probabilidade=float(ultima["probabilidade"]) if ultima else None,
@@ -694,7 +694,7 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
             "percentual": (com_explicacao / total_predicoes) if total_predicoes else None,
         },
         "ultimo_job_d2": (
-            datetime.fromisoformat(ultimo_job["criado_em"]).astimezone(fuso_da_clinica())
+            repositories.ler_timestamptz(ultimo_job["criado_em"]).astimezone(fuso_da_clinica())
             if ultimo_job
             else None
         ),

@@ -63,6 +63,25 @@ def test_consulta_do_fim_do_dia_cai_na_fila_do_dia_certo():
     assert datetime.fromisoformat(inicio) <= consulta < datetime.fromisoformat(fim)
 
 
+@pytest.mark.parametrize(
+    "valor",
+    [
+        "2026-10-04T19:46:05.01422+00:00",  # o do CI: 5 dígitos
+        "2026-10-04T19:46:05.1+00:00",
+        "2026-10-04T19:46:05.014220+00:00",
+        "2026-10-04T19:46:05+00:00",
+    ],
+)
+def test_ler_timestamptz_aceita_a_fracao_sem_zeros_finais(valor):
+    """O PostgREST corta os zeros finais da fração, e o `fromisoformat` do
+    Python 3.10 (o do CI e das imagens) recusa 5 dígitos."""
+    from db.repositories import ler_timestamptz
+
+    lido = ler_timestamptz(valor)
+
+    assert lido.replace(microsecond=0).isoformat() == "2026-10-04T19:46:05+00:00"
+
+
 # --- repositórios contra o Supabase local (integracao) -------------------------
 
 
