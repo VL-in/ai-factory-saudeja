@@ -46,6 +46,7 @@ ARQUIVOS = (
     ("requirements/ui.txt", "requirements/ui.txt"),
     ("params.yaml", "params.yaml"),
     ("infra/deploy/entrypoint.sh", "infra/deploy/entrypoint.sh"),
+    (".streamlit/config.toml", ".streamlit/config.toml"),
     ("data/model.pkl", "data/model.pkl"),
 )
 DIRETORIOS = (("src", "src"),)

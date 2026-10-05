@@ -1,0 +1,14 @@
+# Tema da interface (src/ui/app.py). O Streamlit lê este arquivo a partir do
+# diretório de onde é executado: a raiz do repositório localmente e /app no
+# container de deploy (infra/deploy/dockerfile o copia para lá, e
+# scripts/montar_staging_space.py o leva para o staging do Space).
+#
+# Teal no lugar do vermelho padrão: num contexto de saúde, botão principal
+# vermelho ("Agendar", "Entrar") é lido como erro ou perigo. Sem `base`, o
+# tema segue a preferência clara/escura do sistema do usuário; cada modo tem o
+# seu tom, para o contraste do texto branco nos botões primários.
+[theme.light]
+primaryColor = "#0F766E"
+
+[theme.dark]
+primaryColor = "#0D9488"

@@ -41,6 +41,9 @@ ENV HOME=/home/user
 # de proposito -- melhor que subir um container sem modelo.
 COPY data/model.pkl /app/data/model.pkl
 COPY params.yaml .
+# Tema da UI: o Streamlit procura .streamlit/config.toml no diretorio de
+# trabalho (/app), de onde o entrypoint o inicia.
+COPY .streamlit/config.toml ./.streamlit/config.toml
 COPY infra/deploy/entrypoint.sh ./entrypoint.sh
 RUN chmod 755 ./entrypoint.sh
 

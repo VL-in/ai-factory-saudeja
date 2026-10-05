@@ -46,6 +46,10 @@ configurar_logging()
 # a aba de acompanhamento do job.
 APP_ENV = os.environ.get("APP_ENV", "dev")
 
+PERFIL_PACIENTE = "Paciente"
+PERFIL_FUNCIONARIO = "Funcionário da clínica"
+PERFIS = [PERFIL_PACIENTE, PERFIL_FUNCIONARIO]
+
 ABAS_FUNCIONARIO = ["Testar predição", "Explicabilidade", "Fila do dia", "Observabilidade"]
 ABA_DEV = "Dev: disparo manual"
 
@@ -63,8 +67,8 @@ CHAVES_DA_SESSAO_DO_FUNCIONARIO = (CHAVE_FUNCIONARIO, CHAVE_RESULTADO, CHAVE_PAY
 @st.cache_data(ttl=30, show_spinner=False)
 def _status_banco():
     """cache_data com TTL curto: sem ele, cada widget mexido dispararia uma
-    consulta de rede só para repintar um rótulo da sidebar; com TTL longo
-    demais, a sidebar mentiria por minutos depois de o banco cair."""
+    consulta de rede só para repintar um rótulo do diagnóstico; com TTL longo
+    demais, o diagnóstico mentiria por minutos depois de o banco cair."""
     return logic.status_banco()
 
 
@@ -255,17 +259,15 @@ def _registrar_desfecho(item):
 def _aba_fila_do_dia():
     st.subheader("Fila do dia")
     st.caption(
-        "Agendamentos ordenados por risco (probabilidade de no-show). Quem "
-        "ainda não tem predição aparece no fim -- o job D-2 ainda "
-        "não rodou para esse agendamento."
+        "Agendamentos do dia, do maior para o menor risco de falta. Quem ainda "
+        "não foi avaliado aparece no fim da lista."
     )
     # Aviso na tela, não só no ADR: quem opera precisa saber que a tela carrega
     # dado pessoal, porque a decisão de onde posicionar o monitor da recepção é
     # dela, não do código (ADR-007, risco aceito).
     st.caption(
-        "🔒 Esta tela mostra **nome de paciente**. Visível apenas "
-        "para a equipe da clínica, sob o termo de confidencialidade assinado -- "
-        "evite deixá-la exposta a quem está na sala de espera."
+        ":material/lock: Esta tela mostra **nome de paciente** e é de uso "
+        "restrito da equipe. Evite deixá-la visível para a sala de espera."
     )
 
     dia = st.date_input("Data da fila", value=logic.hoje_na_clinica())
@@ -283,11 +285,18 @@ def _aba_fila_do_dia():
     resumo = logic.resumo_da_fila(fila)
     col1, col2, col3 = st.columns(3)
     col1.metric("Agendamentos", resumo["total"])
-    col2.metric("Alto risco", resumo["alto_risco"], help="Receberiam lembrete pago no job D-2.")
+    col2.metric(
+        "Alto risco",
+        resumo["alto_risco"],
+        help="Pacientes com maior chance de faltar -- são os priorizados para o lembrete.",
+    )
     col3.metric(
         "Sem predição",
         resumo["sem_predicao"],
-        help="O job D-2 ainda não rodou para estes -- não são 'risco zero'.",
+        help=(
+            "Ainda não avaliados -- a avaliação é feita dois dias antes da "
+            "consulta. Não significa risco zero."
+        ),
     )
 
     tabela = pd.DataFrame(
@@ -332,7 +341,10 @@ def _aba_fila_do_dia():
 
     linhas_selecionadas = selecao.selection.rows if selecao and selecao.selection else []
     if not linhas_selecionadas:
-        st.caption("Selecione uma linha para ver a explicação (SHAP) daquela predição.")
+        st.caption(
+            "Selecione uma linha para registrar o desfecho e ver por que o "
+            "paciente tem esse risco."
+        )
         return
 
     item = fila[linhas_selecionadas[0]]
@@ -346,8 +358,8 @@ def _aba_fila_do_dia():
     st.caption(f"identificador interno: `{item.id_paciente_externo}`")
     if not item.tem_predicao:
         st.info(
-            "Este agendamento ainda não foi predito pelo job D-2 -- "
-            "não há explicação gravada."
+            "Este agendamento ainda não foi avaliado -- a explicação aparece "
+            "depois da avaliação, feita dois dias antes da consulta."
         )
         return
 
@@ -369,7 +381,7 @@ SLO_P95_MS = 2000  # SLO §2: p95 de uma predição já aquecida < 2s
 
 @st.cache_data(ttl=30, show_spinner=False)
 def _resumo_observabilidade(janela_horas: int):
-    """Mesmo TTL curto da sidebar: sem cache, cada widget mexido dispararia
+    """Mesmo TTL curto do status do banco: sem cache, cada widget mexido dispararia
     três consultas de agregação; com TTL longo, o painel mentiria por minutos
     depois de o job rodar."""
     return logic.resumo_observabilidade(janela_horas)
@@ -390,7 +402,7 @@ def _aba_observabilidade():
         resumo = _resumo_observabilidade(JANELAS_OBSERVABILIDADE[rotulo])
     except logic.ErroPersistencia as exc:
         # Aviso, não erro: é painel de diagnóstico exibido passivamente (mesma
-        # escolha do status do banco na sidebar) -- sem ele, predição, fila e
+        # escolha do status do banco na aba de dev) -- sem ele, predição, fila e
         # cadastro seguem funcionando normalmente.
         st.warning(f"Observabilidade indisponível: {exc}")
         return
@@ -477,7 +489,18 @@ def _aba_dev():
             st.caption("Veja o resultado na aba **Fila do dia** (recarrega a cada seleção).")
 
     st.divider()
-    st.write("**Diagnóstico do backend de predição**")
+    st.write("**Diagnóstico**")
+    # Morava na sidebar, à vista de qualquer paciente: além de ruído para quem
+    # agenda, expunha detalhe de infraestrutura na URL pública.
+    st.caption(f"APP_ENV: `{APP_ENV}` · backend: `{logic.backend_ativo()}`")
+    banco = _status_banco()
+    if banco["conectado"]:
+        st.success(f"Supabase: {banco['detalhe']}", icon=":material/check_circle:")
+    else:
+        # Aviso, não erro: a predição manual e a explicabilidade continuam
+        # funcionando sem banco -- só a fila e o cadastro dependem dele.
+        st.warning(f"Supabase: {banco['detalhe']}", icon=":material/warning:")
+
     # Sob botão de propósito: checar a saúde a cada rerun carregaria o modelo
     # (ou bateria na API) sem que ninguém tenha pedido.
     if st.button("Verificar backend"):
@@ -688,29 +711,20 @@ def _sidebar_sessao(sessao):
 
 
 def main():
-    st.set_page_config(page_title="SaúdeJá — no-show", page_icon="🩺", layout="wide")
-    st.title("SaúdeJá — predição de no-show")
+    # Título neutro: a tela do paciente é a porta de entrada pública, e quem
+    # agenda não precisa saber que vai ser classificado como provável faltante.
+    st.set_page_config(page_title="SaúdeJá", page_icon=":material/stethoscope:", layout="wide")
+    st.title("SaúdeJá")
 
     st.sidebar.header("Perfil")
-    perfil = st.sidebar.radio(
-        "Quem está usando", options=["Funcionário da clínica", "Paciente"], index=0
-    )
+    # Paciente primeiro: é o público aberto, que chega pela URL pública; a
+    # equipe é quem sabe trocar de perfil e passar pelo login.
+    perfil = st.sidebar.radio("Quem está usando", options=PERFIS, index=0)
     sessao = _funcionario_logado()
     if sessao is not None:
         _sidebar_sessao(sessao)
 
-    st.sidebar.divider()
-    st.sidebar.caption(f"APP_ENV: `{APP_ENV}` · backend: `{logic.backend_ativo()}`")
-
-    banco = _status_banco()
-    if banco["conectado"]:
-        st.sidebar.success(f"Supabase: {banco['detalhe']}", icon="✅")
-    else:
-        # Aviso, não erro: a predição manual e a explicabilidade continuam
-        # funcionando sem banco -- só a fila e o cadastro dependem dele.
-        st.sidebar.warning(f"Supabase: {banco['detalhe']}", icon="⚠️")
-
-    if perfil == "Paciente":
+    if perfil == PERFIL_PACIENTE:
         _visao_paciente()
     elif sessao is None:
         _tela_login()

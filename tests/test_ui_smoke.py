@@ -17,6 +17,7 @@ from ui import logic
 
 CAMINHO_APP = "src/ui/app.py"
 TIMEOUT = 60  # primeiro run carrega modelo + TreeExplainer
+PERFIL_FUNCIONARIO = "Funcionário da clínica"
 
 
 def _sessao(ultimo_uso=None):
@@ -31,12 +32,18 @@ def _botao(at, rotulo):
     return next(b for b in at.button if b.label == rotulo)
 
 
-def _rodar(monkeypatch, app_env="dev", backend="processo", sessao="logado"):
+def _rodar(
+    monkeypatch, app_env="dev", backend="processo", sessao="logado", perfil=PERFIL_FUNCIONARIO
+):
     """`sessao="logado"` (default) entra já autenticado: o login em si é
     testado nos testes próprios dele, e os demais testes são sobre as abas que
     ficam atrás dele. Injetar a sessão em `session_state` é o mesmo estado que
     um login bem-sucedido deixa (app.py::_tela_login). Passe `None` para
-    começar deslogado ou uma `SessaoFuncionario` específica."""
+    começar deslogado ou uma `SessaoFuncionario` específica.
+
+    `perfil` é escolhido no seletor da sidebar depois do primeiro run, como
+    a equipe faz: o app abre na visão do paciente, e a maioria dos testes é
+    sobre a do funcionário. Passe `None` para ficar na entrada padrão."""
     monkeypatch.setenv("APP_ENV", app_env)
     monkeypatch.setenv("PREDICT_BACKEND", backend)
     # Determinístico independente do .env do dev: os testes de UI não devem
@@ -57,13 +64,47 @@ def _rodar(monkeypatch, app_env="dev", backend="processo", sessao="logado"):
         sessao = _sessao()
     if sessao is not None:
         at.session_state["funcionario"] = sessao
-    return at.run()
+    at.run()
+    if perfil is not None:
+        at.sidebar.radio[0].set_value(perfil).run()
+    return at
 
 
 def test_app_carrega_sem_excecao(monkeypatch):
     at = _rodar(monkeypatch)
 
     assert not at.exception
+
+
+def test_entrada_padrao_e_a_visao_do_paciente(monkeypatch):
+    """A URL pública é a porta do autoagendamento: quem chega sem escolher
+    nada vê o cadastro, não o login da equipe -- e o título não anuncia que o
+    paciente será classificado como provável faltante."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    assert not at.exception
+    assert at.sidebar.radio[0].value == "Paciente"
+    assert "Nome completo" in [campo.label for campo in at.text_input]
+    assert [t.value for t in at.title] == ["SaúdeJá"]
+
+
+def test_sidebar_nao_expoe_diagnostico_tecnico(monkeypatch):
+    """APP_ENV, backend e status do Supabase são diagnóstico de quem mantém o
+    sistema: na sidebar, apareciam para qualquer paciente na URL pública."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    textos_da_sidebar = " ".join(
+        e.value for e in (*at.sidebar.caption, *at.sidebar.success, *at.sidebar.warning)
+    )
+    assert "APP_ENV" not in textos_da_sidebar
+    assert "Supabase" not in textos_da_sidebar
+
+
+def test_diagnostico_tecnico_fica_na_aba_de_dev(monkeypatch):
+    at = _rodar(monkeypatch, app_env="dev")
+
+    assert any("APP_ENV" in legenda.value for legenda in at.caption)
+    assert any("Supabase" in aviso.value for aviso in at.warning)
 
 
 def test_abas_do_funcionario_existem_em_dev(monkeypatch):
@@ -121,7 +162,7 @@ def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypat
 
 def test_aba_observabilidade_sem_supabase_avisa_sem_derrubar_a_tela(monkeypatch):
     """O painel de observabilidade é diagnóstico passivo (mesma escolha do status do
-    banco na sidebar), então sem Supabase ele avisa -- não derruba a tela nem
+    banco na aba de dev), então sem Supabase ele avisa -- não derruba a tela nem
     impede a predição manual, que não depende de banco nenhum."""
     at = _rodar(monkeypatch)
 
