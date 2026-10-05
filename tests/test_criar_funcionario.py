@@ -88,13 +88,17 @@ def test_recusa_do_supabase_vira_mensagem_e_nao_traceback(rodar, erro, mensagem)
 def test_resposta_que_nao_e_json_mostra_status_url_e_corpo(rodar):
     # Mesmo encadeamento do `_request` do supabase_auth: HTTPStatusError com
     # corpo não-JSON, convertido em AuthUnknownError dentro do `except`.
+    # Sem `from`, de propósito (noqa B904): a lib encadeia de forma implícita,
+    # e o script lê o erro original em `__context__`. Com `from`, o teste
+    # continuaria passando mesmo se o script trocasse para `__cause__`, que na
+    # lib real vem vazio.
     requisicao = httpx.Request("POST", "https://exemplo.supabase.co/rest/v1/auth/v1/admin/users")
     resposta = httpx.Response(400, text="<html>Bad Request</html>", request=requisicao)
     try:
         try:
             resposta.raise_for_status()
         except httpx.HTTPStatusError as http_erro:
-            raise AuthUnknownError(str(http_erro), ValueError("não é JSON"))
+            raise AuthUnknownError(str(http_erro), ValueError("não é JSON"))  # noqa: B904
     except AuthUnknownError as erro_da_lib:
         erro = erro_da_lib
 
