@@ -23,7 +23,8 @@ ai-factory-saudeja/
 │   ├── SLO.md
 │   ├── adr/                           # Architecture Decision Records
 │   ├── diagrams/
-│   │   └── SaudeJa-c1.png
+│   │   ├── SaudeJa-C1.drawio.png      # diagrama C4 nível 1 (contexto), seção 2
+│   │   └── SaudeJa-C2.drawio.png      # diagrama C4 nível 2 (containers), seção 2
 │   ├── herdado/                       # documentação do protótipo herdado
 │   ├── logs/
 │   │   └── CHANGELOG.md
@@ -81,6 +82,8 @@ ai-factory-saudeja/
 
 ###  Camada C1
 
+![Diagrama C1 — contexto do Saúde Já](diagrams/SaudeJa-C1.drawio.png)
+
 ```mermaid
 flowchart LR
     Paciente["Paciente"]
@@ -103,37 +106,9 @@ flowchart LR
     MLOps -->|"aprova o PR"| Automacao
 ```
 
-### 2.3. Camada C2 — original (desenho inicial do job D-2)
+### Camada C2
 
-```mermaid
-flowchart LR
-    Paciente["Paciente"]
-    Funcionario["Funcionário<br/>da Clínica"]
-    LLM["LLM / TrueFoundry"]
-
-    subgraph SaudeJa["Saúde Já - limite do sistema"]
-        direction TB
-        web["App Web / Streamlit"]
-        DB[("Supabase")]
-        Sched["Scheduler (cron)<br/>trigger diário D-2"]
-        ML["Job de inferência<br/>no-show (consulta,<br/>prediz, grava e dispara)"]
-        Aut["Infobip"]
-
-        web -->|SQL| DB
-        web -->|RESTful, consulta lista<br/>+ probabilidade| ML
-        Sched -->|aciona job<br/>de inferência| ML
-        ML -->|consulta agendamentos<br/>de D+2 / grava resultado| DB
-        ML -->|RESTful, se acima<br/>do threshold| Aut
-    end
-
-    Paciente -->|HTTPS, agenda/cadastra| web
-    Funcionario -->|HTTPS, consulta lista| web
-    web -->|RESTful| LLM
-```
-
-O que diverge do código atual: a API FastAPI (3.2.1) não aparece, embora seja o container sobre o qual a seção 6 abre o ponto da porta única do Space; a aresta `web --RESTful--> ML` não existe (a fila vem do Supabase por SQL, a predição é em processo, e o disparo manual da aba de dev chama `processar_dia` por import); o "Scheduler" genérico é o GitHub Actions, que é externo ao Space; não há nada do eixo de MLOps de re-treino e CI/CD (gate, canário, campeão, DVC/Azure, MLflow); a Infobip está dentro do limite do sistema enquanto o TrueFoundry está fora; o LLM aparece como aresta sólida embora `ExplicadorLLMDesativado` nunca toque a rede; e a janela do job virou "amanhã até D+2" em 2026-09-29.
-
-### 2.4. Camada C2 — revisado (2026-10-01)
+![Diagrama C2 — containers do Saúde Já](diagrams/SaudeJa-C2.drawio.png)
 
 ```mermaid
 flowchart TB
@@ -141,6 +116,7 @@ flowchart TB
     Funcionario["Funcionário<br/>da clínica"]
     MLOps["Time MLOps"]
     Infobip["<b>Infobip</b><br/>SMS — sistema externo"]
+    Healthchecks["<b>Healthchecks</b><br/>monitor de cron — sistema externo"]
 
     subgraph SaudeJa["Saúde Já - limite do sistema"]
         direction TB
@@ -158,6 +134,7 @@ flowchart TB
             jobd2["Job D-2 <br/>job_d2.yml"]
             gate["Gate de re-treino — mensal<br/>retrain.yml + DVC/MLflow"]
             canario["Avaliação do canário <br/>canario.yml"]
+            alerta["Alerta de observabilidade — diário<br/>alerta_observabilidade.yml"]
             deploy["Deploy — push em main<br/>ci.yml + deploy.yml"]
         end
 
@@ -183,14 +160,15 @@ flowchart TB
     gate -->|"dvc push do desafiante"| Blob
     gate -->|"aprovado abre o canário (PR)"| canario
     canario -->|"guardrails por braço e<br/>reversões registradas"| DB
-    canario -->|"PR de promoção ou de reversão"| deploy
+    canario -->|"merge do PR de promoção<br/>(reversão não redeploya)"| deploy
     deploy -->|"migrations + sync do staging<br/>com model.pkl do campeão"| Space
     deploy -->|"dvc pull do campeão"| Blob
 
+    alerta -->|"lê eventos_app e predições<br/>das últimas 24h"| DB
+    jobd2 & gate & canario & alerta -->|"ping de sucesso ou /fail"| Healthchecks
+
     MLOps -->|"aprova o PR"| Runner
 ```
-
-Leitura do diagrama: o que está dentro do limite do sistema é o que a SaúdeJá opera; Infobip e TrueFoundry são SaaS de terceiros. O **núcleo de predição** aparece fora dos dois agrupamentos de deploy de propósito — é o mesmo módulo importado pela UI, pela API e pelo job, que é o que [ADR-005](adr/adr-005-integracoes-implicitas.md) (b) decidiu e o que o teste de paridade entre backends protege. O canário não chega ao Space por construção (seção 6): ele vive no runner e no Azure Blob até ser promovido.
 
 ## 3. Core Components
 
