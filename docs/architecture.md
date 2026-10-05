@@ -82,7 +82,6 @@ ai-factory-saudeja/
 
 ###  Camada C1
 
-![Diagrama C1 — contexto do Saúde Já](diagrams/SaudeJa-C1.drawio.png)
 
 ```mermaid
 flowchart LR
@@ -108,7 +107,6 @@ flowchart LR
 
 ### Camada C2
 
-![Diagrama C2 — containers do Saúde Já](diagrams/SaudeJa-C2.drawio.png)
 
 ```mermaid
 flowchart TB
