@@ -1,5 +1,5 @@
 """
-SaúdeJá — smoke de `scripts/criar_funcionario.py` (ADR-008).
+SaúdeJá — smoke de `scripts/criar_funcionario.py` (docs/architecture.md §7).
 
 É a única porta de entrada de conta da equipe e roda uma vez por funcionário,
 na configuração do primeiro deploy -- contra o projeto de produção, sem
@@ -12,8 +12,9 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
-from supabase_auth.errors import AuthApiError, AuthWeakPasswordError
+from supabase_auth.errors import AuthApiError, AuthUnknownError, AuthWeakPasswordError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -81,4 +82,21 @@ def test_senhas_diferentes_param_antes_de_chamar_o_supabase(rodar):
 )
 def test_recusa_do_supabase_vira_mensagem_e_nao_traceback(rodar, erro, mensagem):
     with pytest.raises(SystemExit, match=mensagem):
+        rodar("a@b.com", ["senha-forte", "senha-forte"], erro=erro)
+
+
+def test_resposta_que_nao_e_json_mostra_status_url_e_corpo(rodar):
+    # Mesmo encadeamento do `_request` do supabase_auth: HTTPStatusError com
+    # corpo não-JSON, convertido em AuthUnknownError dentro do `except`.
+    requisicao = httpx.Request("POST", "https://exemplo.supabase.co/rest/v1/auth/v1/admin/users")
+    resposta = httpx.Response(400, text="<html>Bad Request</html>", request=requisicao)
+    try:
+        try:
+            resposta.raise_for_status()
+        except httpx.HTTPStatusError as http_erro:
+            raise AuthUnknownError(str(http_erro), ValueError("não é JSON"))
+    except AuthUnknownError as erro_da_lib:
+        erro = erro_da_lib
+
+    with pytest.raises(SystemExit, match=r"(?s)respondeu 400.*rest/v1/auth.*<html>Bad Request"):
         rodar("a@b.com", ["senha-forte", "senha-forte"], erro=erro)

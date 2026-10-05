@@ -1,4 +1,4 @@
-# Canario do modelo: avaliacao diaria, promocao e rollback (ADR-009).
+# Canario do modelo: avaliacao diaria, promocao e rollback (ADR-008).
 #
 # O canario nasce no retrain.yml (gate aprovou um desafiante e ja' existe
 # campeao: data/canario/ em vez de champion_metrics.json) e vive no job D-2,
@@ -207,7 +207,7 @@ jobs:
             # A promocao deploya: precisa de versao nova (PATCH), que o
             # deploy de producao confere e vira a tag da Release.
             python scripts/versao_release.py subir-patch \
-              --item "Modelo \`$VERSAO\` promovido a campeao depois do canario (ADR-009)."
+              --item "Modelo \`$VERSAO\` promovido a campeao depois do canario (ADR-008)."
             git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc docs/logs/CHANGELOG.md
             titulo="(resultado) canario $VERSAO promovido a campeao"
             efeito="O merge dispara o \`deploy.yml\`, que leva o modelo ao Space e publica a Release da versao PATCH; o job D-2 passa a usar o novo campeao em 100% da fila."
@@ -218,7 +218,7 @@ jobs:
           git commit -m "$titulo"
           git push origin "$BRANCH"
           {
-            echo "Decisao automatica do \`canario.yml\` (ADR-009)."
+            echo "Decisao automatica do \`canario.yml\` (ADR-008)."
             echo
             cat "$RUNNER_TEMP/avaliacao.md"
             echo

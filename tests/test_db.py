@@ -485,7 +485,7 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
     ).days
 
 
-# --- login do funcionário contra o Supabase Auth local (ADR-008) --------------
+# --- login do funcionário contra o Supabase Auth local (architecture.md §7) ---
 
 SENHA_DE_TESTE = "senha-de-teste-123"
 
@@ -506,7 +506,7 @@ def funcionario(db):
 
 @pytest.mark.integracao
 def test_login_real_nao_troca_a_identidade_das_consultas_do_backend(db, funcionario):
-    """Regressão de desenho (ADR-008) contra o Supabase de verdade: depois do
+    """Regressão de desenho (docs/architecture.md §7) contra o Supabase de verdade: depois do
     login, o backend continua enxergando as tabelas. Se o sign-in acontecesse
     no singleton, o supabase-py trocaria o Authorization pelo JWT do usuário e
     o RLS sem policies devolveria vazio -- para todos os navegadores."""
@@ -537,7 +537,7 @@ def test_senha_errada_e_email_inexistente_sao_indistinguiveis_no_supabase_real(d
     assert mensagens == [logic.MENSAGEM_CREDENCIAIS_INVALIDAS] * 2
 
 
-# --- canário do modelo (ADR-009) -----------------------------------------------
+# --- canário do modelo (ADR-008) -----------------------------------------------
 
 
 @pytest.mark.integracao

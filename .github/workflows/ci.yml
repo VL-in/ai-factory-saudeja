@@ -149,7 +149,7 @@ jobs:
           dvc remote add --local -f azure "$DVC_REMOTE_URL"
           dvc pull data/model.pkl
 
-      - name: Canario ativo -- alcancavel, coerente e sao (ADR-009)
+      - name: Canario ativo -- alcancavel, coerente e sao (ADR-008)
         # No PR que abre o canario (e em todo PR enquanto ele estiver ativo):
         # o modelo foi publicado no remote, e' o registrado em canario.json,
         # foi aprovado contra o campeao atual, as copias do lock/dataset que a

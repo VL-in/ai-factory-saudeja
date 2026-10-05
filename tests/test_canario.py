@@ -1,5 +1,5 @@
 """
-SaúdeJá — canário do modelo com rollback automático (ADR-009).
+SaúdeJá — canário do modelo com rollback automático (ADR-008).
 
 Sem banco: o repositório é trocado por um falso em memória e o modelo é o
 `data/model.pkl` real (como em `tests/test_job_d2_unitario.py`). O que se

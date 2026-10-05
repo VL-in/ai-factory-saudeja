@@ -172,7 +172,7 @@ enable_refresh_token_rotation = true
 # Requires enable_refresh_token_rotation = true.
 refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
-# false (ADR-008): funcionário não se cadastra -- a conta é criada pelo
+# false (login da equipe, docs/architecture.md §7): funcionário não se cadastra -- a conta é criada pelo
 # administrador com scripts/criar_funcionario.py (API de admin, ignora esta trava).
 # Vale só para o Supabase local; no projeto remoto a mesma chave fica em
 # Dashboard -> Authentication -> Sign In / Providers -> "Allow new users to sign up".
@@ -224,7 +224,7 @@ web3 = 30
 # true de propósito: apesar do comentário acima, o CLI repassa esta chave como
 # GOTRUE_EXTERNAL_EMAIL_ENABLED, que liga/desliga o *provedor* de e-mail -- com
 # false, nem a conta criada pelo administrador entra ("Email logins are
-# disabled"). A trava de cadastro do ADR-008 é o `[auth] enable_signup` acima.
+# disabled"). A trava de cadastro da equipe é o `[auth] enable_signup` acima.
 enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.

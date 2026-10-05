@@ -157,7 +157,7 @@ def test_formulario_produz_predicao_e_explicacao(monkeypatch):
     assert at.metric  # os cards de probabilidade/threshold/classe renderizaram
 
 
-# --- login do funcionário (ADR-008) -------------------------------------------
+# --- login do funcionário (docs/architecture.md §7) ---------------------------
 
 
 def test_visao_do_funcionario_sem_login_mostra_so_a_tela_de_login(monkeypatch):

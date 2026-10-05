@@ -1,6 +1,6 @@
 # Plano de Implementação — SaudeJá: do pipeline de treino ao produto deployável
 
-> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação; em 2026-09-29 com a revisão do Passo 10 contra o repositório e a documentação do GitHub Actions; em 2026-10-01 com o Passo 10.7 — canário do modelo com rollback automático, [ADR-009](adr/adr-009-canario-do-modelo.md); em 2026-10-04 com o primeiro deploy em dev, Fase 2 do 11.2). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
+> **Status:** em execução. Última geração: 2026-09-18 (atualizado em 2026-09-21 com o Passo 8.5 — observabilidade de aplicação; em 2026-09-29 com a revisão do Passo 10 contra o repositório e a documentação do GitHub Actions; em 2026-10-01 com o Passo 10.7 — canário do modelo com rollback automático, [ADR-008](adr/adr-008-canario-do-modelo.md); em 2026-10-04 com o primeiro deploy em dev, Fase 2 do 11.2). Complementa [`architecture.md`](architecture.md) (o "o quê"/"por quê" da arquitetura) com o "como e em que ordem construir" — cada passo abaixo é uma fatia vertical testável, com critério de verificação explícito, que deve ser commitada em git antes de avançar para a próxima.
 
 ## Contexto
 
@@ -695,9 +695,9 @@ alter table agendamentos
 - **Sugestão, não implementada:** um disjuntor antes do envio — se a quarentena passar de um limite no meio da fila, parar de mandar lembrete sem predição. Hoje a pós-checagem detecta a quarentena de 100%, mas depois de os SMS terem saído. Mudaria a decisão 3 da 2ª revisão, por isso fica com a autora.
 
 
-### 10.7 — Canário do modelo com rollback automático ([ADR-009](adr/adr-009-canario-do-modelo.md)) — **implementado em 2026-10-01**
+### 10.7 — Canário do modelo com rollback automático ([ADR-008](adr/adr-008-canario-do-modelo.md)) — **implementado em 2026-10-01**
 
-> **Decisão da autora (2026-10-01)**: o rollback depois da promoção é feito por **canário**. A objeção de volume (com uma clínica só, ~10 agendamentos/dia no canário não dão poder estatístico) não vale para o produto, que atende várias clínicas (BRIEFING). Blue-green no Space foi descartado (sem roteador; o proxy seria operador novo vendo PII), e a sombra fica como etapa anterior possível — ver as alternativas no ADR-009.
+> **Decisão da autora (2026-10-01)**: o rollback depois da promoção é feito por **canário**. A objeção de volume (com uma clínica só, ~10 agendamentos/dia no canário não dão poder estatístico) não vale para o produto, que atende várias clínicas (BRIEFING). Blue-green no Space foi descartado (sem roteador; o proxy seria operador novo vendo PII), e a sombra fica como etapa anterior possível — ver as alternativas no ADR-008.
 
 **O problema que o passo resolve.** O gate do 9.1 mede o desafiante offline e promove direto: o merge do PR leva o modelo a 100% da fila. O "gate de rollback" do SLA §3 impede promover um modelo pior **no fold de teste**, mas não havia volta depois da promoção, e o fold não mede os dois números que pagam a conta: quantos pacientes da fila real o modelo manda para SMS pago e quantos pacientes de baixo risco faltam sem aviso.
 
@@ -776,7 +776,7 @@ retrain.yml (dia 1)  gate aprova + há campeão -> data/canario/ + dvc add + dvc
 #### Achados ao implementar (não são do canário, mas afetam o argumento dele)
 
 1. **O job D-2 quebra com o volume que justifica o canário** (anterior a este passo). `buscar_agendamentos_d2_pendentes` filtra as predições existentes com `.in_("id_agendamento", ids)`, que manda **todos** os ids da janela na URL. Com ~300 agendamentos pendentes, o PostgREST respondeu `414 URI too long` e o job morreu antes de predizer qualquer um (reproduzido no ensaio). Com várias clínicas, isso é o caso normal. Correção sugerida, fora deste passo: consultar em lotes (ex. 100 ids) ou trocar por um `not exists` numa view/RPC. **Precisa ser resolvido antes de habilitar várias clínicas.**
-2. **Login local quebrado pelo `supabase/config.toml`** (anterior, ADR-008). `[auth.email] enable_signup = false` faz o CLI subir o GoTrue com `GOTRUE_EXTERNAL_EMAIL_ENABLED=false` ("Email logins are disabled"). O que se queria é `[auth] enable_signup = false`, mantendo o provedor de e-mail ligado. Só aparece depois de reiniciar o stack local, por isso `test_login_real_nao_troca_a_identidade_das_consultas_do_backend` passava antes. Não afeta o projeto remoto, que é configurado pelo Dashboard. **Resolvido em 2026-10-04**: `[auth.email] enable_signup = true`, com a trava só em `[auth]`. Foi o que derrubou a integração no primeiro deploy de `dev`.
+2. **Login local quebrado pelo `supabase/config.toml`** (anterior, login da equipe). `[auth.email] enable_signup = false` faz o CLI subir o GoTrue com `GOTRUE_EXTERNAL_EMAIL_ENABLED=false` ("Email logins are disabled"). O que se queria é `[auth] enable_signup = false`, mantendo o provedor de e-mail ligado. Só aparece depois de reiniciar o stack local, por isso `test_login_real_nao_troca_a_identidade_das_consultas_do_backend` passava antes. Não afeta o projeto remoto, que é configurado pelo Dashboard. **Resolvido em 2026-10-04**: `[auth.email] enable_signup = true`, com a trava só em `[auth]`. Foi o que derrubou a integração no primeiro deploy de `dev`.
 3. **Supabase local no Windows**: as portas 54321–54324 caíram numa faixa reservada pelo Windows (`netsh interface ipv4 show excludedportrange protocol=tcp` mostra 54269–54368). Os containers subiam sem publicar as portas. Correção, em PowerShell de administrador: `net stop winnat; net start winnat` e depois `supabase start`.
 
 #### Pendências
@@ -784,7 +784,7 @@ retrain.yml (dia 1)  gate aprova + há campeão -> data/canario/ + dvc add + dvc
 - **Variável `CANARIO_DESLIGADO`** (Settings → Variables, vazia ou `false`) e a migration `20261001000000` no projeto remoto. O primeiro deploy faz o `db push`.
 - **Ensaio real no Passo 11**: com o repositório no GitHub, rodar o `retrain.yml` por `workflow_dispatch` com um desafiante aprovado e confirmar a sequência completa: PR do canário com o check do CI, merge sem rebuild do Space, job com `por_braco` no resumo, `canario.yml` avaliando, rollback manual por `workflow_dispatch` com o PR de reversão. É evidência para o pitch.
 - **Volume**: com o piloto de uma clínica, o canário reverte por prazo. Até a segunda clínica entrar, decidir entre manter (o modelo não evolui), aumentar `fracao`/`dias_maximos` ou `canario.habilitado: false`.
-- **Contrato com a clínica**: informar que parte da fila é decidida por um modelo em observação (ADR-009, Cons).
+- **Contrato com a clínica**: informar que parte da fila é decidida por um modelo em observação (ADR-008, Cons).
 - O achado 1 acima, antes de qualquer cliente além do piloto.
 
 ---
@@ -798,7 +798,7 @@ retrain.yml (dia 1)  gate aprova + há campeão -> data/canario/ + dvc add + dvc
 - **Porta única do Space**: o HF Space (SDK Docker) publica só uma porta (`app_port`, default 7860). Hoje a imagem expõe UI em 7860 e API em 8000 — em produção só a primeira ficaria acessível. A UI não sofre (chama o modelo em processo, ADR-005 b); quem fica sem endereço público é a API como porta de entrada para integrações externas (diagrama C2). Decidir entre: (a) expor só a UI e adiar a API pública para quando houver um consumidor externo real, (b) proxy reverso na frente dos dois na porta publicada, (c) publicar a API e servir a UI por outro caminho. Registrar a escolha como emenda ao ADR-005 ou ADR novo, conforme o peso.
 - **Ligar as sondas externas do Passo 8.5**, que só agora têm URL pública para apontar: monitor do UptimeRobot em `/health` do Space e checks do Healthchecks.io para o job D-2 e o re-treino. Vale anotar que o Space free **hiberna por inatividade** — o monitor batendo de minutos em minutos mantém o container acordado como efeito colateral, o que melhora o cold start percebido (SLO §2) mas mascara o comportamento real de hibernação. Decidir conscientemente se isso é desejável antes de medir o cold start para o pitch.
 - **Antes do primeiro sync**, conferir que o projeto Supabase remoto está com todas as migrations aplicadas (`supabase db push`) e que os três secrets do sub-passo [10.1](#101--migrations-de-banco-no-deploy) existem no repositório — senão o primeiro deploy sincroniza código contra schema antigo, que é o incidente de 2026-09-28 acontecendo com a clínica na frente.
-- **Login da equipe no projeto remoto** ([ADR-008](adr/adr-008-login-da-equipe.md)): desligar "Allow new users to sign up" no Dashboard do Supabase (Authentication → Sign In / Providers), subir o tamanho mínimo de senha para 8 e criar as contas da equipe com `scripts/criar_funcionario.py`, antes de divulgar a URL do Space. O `supabase/config.toml` vale só para o Supabase local. Com o cadastro aberto, a tela de login seria só decoração.
+- **Login da equipe no projeto remoto** ([architecture.md §7](architecture.md#7-security-considerations)): desligar "Allow new users to sign up" no Dashboard do Supabase (Authentication → Sign In / Providers), subir o tamanho mínimo de senha para 8 e criar as contas da equipe com `scripts/criar_funcionario.py`, antes de divulgar a URL do Space. O `supabase/config.toml` vale só para o Supabase local. Com o cadastro aberto, a tela de login seria só decoração.
 - Deploy inicial: criar o HF Space e rodar manualmente o `deploy.yml` do Passo 10 (`workflow_dispatch`) para o primeiro sync via `huggingface/hub-sync` (a action cria o Space se ele não existir, com `--exist-ok`). Dali em diante, todo push em `main` (deploy manual de código ou promoção automática do Passo 9) usa o mesmo workflow — não há um segundo mecanismo de deploy a manter. **Corrigido no [11.1](#111--roteiro-do-primeiro-deploy-o-que-fica-preparado-no-código-e-o-que-é-configuração-da-autora)**: o merge de `dev` em `main` já dispara o deploy, e o `workflow_dispatch` serve só para reenviar. Criar o Space à mão é obrigatório para o token *fine-grained*.
 
 **Verificação**: Space público respondendo `/health` 200 com a `model_version` esperada; smoke test manual fim a fim (criar agendamento → job via `workflow_dispatch` → predição+explicação visível na fila do Streamlit → log de decisão de mensageria); medição manual do cold start vs. SLO <10s; smoke test do loop de deploy automático (merge de um PR de promoção do Passo 9 → confirmar que o Space rebuilda sozinho, sem passo manual).
@@ -846,7 +846,7 @@ Nesta ordem, porque cada item destrava o seguinte:
 
 1. **Azure.** Resolver o `AuthorizationFailure`: em *Storage account → Networking*, o acesso público precisa estar habilitado para todas as redes, porque runner do GitHub não tem IP fixo (a proteção passa a ser a SAS); ou a chave do `.env` foi rotacionada. Feito isso, `dvc push` e `dvc status -c` limpos na máquina local. Depois, gerar a SAS `rl` do container (comando no `.env.example`) **com data de expiração anotada na agenda**, porque SAS vencida derruba CI, deploy e job D-2 de uma vez.
 2. **Hugging Face.** Criar o Space **à mão** (SDK Docker, template em branco, CPU basic, público), em vez de deixar a action criá-lo: token *fine-grained* só pode receber escopo num repositório que já existe. Em seguida, gerar o token com escrita **só nesse Space**. Em *Space → Settings → Secrets*, cadastrar só `SUPABASE_URL` e `SUPABASE_SECRET_KEY`: a UI não envia SMS, então a Infobip não entra no Space, e o `APP_ENV=prod` já vem do Dockerfile.
-3. **Supabase (Dashboard).** Fazer os passos do ADR-008 descritos acima (cadastro desligado, senha mínima 8, contas criadas com `scripts/criar_funcionario.py`) e gerar o token pessoal do CLI (`SUPABASE_ACCESS_TOKEN`).
+3. **Supabase (Dashboard).** Fazer os passos do login da equipe descritos acima (cadastro desligado, senha mínima 8, contas criadas com `scripts/criar_funcionario.py`) e gerar o token pessoal do CLI (`SUPABASE_ACCESS_TOKEN`).
 4. **GitHub**, depois de `gh repo set-default VL-in/ai-factory-saudeja` na máquina local:
    - *Settings → Actions → General → Workflow permissions*: manter "Read", **marcar "Allow GitHub Actions to create and approve pull requests"**.
    - *Settings → Environments → `production`*: secret `HF_TOKEN`, variável `HF_SPACE_ID`, *deployment branches* só `main` e *required reviewers* com a autora (recomendado).
@@ -879,7 +879,7 @@ Juntam as verificações já descritas no corpo deste passo, no 10.1, nas revis�
 
 ### 11.2 — Ambientes dev/prod e release SemVer: roteiro do deploy em conjunto
 
-> Escrito em 2026-10-03 com as decisões da autora, registradas no [ADR-010](adr/adr-010-ambientes-e-releases.md):
+> Escrito em 2026-10-03 com as decisões da autora, resumidas em "Ambientes e releases" do [architecture.md §6](architecture.md#6-deployment--infrastructure):
 > - dois projetos Supabase e dois Spaces;
 > - `main` é produção, e o deploy cria a tag automaticamente;
 > - a produção usa um projeto Supabase novo, e o atual vira dev;
@@ -1070,7 +1070,7 @@ Só depois do Passo 12 (núcleo funcional, testado e deployado). Consulta de pac
 
 ### Decisões de 2026-09-29 (tomadas com a autora, antes de implementar)
 
-**Escopo pedido**: uma aba "Assistente" na visão do funcionário (atrás do login do [ADR-008](adr/adr-008-login-da-equipe.md)) que (a) busca paciente individual ou a fila de uma data, (b) traz os dados do paciente para o chat com nome abreviado e CPF/telefone parcialmente ocultos e (c) interpreta o SHAP do paciente quando pedido.
+**Escopo pedido**: uma aba "Assistente" na visão do funcionário (atrás do login da equipe, [architecture.md §7](architecture.md#7-security-considerations)) que (a) busca paciente individual ou a fila de uma data, (b) traz os dados do paciente para o chat com nome abreviado e CPF/telefone parcialmente ocultos e (c) interpreta o SHAP do paciente quando pedido.
 
 **1. Ordem: o deploy fecha primeiro.** Passos 10 → 10.1 → 11 → 12 antes deste. O Passo 13 não depende tecnicamente de nenhum deles, mas compete pelo mesmo tempo até o pitch da Semana 16, e o que tem SLA é o núcleo. Fica registrado aqui para a ampliação de escopo não se perder até lá.
 
@@ -1094,9 +1094,9 @@ Só depois do Passo 12 (núcleo funcional, testado e deployado). Consulta de pac
 **7. Observabilidade sem Langfuse.** Evento próprio em `eventos_app` (`origem`/`tipo` de LLM: latência, tokens, nome de classe de exceção), com a allowlist de `src/observabilidade.py` estendida. Langfuse segue fora: guardaria prompt/completion, o que é mais uma transferência internacional. A latência do LLM fica **fora** do p95 do SLO §2 (que é de predição) e medida à parte; LLM indisponível degrada só a aba, nunca a fila.
 
 **Pendências para quando o passo for executado** (não bloqueiam nada agora):
-- **ADR-010** (o 009 foi usado pelo canário do Passo 10.7) registrando a decisão 2 e as alternativas recusadas (LLM redigindo a resposta com PII; CPF parcial persistido; busca por nome dentro do chat).
+- **ADR-009** (o 008 é o canário do Passo 10.7) registrando a decisão 2 e as alternativas recusadas (LLM redigindo a resposta com PII; CPF parcial persistido; busca por nome dentro do chat).
 - **Transferência internacional e operador novo**: mesmo sem identificador, o que vai ao LLM inclui `especialidade` e probabilidade de falta — dado derivado de dado de saúde ([`LGPD.md` §2](LGPD.md)). Verificar região e DPA do TrueFoundry e do provedor por trás dele (Art. 33/39) e revisar `LGPD.md` §2.1 (o chat é uma porta de saída nova), §4 e §9. Deixa de valer, para esta porta, o "nenhum destinatário novo" do ADR-007.
-- **Alcance de acesso**: busca por CPF alcança o histórico inteiro do paciente, além da fila de uma data. Sem RBAC (ADR-008), avaliar uma trilha de "quem consultou qual paciente".
+- **Alcance de acesso**: busca por CPF alcança o histórico inteiro do paciente, além da fila de uma data. Sem RBAC ([architecture.md §7](architecture.md#7-security-considerations)), avaliar uma trilha de "quem consultou qual paciente".
 - Secrets novos (chave/URL do TrueFoundry) em `.env.example` e nos secrets do Space.
 
 **Verificação acrescida**: cliente LLM espião recebendo todas as mensagens de uma conversa que busca por CPF, por nome (campo) e pela fila de uma data — nenhuma mensagem contém nome conhecido do banco, CPF ou telefone, com controle negativo (injetar o nome no ponto de saída faz o teste falhar); "Sair" e expiração apagam os dois históricos; LLM fora do ar mantém as demais abas funcionando (`test_ui_smoke.py`).

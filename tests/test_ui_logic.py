@@ -557,7 +557,7 @@ def test_proxima_data_disponivel_nunca_cai_num_domingo():
     assert logic.proxima_data_disponivel(domingo).weekday() != 6
 
 
-# --- autenticação do funcionário (ADR-008) -------------------------------------
+# --- autenticação do funcionário (docs/architecture.md §7) ---------------------
 # O Supabase Auth de verdade é exercitado em tests/test_db.py (integracao,
 # contra o Supabase CLI local); aqui só o transporte é trocado, para cobrir a
 # tradução de cada resposta de erro sem depender de rede.
@@ -682,7 +682,7 @@ def test_autenticar_sem_supabase_configurado_e_indisponibilidade(monkeypatch):
 
 
 def test_login_usa_client_descartavel_nunca_o_singleton_do_backend(monkeypatch):
-    """Regressão de desenho (ADR-008): o supabase-py troca o Authorization do
+    """Regressão de desenho (docs/architecture.md §7): o supabase-py troca o Authorization do
     client pelo JWT do usuário depois do sign-in. No singleton, o backend
     passaria a consultar como `authenticated` (RLS sem policies -> tabela
     vazia) para TODOS os navegadores conectados ao mesmo processo."""

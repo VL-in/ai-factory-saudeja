@@ -15,7 +15,7 @@ Rodar localmente, da raiz do repositório:
 Variáveis: APP_ENV=dev|prod (aba de dev), PREDICT_BACKEND=processo|api,
 API_BASE_URL (só no backend 'api').
 
-A visão do funcionário exige login (e-mail e senha no Supabase Auth, ADR-008);
+A visão do funcionário exige login (e-mail e senha no Supabase Auth, docs/architecture.md §7);
 a do paciente continua aberta, porque é o autoagendamento. Conta de
 funcionário se cria com `python scripts/criar_funcionario.py`.
 """

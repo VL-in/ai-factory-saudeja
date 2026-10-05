@@ -529,7 +529,7 @@ def purgar_eventos_app(anteriores_a: datetime) -> int:
 
 
 # --------------------------------------------------------------------------
-# canário do modelo (ADR-009)
+# canário do modelo (ADR-008)
 # --------------------------------------------------------------------------
 def estatisticas_de_modelo(model_version: str, desde: datetime) -> dict[str, Any]:
     """Contagens de um braço do canário (`src/canario.py`): predições,

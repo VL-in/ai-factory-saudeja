@@ -1,5 +1,5 @@
 """
-Cria a conta de um funcionário da clínica no Supabase Auth (ADR-008).
+Cria a conta de um funcionário da clínica no Supabase Auth (docs/architecture.md §7).
 
 É a única porta de entrada de conta: o cadastro aberto fica desligado no
 projeto (`enable_signup = false`), então a tela de login da interface não
@@ -29,7 +29,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from supabase_auth.errors import AuthApiError, AuthWeakPasswordError  # noqa: E402
+from httpx import HTTPStatusError  # noqa: E402
+from supabase_auth.errors import (  # noqa: E402
+    AuthApiError,
+    AuthUnknownError,
+    AuthWeakPasswordError,
+)
 
 from db.client import ConfiguracaoSupabaseAusente, obter_client  # noqa: E402
 
@@ -43,6 +48,25 @@ def _pedir_senha() -> str:
     if getpass.getpass("Repita a senha: ") != senha:
         sys.exit("As senhas não conferem.")
     return senha
+
+
+def _explicar_resposta_desconhecida(exc: AuthUnknownError) -> str:
+    """O `supabase_auth` só monta `AuthApiError` quando a resposta é o JSON do
+    GoTrue; corpo que não é JSON (HTML/texto do gateway, típico de
+    SUPABASE_URL errada -- link do dashboard, sufixo `/rest/v1`, ref de outro
+    projeto) vira `AuthUnknownError` e o corpo se perde. A resposta HTTP
+    original continua em `__context__`, levantada dentro do `except` da lib."""
+    original = exc.__context__
+    if not isinstance(original, HTTPStatusError):
+        return f"Resposta inesperada do Supabase Auth: {exc.message}"
+    resposta = original.response
+    return (
+        f"O Supabase Auth respondeu {resposta.status_code} com um corpo que não é o "
+        f"JSON do GoTrue -- confira SUPABASE_URL (deve ser https://<ref>.supabase.co, "
+        f"sem caminho) e SUPABASE_SECRET_KEY do ambiente.\n"
+        f"URL chamada: {original.request.url}\n"
+        f"Corpo: {resposta.text[:500]}"
+    )
 
 
 def main():
@@ -65,6 +89,8 @@ def main():
         if exc.code == "email_exists":
             sys.exit("Já existe uma conta com esse e-mail.")
         sys.exit(f"O Supabase recusou a criação da conta ({exc.status}, {exc.code}): {exc.message}")
+    except AuthUnknownError as exc:
+        sys.exit(_explicar_resposta_desconhecida(exc))
 
     print(f"Conta criada. id do usuário no Supabase Auth: {resposta.user.id}")
 

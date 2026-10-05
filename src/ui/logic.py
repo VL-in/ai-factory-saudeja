@@ -702,7 +702,7 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
     }
 
 
-# --- Autenticação do funcionário (ADR-008) -----------------------------------
+# --- Autenticação do funcionário (docs/architecture.md §7) --------------------
 
 # 30 min sem nenhuma interação encerra a sessão. A tela da recepção fica ligada
 # o dia todo com nome de paciente (ADR-007); sem limite, quem sentasse no
@@ -732,7 +732,7 @@ class SessaoFuncionario:
     """O que a UI guarda de quem está logado, em `st.session_state` (memória do
     servidor, nunca cookie). Sem o token do Supabase de propósito: ele só
     serviu para provar a senha -- os dados continuam sendo lidos com a chave
-    secreta do backend (ADR-008) --, então guardá-lo só criaria um segredo a
+    secreta do backend (docs/architecture.md §7) --, então guardá-lo só criaria um segredo a
     mais para vazar."""
 
     id_usuario: str
@@ -751,7 +751,7 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
     if exc.status == 429 or exc.code == "over_request_rate_limit":
         # O limite do Supabase Auth é por IP, e todos os funcionários chegam
         # pelo mesmo IP (o do servidor do Streamlit) -- quem aparece aqui pode
-        # nem ter errado a própria senha. Ver ADR-008, riscos.
+        # nem ter errado a própria senha. Ver docs/LGPD.md §9, risco 6.
         return ErroAutenticacaoIndisponivel(
             "muitas tentativas de login em pouco tempo. Aguarde alguns minutos e tente de novo."
         )

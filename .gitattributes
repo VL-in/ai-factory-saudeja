@@ -17,7 +17,7 @@ dockerfile text eol=lf
 dockerfile.* text eol=lf
 dvc.lock text eol=lf
 
-# Copias do dvc.lock e do .dvc do dataset guardadas pelo canario (ADR-009):
+# Copias do dvc.lock e do .dvc do dataset guardadas pelo canario (ADR-008):
 # na promocao elas voltam a ser o dvc.lock e o .dvc da raiz, e precisam chegar
 # ao runner byte a byte como foram gravadas.
 *.salvo text eol=lf

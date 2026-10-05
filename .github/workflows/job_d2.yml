@@ -56,7 +56,7 @@ jobs:
       INFOBIP_REMETENTE: ${{ vars.INFOBIP_REMETENTE }}
       HEALTHCHECKS_JOB_D2_URL: ${{ secrets.HEALTHCHECKS_JOB_D2_URL }}
       APP_ENV: prod
-      # Rollback manual instantaneo do canario (ADR-009): `true` na variavel
+      # Rollback manual instantaneo do canario (ADR-008): `true` na variavel
       # do environment `production` faz o job ignorar data/canario/ ja' na proxima execucao,
       # sem PR nem deploy.
       CANARIO_DESLIGADO: ${{ vars.CANARIO_DESLIGADO }}
@@ -91,7 +91,7 @@ jobs:
         run: |
           dvc remote add --local -f azure "$DVC_REMOTE_URL"
           dvc pull data/model.pkl
-          # Canario (ADR-009). Falha aqui NAO derruba o job: sem o
+          # Canario (ADR-008). Falha aqui NAO derruba o job: sem o
           # arquivo, a pre-checagem do canario manda a fila 100% para o
           # campeao e o run termina vermelho -- nenhum paciente fica sem
           # lembrete por causa do canario.

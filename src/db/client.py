@@ -36,7 +36,7 @@ def obter_client() -> Client:
 
 
 def criar_client_autenticacao() -> Client:
-    """Client DESCARTÁVEL, um por tentativa de login (ADR-008) -- nunca o
+    """Client DESCARTÁVEL, um por tentativa de login (docs/architecture.md §7) -- nunca o
     singleton de `obter_client`.
 
     O `supabase-py` escuta os próprios eventos de auth: depois de um

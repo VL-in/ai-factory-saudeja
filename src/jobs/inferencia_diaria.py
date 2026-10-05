@@ -22,7 +22,7 @@ o threshold são os do campeão, o banco responde) antes de qualquer SMS, e
 sistêmica) depois, com o código de saída que o workflow usa para avisar o
 Healthchecks.
 
-**Canário (ADR-009)**: só o caminho agendado o usa. Com
+**Canário (ADR-008)**: só o caminho agendado o usa. Com
 `data/canario.json` ativo, `main()` pede a `canario.preparar_para_job` o
 contexto do canário -- que já confere os guardrails e faz o rollback
 automático se algum estiver violado -- e `processar_dia` manda a fração
