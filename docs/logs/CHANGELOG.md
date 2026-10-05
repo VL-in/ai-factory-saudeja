@@ -8,6 +8,15 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado] (Vanessa + Claude) - 2026-10-05
+
+### Modificado
+- **A interface abre na tela de agendamento do paciente.** Antes, quem chegava pela URL pública caía no login da equipe. Para entrar, a equipe escolhe o perfil "Funcionário da clínica" na barra lateral.
+- O título da interface passa a ser só "SaúdeJá", sem "predição de no-show". O paciente não precisa saber, ao agendar, que o agendamento passa por uma avaliação de risco de falta.
+- A barra lateral não mostra mais o ambiente, o modo de predição nem o status do banco, que apareciam para qualquer visitante. Esse diagnóstico passa para a aba "Dev: disparo manual", que só existe no ambiente de desenvolvimento. Em produção, um banco fora do ar continua aparecendo como erro na "Fila do dia" e no cadastro.
+- Botões principais e destaques em verde-azulado, nos temas claro e escuro, no lugar do vermelho padrão do Streamlit, que num contexto de saúde se confundia com aviso de erro.
+- Os textos da "Fila do dia" usam a linguagem da recepção, sem termos técnicos como "job D-2" e "SHAP", e os ícones da interface seguem um único estilo.
+
 ## [v2.0.0] (Vanessa + Claude) - 2026-10-04
 
 Primeiro deploy do SaudeJá em produção. O SaudeJá prevê quais pacientes têm alta chance de faltar à consulta e manda lembrete por SMS só para eles, dois dias antes do atendimento, sem o custo de avisar todo mundo. A partir desta versão, cada publicação em produção ganha um número de versão e uma página de Release com as mudanças.
