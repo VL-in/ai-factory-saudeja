@@ -899,3 +899,41 @@ def test_cadastro_com_varios_erros_nao_toca_o_banco_e_lista_todos(hoje_fixo, mon
         "CPF inválido -- confira os números digitados.",
         "Informe a data de nascimento.",
     ]
+
+
+# --- rótulos para a recepção (revisão de UX, bloco F) ---------------------------
+
+
+def test_rotulo_status_traduz_e_mantem_desconhecido_visivel():
+    assert logic.rotulo_status(logic.STATUS_NO_SHOW) == "Faltou"
+    assert logic.rotulo_status("agendado") == "Agendado"
+    assert logic.rotulo_status("status_novo") == "status_novo"
+
+
+def test_principais_motivos_traduz_ignora_zero_e_limita_a_quantidade():
+    explicacao = [
+        {"feature": "historico_noshow", "contribuicao": 0.8},
+        {"feature": "dias_entre_agendamento_consulta", "contribuicao": -0.5},
+        {"feature": "idade", "contribuicao": 0.0},
+        {"feature": "feature_nova", "contribuicao": 0.2},
+        {"feature": "sexo", "contribuicao": 0.1},
+    ]
+
+    assert logic.principais_motivos(explicacao) == [
+        {"rotulo": "Faltas anteriores", "aumenta": True},
+        {"rotulo": "Antecedência do agendamento", "aumenta": False},
+        {"rotulo": "feature_nova", "aumenta": True},  # sem rótulo: aparece crua
+    ]
+
+
+def test_toda_feature_do_modelo_tem_rotulo_para_a_recepcao():
+    """Feature nova no modelo sem rótulo apareceria crua para a recepção.
+    Os nomes vêm do contrato de features (numéricas) e do pré-processamento
+    (categóricas, inclusive as temporais), não de uma lista copiada aqui."""
+    import contrato_features
+    import preprocess
+
+    features = {campo.nome for campo in contrato_features.CAMPOS_NUMERICOS} | set(
+        preprocess.COLUNAS_CATEGORICAS
+    )
+    assert features <= set(logic.ROTULOS_FEATURES)

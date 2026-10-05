@@ -392,6 +392,56 @@ STATUS_CONCLUIDO = "concluido"
 STATUS_NO_SHOW = "no_show"
 STATUS_CANCELADO = "cancelado"
 
+# O que a recepção lê no lugar do valor cru de `agendamentos.status`.
+ROTULOS_STATUS = {
+    "agendado": "Agendado",
+    STATUS_CONCLUIDO: "Realizada",
+    STATUS_NO_SHOW: "Faltou",
+    STATUS_CANCELADO: "Cancelada",
+}
+
+
+def rotulo_status(status: str) -> str:
+    """Status desconhecido aparece cru em vez de sumir: um valor novo no
+    banco continua visível até ganhar rótulo aqui."""
+    return ROTULOS_STATUS.get(status, status)
+
+
+# Nome de cada feature do modelo (src/preprocess.py) na linguagem da
+# recepção. Só o nome: o valor das categóricas na explicação é o código do
+# label encoding (sexo=1, dia_de_semana=2), que não diz nada a quem lê.
+ROTULOS_FEATURES = {
+    "idade": "Idade",
+    "sexo": "Sexo",
+    "especialidade": "Especialidade",
+    "distancia_km": "Distância até a clínica",
+    "dias_entre_agendamento_consulta": "Antecedência do agendamento",
+    "historico_noshow": "Faltas anteriores",
+    "dia_de_semana": "Dia da semana da consulta",
+    "horario": "Horário da consulta",
+}
+
+
+def principais_motivos(explicacao: list, quantidade: int = 3) -> list[dict]:
+    """Os fatores que mais pesaram numa predição, prontos para a tela:
+    `{"rotulo", "aumenta"}`. A explicação de src/explain.py já vem ordenada
+    por |contribuição|; contribuição zero não é motivo de nada e fica de fora.
+    O número em log-odds não vai para a recepção -- fica nos detalhes
+    técnicos."""
+    motivos = []
+    for contribuicao in explicacao:
+        if contribuicao["contribuicao"] == 0:
+            continue
+        motivos.append(
+            {
+                "rotulo": ROTULOS_FEATURES.get(contribuicao["feature"], contribuicao["feature"]),
+                "aumenta": contribuicao["contribuicao"] > 0,
+            }
+        )
+        if len(motivos) == quantidade:
+            break
+    return motivos
+
 
 class ErroDesfechoForaDePrazo(Exception):
     """Desfecho pedido para consulta que ainda não aconteceu."""

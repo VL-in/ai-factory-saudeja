@@ -50,7 +50,14 @@ PERFIL_PACIENTE = "Paciente"
 PERFIL_FUNCIONARIO = "Funcionário da clínica"
 PERFIS = [PERFIL_PACIENTE, PERFIL_FUNCIONARIO]
 
-ABAS_FUNCIONARIO = ["Testar predição", "Explicabilidade", "Fila do dia", "Observabilidade"]
+# A rotina da recepção vem primeiro; o que é do time técnico (painel do SLO e
+# teste manual do modelo) fica numa aba própria, presente também em produção,
+# porque é lá que o painel do SLO de produção é lido (ADR-006).
+ABA_FILA = "Fila do dia"
+ABA_EXPLICABILIDADE = "Explicabilidade"
+ABA_TIME_TECNICO = "Time técnico"
+ABAS_FUNCIONARIO = [ABA_FILA, ABA_EXPLICABILIDADE, ABA_TIME_TECNICO]
+SUBABAS_TIME_TECNICO = ["Observabilidade", "Testar predição"]
 ABA_DEV = "Dev: disparo manual"
 
 CHAVE_RESULTADO = "ultimo_resultado"
@@ -58,11 +65,17 @@ CHAVE_PAYLOAD = "ultimo_payload"
 CHAVE_FUNCIONARIO = "funcionario"
 CHAVE_AVISO_LOGIN = "aviso_login"
 CHAVE_AGENDAMENTO_CONFIRMADO = "agendamento_confirmado"
+CHAVE_AVISO_DESFECHO = "aviso_desfecho"
 
 # Tudo que pertence a quem está logado sai junto com a sessão: sem isso, a
 # última predição (com a explicação dela) ficaria na aba "Explicabilidade" para
 # o próximo que entrasse no mesmo navegador.
-CHAVES_DA_SESSAO_DO_FUNCIONARIO = (CHAVE_FUNCIONARIO, CHAVE_RESULTADO, CHAVE_PAYLOAD)
+CHAVES_DA_SESSAO_DO_FUNCIONARIO = (
+    CHAVE_FUNCIONARIO,
+    CHAVE_RESULTADO,
+    CHAVE_PAYLOAD,
+    CHAVE_AVISO_DESFECHO,
+)
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -178,46 +191,59 @@ def _mostrar_resultado(resultado):
 
 
 def _aba_explicabilidade():
-    st.subheader("Explicabilidade (SHAP)")
+    st.subheader("Explicabilidade")
     st.caption(
-        "SLO §4: 100% das predições acompanhadas de explicação. Os valores são "
-        "contribuições em log-odds -- positivo empurra para no-show, negativo "
-        "empurra contra."
+        "Os fatores que mais pesaram na última avaliação feita em "
+        f"**{ABA_TIME_TECNICO} → Testar predição**. Para um paciente da fila, "
+        "selecione a linha dele na **Fila do dia**."
     )
 
     resultado = st.session_state.get(CHAVE_RESULTADO)
     if resultado is None:
-        st.info("Rode uma predição na aba **Testar predição** para ver a explicação.")
+        st.info(
+            f"Nenhuma avaliação feita ainda nesta sessão. Rode uma em "
+            f"**{ABA_TIME_TECNICO} → Testar predição**."
+        )
         return
 
     _mostrar_contribuicoes(resultado.explicacao, resultado.explicacao_texto)
+    with st.expander("Detalhes técnicos"):
+        st.caption(f"modelo `{resultado.model_version}`")
+        _tabela_shap(resultado.explicacao)
 
 
 def _mostrar_contribuicoes(explicacao, explicacao_texto=None):
     """Mesma renderização para a predição feita no formulário e para a que o
     job D-2 já gravou no banco (aba "Fila do dia") -- são o mesmo dado, a
-    lista de contribuições de src/explain.py, mudando só a origem."""
+    lista de contribuições de src/explain.py, mudando só a origem.
+
+    Para a recepção: os principais fatores, em português e sem número. A
+    tabela em log-odds fica em "Detalhes técnicos" (`_tabela_shap`)."""
     if not explicacao:
+        # SLO §4 exige explicação em 100% das predições: a falta dela é
+        # problema a investigar, não um gráfico em branco.
         st.warning(
-            "Predição sem explicação registrada -- o SLO §4 exige 100% de "
-            "cobertura, então isso indica um problema a investigar."
+            "Esta avaliação não tem explicação registrada. Avise o time técnico."
         )
         return
 
-    contribuicoes = pd.DataFrame(explicacao)
-    contribuicoes["efeito"] = [
-        "aumenta o risco" if c > 0 else "reduz o risco" for c in contribuicoes["contribuicao"]
+    linhas = [
+        f"- **{motivo['rotulo']}**: "
+        + ("aumenta o risco de falta" if motivo["aumenta"] else "reduz o risco de falta")
+        for motivo in logic.principais_motivos(explicacao)
     ]
-    st.dataframe(contribuicoes, hide_index=True, width="stretch")
-    st.bar_chart(contribuicoes.set_index("feature")["contribuicao"])
+    st.markdown("Principais fatores desta avaliação:\n\n" + "\n".join(linhas))
 
     if explicacao_texto:
         st.info(explicacao_texto)
-    else:
-        st.caption(
-            "Explicação em linguagem natural (LLM) ainda desativada -- plug "
-            "reservado para a integração opcional com LLM."
-        )
+
+
+def _tabela_shap(explicacao):
+    """O dado cru da explicação, para quem mantém o modelo: contribuição em
+    log-odds por feature -- positivo empurra para no-show, negativo contra.
+    O texto em linguagem natural (LLM) ainda está desativado."""
+    if explicacao:
+        st.dataframe(pd.DataFrame(explicacao), hide_index=True, width="stretch")
 
 
 def _registrar_desfecho(item):
@@ -226,7 +252,7 @@ def _registrar_desfecho(item):
     o re-treino mensal nunca tem dado real para aprender, além do
     `historico_noshow` automático do cadastro nunca contar nada de verdade."""
     st.write(f"**Registrar desfecho de {item.rotulo_paciente}**")
-    st.caption(f"Status atual: `{item.status}`")
+    st.caption(f"Situação atual: **{logic.rotulo_status(item.status)}**")
 
     if not logic.pode_registrar_desfecho(item.data_hora_agendada):
         st.info("O desfecho só pode ser registrado no dia da consulta ou depois.")
@@ -235,26 +261,50 @@ def _registrar_desfecho(item):
     col1, col2, col3 = st.columns(3)
     acoes = (
         (col1, "Consulta realizada", logic.STATUS_CONCLUIDO),
-        (col2, "Paciente faltou (no-show)", logic.STATUS_NO_SHOW),
-        (col3, "Cancelado", logic.STATUS_CANCELADO),
+        (col2, "Paciente faltou", logic.STATUS_NO_SHOW),
+        (col3, "Cancelada", logic.STATUS_CANCELADO),
     )
     for coluna, rotulo, status in acoes:
         # disabled em vez de esconder o botão: mostra que a ação já foi
         # tomada em vez de o botão simplesmente sumir da tela.
-        if coluna.button(
+        coluna.button(
             rotulo,
             key=f"desfecho_{status}_{item.id_agendamento}",
             disabled=item.status == status,
-        ):
-            try:
-                logic.atualizar_status_agendamento(
-                    item.id_agendamento, status, data_hora_agendada=item.data_hora_agendada
-                )
-            except (logic.ErroPersistencia, logic.ErroDesfechoForaDePrazo) as exc:
-                st.error(f"Não foi possível registrar o desfecho: {exc}")
-            else:
-                st.success(f"Desfecho registrado: {rotulo.lower()}.")
-                st.rerun()
+            on_click=_ao_registrar_desfecho,
+            args=(item.id_agendamento, item.data_hora_agendada, status, rotulo),
+        )
+
+
+def _ao_registrar_desfecho(id_agendamento, data_hora_agendada, status, rotulo):
+    """Callback, não `if st.button(): ... st.rerun()`: antes, o st.success
+    era descartado pelo st.rerun() logo em seguida e o funcionário clicava
+    sem ver confirmação nenhuma. O callback roda antes do script, então a
+    mesma execução já lê a fila com o status novo e mostra o aviso guardado
+    aqui (no topo da Fila do dia, que não depende de a linha continuar
+    selecionada)."""
+    try:
+        logic.atualizar_status_agendamento(
+            id_agendamento, status, data_hora_agendada=data_hora_agendada
+        )
+    except (logic.ErroPersistencia, logic.ErroDesfechoForaDePrazo) as exc:
+        st.session_state[CHAVE_AVISO_DESFECHO] = (
+            "erro",
+            f"Não foi possível registrar o desfecho: {exc}",
+        )
+    else:
+        st.session_state[CHAVE_AVISO_DESFECHO] = ("ok", f"Desfecho registrado: {rotulo.lower()}.")
+
+
+def _mostrar_aviso_desfecho():
+    aviso = st.session_state.pop(CHAVE_AVISO_DESFECHO, None)
+    if aviso is None:
+        return
+    tipo, mensagem = aviso
+    if tipo == "ok":
+        st.success(mensagem, icon=":material/check_circle:")
+    else:
+        st.error(mensagem)
 
 
 def _aba_fila_do_dia():
@@ -270,6 +320,7 @@ def _aba_fila_do_dia():
         ":material/lock: Esta tela mostra **nome de paciente** e é de uso "
         "restrito da equipe. Evite deixá-la visível para a sala de espera."
     )
+    _mostrar_aviso_desfecho()
 
     dia = st.date_input("Data da fila", value=logic.hoje_na_clinica())
 
@@ -308,8 +359,8 @@ def _aba_fila_do_dia():
                 "Horário": item.data_hora_agendada,
                 "Probabilidade": item.probabilidade,
                 "Alto risco": bool(item.classe_prevista) if item.tem_predicao else None,
-                "Fora do domínio": item.fora_do_dominio,
-                "Status": item.status,
+                "Previsão incerta": item.fora_do_dominio,
+                "Status": logic.rotulo_status(item.status),
             }
             for item in fila
         ]
@@ -330,11 +381,13 @@ def _aba_fila_do_dia():
                 format="percent", min_value=0.0, max_value=1.0
             ),
             "Alto risco": st.column_config.CheckboxColumn(),
-            "Fora do domínio": st.column_config.CheckboxColumn(
+            # "Fora do domínio" do contrato de features (src/contrato_features.py):
+            # dado que o modelo não viu no treino, probabilidade extrapolada.
+            "Previsão incerta": st.column_config.CheckboxColumn(
                 help=(
-                    "O agendamento tem algum dado que o modelo não viu no treino "
-                    "(ex.: distância acima de 50 km, antecedência acima de 90 dias). "
-                    "A probabilidade é extrapolação -- leia com cautela."
+                    "O agendamento tem dados diferentes dos que o sistema costuma "
+                    "ver (ex.: distância acima de 50 km, antecedência acima de 90 "
+                    "dias). Use a probabilidade com cautela."
                 )
             ),
         },
@@ -353,27 +406,31 @@ def _aba_fila_do_dia():
     _registrar_desfecho(item)
     st.divider()
     st.write(f"**Por que {item.rotulo_paciente} tem esse risco**")
-    # O hash continua visível, em letra miúda: é por ele que se rastreia o
-    # paciente no banco e nos logs (onde o nome nunca aparece), então sem ele o
-    # suporte perde o único identificador comum entre tela e diagnóstico.
-    st.caption(f"identificador interno: `{item.id_paciente_externo}`")
     if not item.tem_predicao:
         st.info(
             "Este agendamento ainda não foi avaliado -- a explicação aparece "
             "depois da avaliação, feita dois dias antes da consulta."
         )
-        return
+    else:
+        st.caption(f"Probabilidade de falta: **{item.probabilidade:.0%}**")
+        if item.fora_do_dominio:
+            st.warning(
+                "Previsão incerta: este agendamento tem dados diferentes dos que o "
+                "sistema costuma ver. Use a probabilidade com cautela."
+            )
+        _mostrar_contribuicoes(item.explicacao, item.explicacao_texto)
 
-    st.caption(
-        f"probabilidade {item.probabilidade:.1%} · modelo `{item.model_version}` · "
-        "explicação lida de `predicoes.explicacao_shap`, gravada junto da predição"
-    )
-    if item.fora_do_dominio:
-        st.warning(
-            "Este agendamento tem dados fora do que o modelo viu no treino -- a "
-            "probabilidade acima é uma extrapolação e merece menos confiança que as demais."
-        )
-    _mostrar_contribuicoes(item.explicacao, item.explicacao_texto)
+    # O hash continua acessível: é por ele que se rastreia o paciente no banco
+    # e nos logs (onde o nome nunca aparece), então sem ele o suporte perde o
+    # único identificador comum entre tela e diagnóstico.
+    with st.expander("Detalhes técnicos"):
+        st.caption(f"identificador interno: `{item.id_paciente_externo}`")
+        if item.tem_predicao:
+            st.caption(
+                f"probabilidade {item.probabilidade:.1%} · modelo `{item.model_version}` · "
+                "explicação lida de `predicoes.explicacao_shap`"
+            )
+            _tabela_shap(item.explicacao)
 
 
 JANELAS_OBSERVABILIDADE = {"Últimas 24h": 24, "Últimos 7 dias": 24 * 7, "Últimos 30 dias": 24 * 30}
@@ -518,16 +575,29 @@ def _visao_funcionario():
 
     abas = st.tabs(nomes)
     with abas[0]:
-        _aba_testar_predicao()
+        _aba_fila_do_dia()
+    # "Time técnico" é preenchida ANTES de "Explicabilidade", fora da ordem
+    # visual: o envio do "Testar predição" grava o resultado na sessão, e a
+    # Explicabilidade só o enxerga na mesma execução se vier depois no script.
+    with abas[2]:
+        _aba_time_tecnico()
     with abas[1]:
         _aba_explicabilidade()
-    with abas[2]:
-        _aba_fila_do_dia()
-    with abas[3]:
-        _aba_observabilidade()
     if APP_ENV == "dev":
-        with abas[4]:
+        with abas[3]:
             _aba_dev()
+
+
+def _aba_time_tecnico():
+    st.caption(
+        "Área do time técnico: o painel do SLO em produção e o teste manual do "
+        "modelo. Não faz parte da rotina da recepção."
+    )
+    observabilidade, testar_predicao = st.tabs(SUBABAS_TIME_TECNICO)
+    with observabilidade:
+        _aba_observabilidade()
+    with testar_predicao:
+        _aba_testar_predicao()
 
 
 def _novo_agendamento():

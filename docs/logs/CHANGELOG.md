@@ -20,8 +20,12 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 - **A data de nascimento passa a ser obrigatória**, entre 01/01/1900 e hoje. O formato do campo não mudou.
 - O aviso de privacidade do cadastro está em linguagem simples, com o detalhe em "Como usamos seus dados": o CPF não é guardado, nome e telefone servem ao atendimento e ao contato, e os demais dados ajudam a clínica a decidir quais consultas confirmar.
 - Depois de agendar, o formulário dá lugar à confirmação com a data e o horário da consulta, e ao botão "Fazer outro agendamento". A confirmação não promete lembrete, porque nem todo agendamento recebe um.
+- **A visão da equipe começa pela "Fila do dia"**, seguida de "Explicabilidade". O painel de observabilidade e o teste manual do modelo foram para uma aba nova, **"Time técnico"**, que continua em produção, porque é lá que os números do SLO de produção são lidos.
+- **O motivo do risco aparece em português**: os três fatores que mais pesaram na avaliação ("Faltas anteriores: aumenta o risco de falta"), no lugar da tabela de contribuições em log-odds e do gráfico que repetia a tabela. O dado cru, o identificador interno do paciente e a versão do modelo ficam em "Detalhes técnicos".
+- A situação do agendamento aparece como "Agendado", "Realizada", "Faltou" ou "Cancelada", e não mais como `agendado`, `concluido`, `no_show` ou `cancelado`. A coluna "Fora do domínio" passa a se chamar "Previsão incerta".
 
 ### Corrigido
+- Ao registrar o desfecho de um agendamento na "Fila do dia", a confirmação sumia antes de aparecer, e o funcionário não sabia se o clique tinha funcionado. Agora o aviso aparece no topo da fila.
 - Um segundo clique em "Agendar" gravava o mesmo agendamento duas vezes, porque o formulário continuava preenchido na tela.
 - A data de nascimento vinha preenchida com 01/01/1990. Quem não mexia no campo era cadastrado com essa data, e a idade errada chegava ao modelo sem ninguém perceber.
 - Sem a lista de especialidades configurada, o cadastro aceitava qualquer texto como especialidade, e o erro só aparecia no job diário, com o agendamento recusado. Agora o cadastro é recusado na hora, com uma mensagem clara.

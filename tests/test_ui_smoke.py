@@ -107,25 +107,32 @@ def test_diagnostico_tecnico_fica_na_aba_de_dev(monkeypatch):
     assert any("Supabase" in aviso.value for aviso in at.warning)
 
 
+# `at.tabs` lista também as subabas, na ordem da árvore: as do "Time técnico"
+# aparecem logo depois dela.
+ABAS_EM_PROD = [
+    "Fila do dia",
+    "Explicabilidade",
+    "Time técnico",
+    "Observabilidade",
+    "Testar predição",
+]
+
+
 def test_abas_do_funcionario_existem_em_dev(monkeypatch):
+    """A rotina da recepção primeiro; o que é do time técnico numa aba própria."""
     at = _rodar(monkeypatch, app_env="dev")
 
     rotulos = [aba.label for aba in at.tabs]
-    assert rotulos == [
-        "Testar predição",
-        "Explicabilidade",
-        "Fila do dia",
-        "Observabilidade",
-        "Dev: disparo manual",
-    ]
+    assert rotulos == [*ABAS_EM_PROD, "Dev: disparo manual"]
 
 
 def test_aba_de_dev_some_fora_do_ambiente_de_dev(monkeypatch):
+    """O "Time técnico" continua em produção: é onde o painel do SLO de
+    produção é lido (ADR-006)."""
     at = _rodar(monkeypatch, app_env="prod")
 
     rotulos = [aba.label for aba in at.tabs]
-    assert "Dev: disparo manual" not in rotulos
-    assert len(rotulos) == 4
+    assert rotulos == ABAS_EM_PROD
 
 
 def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
@@ -308,12 +315,7 @@ def test_login_bem_sucedido_libera_as_abas(monkeypatch):
     _botao(at, "Entrar").click().run()
 
     assert not at.exception
-    assert [aba.label for aba in at.tabs][:4] == [
-        "Testar predição",
-        "Explicabilidade",
-        "Fila do dia",
-        "Observabilidade",
-    ]
+    assert [aba.label for aba in at.tabs][: len(ABAS_EM_PROD)] == ABAS_EM_PROD
     assert any("recepcao@clinica.test" in legenda.value for legenda in at.sidebar.caption)
 
 
@@ -451,3 +453,59 @@ def test_aba_dev_com_job_bem_sucedido_mostra_os_contadores(monkeypatch, caches_d
     contadores = {m.label: m.value for m in at.metric}
     assert contadores["Mensagens disparadas"] == "2"
     assert any("sem erros" in s.value for s in at.success)
+
+
+# --- visão do funcionário (revisão de UX, bloco F) ------------------------------
+
+
+def test_fila_mostra_status_e_previsao_incerta_em_linguagem_da_recepcao(
+    monkeypatch, caches_do_streamlit_limpos
+):
+    fila = [_item_fila(0, 0.81, 1, fora_do_dominio=True, status=logic.STATUS_NO_SHOW)]
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", lambda dia: fila)
+
+    at = _rodar(monkeypatch)
+
+    tabela = at.dataframe[0].value
+    assert "Fora do domínio" not in tabela.columns
+    assert bool(tabela["Previsão incerta"].iloc[0])
+    assert tabela["Status"].iloc[0] == "Faltou"
+
+
+def test_aviso_de_desfecho_aparece_na_fila_e_some_depois(monkeypatch, caches_do_streamlit_limpos):
+    """Antes, o st.success do desfecho era descartado pelo st.rerun() logo em
+    seguida: o funcionário clicava sem ver confirmação nenhuma. Agora o
+    callback guarda o aviso, e a Fila do dia o mostra uma vez."""
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", lambda dia: [_item_fila(0, 0.81, 1)])
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("PREDICT_BACKEND", "processo")
+    monkeypatch.setenv("SUPABASE_URL", "")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "")
+    at = AppTest.from_file(CAMINHO_APP, default_timeout=TIMEOUT)
+    at.session_state["funcionario"] = _sessao()
+    at.session_state["aviso_desfecho"] = ("ok", "Desfecho registrado: paciente faltou.")
+    at.run()
+    at.sidebar.radio[0].set_value(PERFIL_FUNCIONARIO).run()
+
+    assert not at.exception
+    assert any("Desfecho registrado" in s.value for s in at.success)
+    assert "aviso_desfecho" not in at.session_state
+
+    at.run()
+
+    assert not any("Desfecho registrado" in s.value for s in at.success)
+
+
+def test_explicabilidade_mostra_fatores_em_portugues_na_mesma_execucao(monkeypatch):
+    """A aba "Explicabilidade" vem antes do "Time técnico" na tela, mas é
+    preenchida depois no script -- senão só enxergaria a predição na execução
+    seguinte."""
+    at = _rodar(monkeypatch, backend="processo")
+    _botao(at, "Prever no-show").click().run()
+
+    assert not at.exception
+    fatores = [m.value for m in at.markdown if m.value.startswith("Principais fatores")]
+    assert fatores
+    assert "historico_noshow" not in fatores[0]
+    assert "log-odds" not in fatores[0]
+    assert "Detalhes técnicos" in [e.label for e in at.expander]
