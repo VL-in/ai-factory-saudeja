@@ -16,6 +16,15 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 - A barra lateral não mostra mais o ambiente, o modo de predição nem o status do banco, que apareciam para qualquer visitante. Esse diagnóstico passa para a aba "Dev: disparo manual", que só existe no ambiente de desenvolvimento. Em produção, um banco fora do ar continua aparecendo como erro na "Fila do dia" e no cadastro.
 - Botões principais e destaques em verde-azulado, nos temas claro e escuro, no lugar do vermelho padrão do Streamlit, que num contexto de saúde se confundia com aviso de erro.
 - Os textos da "Fila do dia" usam a linguagem da recepção, sem termos técnicos como "job D-2" e "SHAP", e os ícones da interface seguem um único estilo.
+- **O cadastro do paciente mostra todos os campos com problema de uma vez.** Antes, o agendamento parava no primeiro erro, e o paciente precisava reenviar uma vez para cada campo errado.
+- **A data de nascimento passa a ser obrigatória**, entre 01/01/1900 e hoje. O formato do campo não mudou.
+- O aviso de privacidade do cadastro está em linguagem simples, com o detalhe em "Como usamos seus dados": o CPF não é guardado, nome e telefone servem ao atendimento e ao contato, e os demais dados ajudam a clínica a decidir quais consultas confirmar.
+- Depois de agendar, o formulário dá lugar à confirmação com a data e o horário da consulta, e ao botão "Fazer outro agendamento". A confirmação não promete lembrete, porque nem todo agendamento recebe um.
+
+### Corrigido
+- Um segundo clique em "Agendar" gravava o mesmo agendamento duas vezes, porque o formulário continuava preenchido na tela.
+- A data de nascimento vinha preenchida com 01/01/1990. Quem não mexia no campo era cadastrado com essa data, e a idade errada chegava ao modelo sem ninguém perceber.
+- Sem a lista de especialidades configurada, o cadastro aceitava qualquer texto como especialidade, e o erro só aparecia no job diário, com o agendamento recusado. Agora o cadastro é recusado na hora, com uma mensagem clara.
 
 ## [v2.0.0] (Vanessa + Claude) - 2026-10-04
 

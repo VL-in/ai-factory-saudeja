@@ -7,7 +7,7 @@ gating de APP_ENV e de login, placeholders dos passos futuros) e UM caminho
 feliz ponta a ponta pelo formulário. A lógica de predição e a de autenticação
 são cobertas por tests/test_ui_logic.py -- aqui o que se testa é a tela.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import streamlit as st
@@ -139,13 +139,77 @@ def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
     assert not at.exception
     assert at.text_input  # campos de nome completo/CPF, não mais placeholder
 
-    at.text_input[0].set_value("Paciente de Teste").run()  # nome completo
-    at.text_input[1].set_value("111.444.777-35").run()  # CPF válido
-    at.text_input[2].set_value("(11) 98765-4321").run()  # telefone válido
+    _preencher_cadastro_valido(at)
     _botao(at, "Agendar").click().run()
 
     assert not at.exception
     assert any("cadastrar" in erro.value.lower() for erro in at.error)
+
+
+def _preencher_cadastro_valido(at):
+    at.text_input[0].set_value("Paciente de Teste")  # nome completo
+    at.text_input[1].set_value("111.444.777-35")  # CPF válido
+    at.text_input[2].set_value("(11) 98765-4321")  # telefone válido
+    # Sem valor padrão desde a revisão de UX: precisa ser preenchida.
+    nascimento = next(d for d in at.date_input if d.label == "Data de nascimento")
+    nascimento.set_value(date(1990, 1, 1))
+
+
+def test_cadastro_em_branco_lista_todos_os_problemas_sem_tocar_o_banco(monkeypatch):
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    _botao(at, "Agendar").click().run()
+
+    assert not at.exception
+    assert not at.error  # não chegou à persistência
+    aviso = next(w.value for w in at.warning if "Corrija os campos" in w.value)
+    for problema in ("Nome inválido", "CPF inválido", "Telefone inválido", "data de nascimento"):
+        assert problema in aviso
+
+
+def test_data_de_nascimento_comeca_vazia(monkeypatch):
+    """Um 01/01/1990 pré-preenchido e esquecido virava idade errada no modelo."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    nascimento = next(d for d in at.date_input if d.label == "Data de nascimento")
+    assert nascimento.value is None
+
+
+def test_agendamento_confirmado_troca_o_formulario_pela_confirmacao(monkeypatch):
+    """Com o form ainda na tela, um segundo clique em "Agendar" gravava o
+    mesmo agendamento duas vezes. A confirmação é neutra: nem todo
+    agendamento recebe lembrete."""
+    chamadas = []
+    monkeypatch.setattr(
+        logic, "cadastrar_paciente_e_agendamento", lambda **kw: chamadas.append(kw) or {}
+    )
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    _preencher_cadastro_valido(at)
+    _botao(at, "Agendar").click().run()
+
+    assert not at.exception
+    assert len(chamadas) == 1
+    confirmacao = next(s.value for s in at.success)
+    assert confirmacao.startswith("Agendamento confirmado")
+    assert "lembrete" not in confirmacao.lower()
+    assert not [b for b in at.button if b.label == "Agendar"]
+
+    _botao(at, "Fazer outro agendamento").click().run()
+
+    assert not at.exception
+    assert not at.success
+    assert [b for b in at.button if b.label == "Agendar"]
+    assert at.text_input[0].value == ""
+
+
+def test_aviso_de_privacidade_do_paciente_sem_jargao_tecnico(monkeypatch):
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    textos = " ".join(c.value for c in at.caption) + " ".join(m.value for m in at.markdown)
+    for jargao in ("hash", "ADR", "Infobip", "LLM", "dataset", "features do modelo", ".md"):
+        assert jargao not in textos
+    assert [e.label for e in at.expander] == ["Como usamos seus dados"]
 
 
 def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypatch):

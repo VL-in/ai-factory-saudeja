@@ -797,3 +797,105 @@ def test_recusa_do_repositorio_por_prazo_vira_erro_de_prazo_e_nao_de_persistenci
 
     with pytest.raises(logic.ErroDesfechoForaDePrazo):
         logic.atualizar_status_agendamento("a1", logic.STATUS_NO_SHOW)
+
+
+# --- validação completa do cadastro (revisão de UX, 2026-10-05) -----------------
+
+HOJE_FIXO = date(2026, 9, 29)
+
+
+def _campos_validos(**sobrescritos):
+    campos = {
+        "nome_completo": "Ana Souza",
+        "cpf": "529.982.247-25",
+        "telefone": "(11) 98765-4321",
+        "data_nascimento": date(1990, 1, 1),
+        "especialidade": "cardiologia",
+        "data_consulta": date(2026, 9, 30),
+        "hora_consulta": time(10, 0),
+    }
+    campos.update(sobrescritos)
+    return campos
+
+
+@pytest.fixture
+def hoje_fixo(monkeypatch):
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: HOJE_FIXO)
+
+
+def test_validar_cadastro_aceita_formulario_correto(hoje_fixo):
+    assert logic.validar_cadastro(**_campos_validos()) == []
+
+
+def test_validar_cadastro_devolve_todos_os_problemas_de_uma_vez(hoje_fixo):
+    """Parar no primeiro erro obrigava a reenviar uma vez por campo errado."""
+    problemas = logic.validar_cadastro(
+        **_campos_validos(
+            nome_completo="",
+            cpf="123",
+            telefone="9",
+            data_nascimento=None,
+            especialidade="cardio",
+            hora_consulta=None,
+        )
+    )
+
+    assert len(problemas) == 6
+    assert problemas[0].startswith("Nome inválido")  # na ordem dos campos da tela
+    assert "Informe a data de nascimento." in problemas
+
+
+@pytest.mark.parametrize(
+    "data_nascimento, valida",
+    [
+        (date(1900, 1, 1), True),
+        (date(1899, 12, 31), False),
+        (HOJE_FIXO, True),  # recém-nascido: a clínica atende pediatria
+        (HOJE_FIXO + timedelta(days=1), False),
+        (None, False),
+    ],
+)
+def test_data_nascimento_entre_1900_e_hoje(data_nascimento, valida):
+    assert logic.data_nascimento_valida(data_nascimento, hoje=HOJE_FIXO) is valida
+
+
+def test_especialidade_fora_da_lista_e_recusada(hoje_fixo):
+    problemas = logic.validar_cadastro(**_campos_validos(especialidade="cardio"))
+
+    assert problemas == ["Especialidade inválida -- escolha uma das opções da lista."]
+
+
+def test_sem_lista_de_especialidades_o_cadastro_e_recusado(hoje_fixo, monkeypatch):
+    """Antes, sem lista, o formulário caía em texto livre e gravava qualquer
+    coisa -- o erro só aparecia dias depois, como quarentena no job D-2."""
+    monkeypatch.setattr(logic, "listar_especialidades", lambda: [])
+
+    problemas = logic.validar_cadastro(**_campos_validos())
+
+    assert len(problemas) == 1
+    assert "especialidades não está configurada" in problemas[0]
+
+
+def test_cadastro_com_varios_erros_nao_toca_o_banco_e_lista_todos(hoje_fixo, monkeypatch):
+    def _nao_deveria_ser_chamado(**kwargs):
+        raise AssertionError("cadastro chegou ao banco com campos inválidos")
+
+    monkeypatch.setattr(logic.repositories, "inserir_paciente", _nao_deveria_ser_chamado)
+
+    with pytest.raises(logic.ErroValidacaoCadastro) as erro:
+        logic.cadastrar_paciente_e_agendamento(
+            cpf="123",
+            telefone="(11) 98765-4321",
+            data_nascimento=None,
+            sexo="F",
+            especialidade="cardiologia",
+            distancia_km=5.5,
+            data_consulta=date(2026, 9, 30),
+            hora_consulta=time(10, 0),
+            nome_completo="Ana Souza",
+        )
+
+    assert erro.value.problemas == [
+        "CPF inválido -- confira os números digitados.",
+        "Informe a data de nascimento.",
+    ]

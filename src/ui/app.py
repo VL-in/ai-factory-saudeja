@@ -57,6 +57,7 @@ CHAVE_RESULTADO = "ultimo_resultado"
 CHAVE_PAYLOAD = "ultimo_payload"
 CHAVE_FUNCIONARIO = "funcionario"
 CHAVE_AVISO_LOGIN = "aviso_login"
+CHAVE_AGENDAMENTO_CONFIRMADO = "agendamento_confirmado"
 
 # Tudo que pertence a quem está logado sai junto com a sessão: sem isso, a
 # última predição (com a explicação dela) ficaria na aba "Explicabilidade" para
@@ -529,19 +530,87 @@ def _visao_funcionario():
             _aba_dev()
 
 
+def _novo_agendamento():
+    st.session_state.pop(CHAVE_AGENDAMENTO_CONFIRMADO, None)
+
+
+def _mostrar_confirmacao(mensagem: str):
+    st.success(mensagem, icon=":material/event_available:")
+    st.caption("Se precisar remarcar ou cancelar, entre em contato com a clínica.")
+    # on_click, não `if st.button(...): st.rerun()`: o callback roda antes do
+    # script, então a execução do clique já desenha o formulário vazio.
+    st.button("Fazer outro agendamento", on_click=_novo_agendamento)
+
+
 def _visao_paciente():
     st.subheader("Cadastro e agendamento")
-    st.caption(
-        "**O CPF nunca é gravado** -- o identificador do paciente no banco é o "
-        "hash dele, gerado automaticamente (LGPD, minimização de PII por "
-        "design, docs/architecture.md §4.1), e o histórico de no-show é "
-        "calculado pela clínica, não autodeclarado. Nome completo e telefone "
-        "**são** gravados: o nome para a equipe conseguir chamar o paciente na "
-        "fila do dia (ADR-007) e o telefone porque é para onde o lembrete real "
-        "é enviado (Infobip). Nenhum dos dois sai para log, para o "
-        "dataset de treino, para a API pública ou para o LLM -- ver "
-        "docs/LGPD.md."
+
+    # Confirmação no lugar do formulário: com o form ainda preenchido na tela,
+    # um segundo clique em "Agendar" gravava o mesmo agendamento duas vezes.
+    confirmacao = st.session_state.get(CHAVE_AGENDAMENTO_CONFIRMADO)
+    if confirmacao is not None:
+        _mostrar_confirmacao(confirmacao)
+        return
+
+    # Num st.empty() para sumir na mesma execução do agendamento bem-sucedido,
+    # sem st.rerun().
+    area_do_formulario = st.empty()
+    with area_do_formulario.container():
+        campos, enviado = _formulario_paciente()
+
+    if not enviado:
+        return
+
+    # Sem checagem própria aqui: a validação inteira mora em
+    # logic.cadastrar_paciente_e_agendamento, a única porta para o banco, e
+    # devolve todos os problemas de uma vez.
+    try:
+        logic.cadastrar_paciente_e_agendamento(**campos)
+    except logic.ErroValidacaoCadastro as exc:
+        st.warning(
+            "Corrija os campos abaixo para concluir o agendamento:\n\n"
+            + "\n".join(f"- {problema}" for problema in exc.problemas)
+        )
+        return
+    except logic.ErroPersistencia as exc:
+        st.error(f"Não foi possível cadastrar: {exc}")
+        return
+
+    # Mensagem neutra: nem todo agendamento recebe lembrete (só os
+    # priorizados), então a confirmação não promete contato.
+    mensagem = (
+        f"Agendamento confirmado para {campos['data_consulta']:%d/%m/%Y} às "
+        f"{campos['hora_consulta'].strftime('%H:%M')}."
     )
+    st.session_state[CHAVE_AGENDAMENTO_CONFIRMADO] = mensagem
+    area_do_formulario.empty()
+    _mostrar_confirmacao(mensagem)
+
+
+def _formulario_paciente() -> tuple[dict, bool]:
+    """Desenha o aviso de privacidade e o formulário; devolve os campos já
+    no formato de logic.cadastrar_paciente_e_agendamento e se houve envio."""
+    # Transparência em linguagem simples (LGPD art. 9º). O detalhe técnico
+    # do mesmo compromisso -- CPF só como hash (docs/architecture.md §4.1),
+    # nome para a fila do dia (ADR-007), telefone para o lembrete, nada disso
+    # em log, dataset de treino, API pública ou LLM -- está em docs/LGPD.md.
+    st.caption(
+        "Seus dados são usados só para o seu atendimento nesta clínica. "
+        "O CPF não é armazenado."
+    )
+    with st.expander("Como usamos seus dados"):
+        st.markdown(
+            "- **CPF**: serve só para identificar você no cadastro. Ele não é "
+            "guardado -- guardamos apenas um código gerado a partir dele.\n"
+            "- **Nome e telefone**: ficam guardados para a equipe chamar você "
+            "no atendimento e entrar em contato sobre a consulta.\n"
+            "- **Data de nascimento, sexo, especialidade e distância**, junto "
+            "com o seu histórico de comparecimento nesta clínica, ajudam a "
+            "equipe a decidir quais consultas confirmar com antecedência.\n"
+            "- Nome, telefone e CPF não entram em registros técnicos nem nos "
+            "dados usados para aprimorar o sistema.\n\n"
+            "Dúvidas sobre os seus dados: fale com a clínica."
+        )
 
     especialidades = logic.listar_especialidades()
 
@@ -569,11 +638,15 @@ def _visao_paciente():
         )
 
         col1, col2 = st.columns(2)
+        # Sem valor padrão: um 01/01/1990 pré-preenchido e esquecido virava
+        # idade errada no modelo sem ninguém perceber; vazio, a validação
+        # cobra o campo. O formato fica fixo, igual ao dos demais campos de data.
         data_nascimento = col1.date_input(
             "Data de nascimento",
-            value=date(1990, 1, 1),
-            min_value=date(1900, 1, 1),
-            max_value=logic.hoje_na_clinica(),
+            value=None,
+            min_value=logic.DATA_NASCIMENTO_MINIMA,
+            max_value=hoje,
+            format="YYYY/MM/DD",
         )
         sexo = col2.selectbox("Sexo", options=["F", "M"])
 
@@ -581,6 +654,8 @@ def _visao_paciente():
         if especialidades:
             especialidade = col3.selectbox("Especialidade", options=especialidades)
         else:
+            # A validação recusa o cadastro nesse caso (lista não configurada);
+            # o campo continua na tela para o formulário não mudar de forma.
             especialidade = col3.text_input("Especialidade", value="")
         distancia_km = col4.number_input(
             "Distância (km)", min_value=0.0, max_value=500.0, value=5.5, step=0.5
@@ -597,49 +672,23 @@ def _visao_paciente():
         else:
             hora_consulta = None
         st.caption(
-            f"Antecedência do agendamento: **{logic.dias_ate_consulta(data_consulta)} dia(s)** "
-            "-- calculada a partir da data escolhida, é uma das features do modelo."
+            f"Antecedência do agendamento: **{logic.dias_ate_consulta(data_consulta)} dia(s)**."
         )
 
         enviado = st.form_submit_button("Agendar", type="primary")
 
-    if not enviado:
-        return
-
-    if not nome_completo:
-        st.warning("Informe o nome completo do paciente.")
-        return
-    if hora_consulta is None:
-        st.warning("Escolha uma data em que a clínica atenda.")
-        return
-
-    try:
-        logic.cadastrar_paciente_e_agendamento(
-            cpf=cpf,
-            telefone=telefone,
-            data_nascimento=data_nascimento,
-            sexo=sexo,
-            especialidade=especialidade,
-            distancia_km=distancia_km,
-            data_consulta=data_consulta,
-            hora_consulta=hora_consulta,
-            nome_completo=nome_completo,
-        )
-    except logic.ErroValidacaoCadastro as exc:
-        st.warning(str(exc))
-        return
-    except logic.ErroPersistencia as exc:
-        st.error(f"Não foi possível cadastrar: {exc}")
-        return
-
-    st.success(
-        f"Agendamento criado para {nome_completo} em "
-        f"{data_consulta:%d/%m/%Y} às {hora_consulta.strftime('%H:%M')}."
-    )
-    st.caption(
-        "A predição de no-show deste agendamento será calculada pelo job D-2 "
-        "até dois dias antes da consulta."
-    )
+    campos = {
+        "cpf": cpf,
+        "telefone": telefone,
+        "data_nascimento": data_nascimento,
+        "sexo": sexo,
+        "especialidade": especialidade,
+        "distancia_km": distancia_km,
+        "data_consulta": data_consulta,
+        "hora_consulta": hora_consulta,
+        "nome_completo": nome_completo,
+    }
+    return campos, enviado
 
 
 def _encerrar_sessao(aviso: str | None = None):

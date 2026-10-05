@@ -70,7 +70,15 @@ class ErroValidacaoCadastro(Exception):
     """Dado do formulário de cadastro recusado antes de chegar ao
     banco -- CPF com dígito verificador inválido, horário fora da grade de
     funcionamento da clínica (agenda_clinica). Mesma filosofia de
-    ErroValidacao para a predição: culpa do preenchimento, não do sistema."""
+    ErroValidacao para a predição: culpa do preenchimento, não do sistema.
+
+    Carrega TODOS os problemas do formulário (`problemas`), não só o
+    primeiro: parar no primeiro obrigava o paciente a reenviar uma vez por
+    campo errado para descobrir o seguinte."""
+
+    def __init__(self, problemas: list[str] | str):
+        self.problemas = [problemas] if isinstance(problemas, str) else list(problemas)
+        super().__init__("\n".join(self.problemas))
 
 
 @dataclass(frozen=True)
@@ -544,15 +552,93 @@ def nome_valido(nome_completo: str) -> bool:
     return NOME_MINIMO <= len((nome_completo or "").strip()) <= NOME_MAXIMO
 
 
+# Limite inferior do formulário e da validação do cadastro (decisão da autora,
+# 2026-10-05). Note que o contrato de features aceita idade só até 120 anos
+# (`contrato_features`, faixa de negócio): quem nasceu antes disso passa aqui
+# e é recusado no job D-2.
+DATA_NASCIMENTO_MINIMA = date(1900, 1, 1)
+
+
+def data_nascimento_valida(data_nascimento: date | None, hoje: date | None = None) -> bool:
+    """Obrigatória e dentro da faixa do formulário. Sem limite mínimo de
+    idade: a clínica atende pediatria, então um recém-nascido é paciente
+    válido."""
+    if data_nascimento is None:
+        return False
+    return DATA_NASCIMENTO_MINIMA <= data_nascimento <= (hoje or hoje_na_clinica())
+
+
+def validar_cadastro(
+    nome_completo: str | None,
+    cpf: str,
+    telefone: str,
+    data_nascimento: date | None,
+    especialidade: str,
+    data_consulta: date,
+    hora_consulta: time | None,
+) -> list[str]:
+    """Todos os problemas do formulário, na ordem em que os campos aparecem
+    na tela -- lista vazia quando dá para gravar. Só confere a forma: não
+    muda valor, formato nem opção que vira feature do modelo.
+
+    `nome_completo=None` continua aceito (quem chama sem nome, ver
+    `cadastrar_paciente_e_agendamento`); string vazia é campo em branco."""
+    hoje = hoje_na_clinica()
+    problemas = []
+
+    if nome_completo is not None and not nome_valido(nome_completo):
+        problemas.append(
+            f"Nome inválido -- informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
+        )
+    if not cpf_valido(cpf):
+        problemas.append("CPF inválido -- confira os números digitados.")
+    if not telefone_valido(telefone):
+        problemas.append("Telefone inválido -- informe DDD + número (ex. (11) 98765-4321).")
+    if data_nascimento is None:
+        problemas.append("Informe a data de nascimento.")
+    elif not data_nascimento_valida(data_nascimento, hoje):
+        problemas.append(
+            "Data de nascimento inválida -- informe uma data entre "
+            f"{DATA_NASCIMENTO_MINIMA:%d/%m/%Y} e hoje."
+        )
+
+    # Antes, sem lista de especialidades, o formulário caía em texto livre e
+    # gravava qualquer coisa -- o erro só aparecia no job D-2, dias depois,
+    # como agendamento em quarentena.
+    especialidades = listar_especialidades()
+    if not especialidades:
+        problemas.append(
+            "Agendamento indisponível no momento: a lista de especialidades não "
+            "está configurada. Tente mais tarde ou fale com a clínica."
+        )
+    elif especialidade not in especialidades:
+        problemas.append("Especialidade inválida -- escolha uma das opções da lista.")
+
+    if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje):
+        problemas.append(
+            "Data da consulta inválida -- escolha entre hoje e "
+            f"{agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS} dias à frente."
+        )
+    if hora_consulta is None:
+        problemas.append("Escolha uma data em que a clínica atenda (não há horários aos domingos).")
+    elif not agenda_clinica.horario_valido(data_consulta, hora_consulta):
+        problemas.append(
+            "Horário fora do funcionamento da clínica para esta data (seg-sex "
+            "08h-11h30/13h-18h, sáb 08h-11h30, fechado aos domingos)."
+        )
+
+    return problemas
+
+
 def cadastrar_paciente_e_agendamento(
     cpf: str,
     telefone: str,
-    data_nascimento: date,
+    data_nascimento: date | None,
     sexo: str,
     especialidade: str,
     distancia_km: float,
     data_consulta: date,
-    hora_consulta: time,
+    hora_consulta: time | None,
     nome_completo: str | None = None,
 ) -> dict:
     """Cadastro do paciente (visão Paciente) --
@@ -580,26 +666,19 @@ def cadastrar_paciente_e_agendamento(
     `timestamptz`, então gravar um datetime naive deixaria o Postgres
     interpretá-lo no fuso do servidor (UTC no container) e a consulta
     apareceria 3h deslocada na fila do dia."""
-    if nome_completo is not None and not nome_valido(nome_completo):
-        raise ErroValidacaoCadastro(
-            f"Nome inválido -- informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
-        )
-    if not cpf_valido(cpf):
-        raise ErroValidacaoCadastro("CPF inválido -- confira os números digitados.")
-    if not telefone_valido(telefone):
-        raise ErroValidacaoCadastro(
-            "Telefone inválido -- informe DDD + número (ex. (11) 98765-4321)."
-        )
-    if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje_na_clinica()):
-        raise ErroValidacaoCadastro(
-            "Data da consulta inválida -- escolha entre hoje e "
-            f"{agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS} dias à frente."
-        )
-    if not agenda_clinica.horario_valido(data_consulta, hora_consulta):
-        raise ErroValidacaoCadastro(
-            "Horário fora do funcionamento da clínica para esta data (seg-sex "
-            "08h-11h30/13h-18h, sáb 08h-11h30, fechado aos domingos)."
-        )
+    problemas = validar_cadastro(
+        nome_completo=nome_completo,
+        cpf=cpf,
+        telefone=telefone,
+        data_nascimento=data_nascimento,
+        especialidade=especialidade,
+        data_consulta=data_consulta,
+        hora_consulta=hora_consulta,
+    )
+    # As duas checagens de None nunca valem sem `problemas` (validar_cadastro
+    # já as reporta): estão aqui só para o mypy estreitar o tipo abaixo.
+    if problemas or data_nascimento is None or hora_consulta is None:
+        raise ErroValidacaoCadastro(problemas)
 
     try:
         paciente = repositories.inserir_paciente(
