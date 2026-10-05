@@ -8,7 +8,7 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [Não publicado] (Vanessa + Claude) - 2026-10-05
+## [v2.1.0] (Vanessa + Claude) - 2026-10-05
 
 ### Modificado
 - **A interface abre na tela de agendamento do paciente.** Antes, quem chegava pela URL pública caía no login da equipe. Para entrar, a equipe escolhe o perfil "Funcionário da clínica" na barra lateral.
