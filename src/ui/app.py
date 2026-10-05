@@ -50,15 +50,16 @@ PERFIL_PACIENTE = "Paciente"
 PERFIL_FUNCIONARIO = "Funcionário da clínica"
 PERFIS = [PERFIL_PACIENTE, PERFIL_FUNCIONARIO]
 
-# A rotina da recepção vem primeiro; o que é do time técnico (painel do SLO e
-# teste manual do modelo) fica numa aba própria, presente também em produção,
-# porque é lá que o painel do SLO de produção é lido (ADR-006).
+# A rotina da recepção vem primeiro; o que é do time técnico (painel do SLO,
+# teste manual do modelo e a explicação dele, disparo manual do job) fica numa
+# aba própria, presente também em produção, porque é lá que o painel do SLO de
+# produção é lido (ADR-006). A explicação de cada paciente continua no
+# detalhe da linha da Fila do dia.
 ABA_FILA = "Fila do dia"
-ABA_EXPLICABILIDADE = "Explicabilidade"
 ABA_TIME_TECNICO = "Time técnico"
-ABAS_FUNCIONARIO = [ABA_FILA, ABA_EXPLICABILIDADE, ABA_TIME_TECNICO]
-SUBABAS_TIME_TECNICO = ["Observabilidade", "Testar predição"]
-ABA_DEV = "Dev: disparo manual"
+ABAS_FUNCIONARIO = [ABA_FILA, ABA_TIME_TECNICO]
+SUBABAS_TIME_TECNICO = ["Observabilidade", "Testar predição", "Explicabilidade"]
+ABA_DEV = "Dev: disparo manual"  # subaba do Time técnico, só com APP_ENV=dev
 
 CHAVE_RESULTADO = "ultimo_resultado"
 CHAVE_PAYLOAD = "ultimo_payload"
@@ -193,17 +194,14 @@ def _mostrar_resultado(resultado):
 def _aba_explicabilidade():
     st.subheader("Explicabilidade")
     st.caption(
-        "Os fatores que mais pesaram na última avaliação feita em "
-        f"**{ABA_TIME_TECNICO} → Testar predição**. Para um paciente da fila, "
-        "selecione a linha dele na **Fila do dia**."
+        "Os fatores que mais pesaram na última avaliação feita em **Testar "
+        "predição**. Para um paciente da fila, selecione a linha dele na "
+        f"**{ABA_FILA}**."
     )
 
     resultado = st.session_state.get(CHAVE_RESULTADO)
     if resultado is None:
-        st.info(
-            f"Nenhuma avaliação feita ainda nesta sessão. Rode uma em "
-            f"**{ABA_TIME_TECNICO} → Testar predição**."
-        )
+        st.info("Nenhuma avaliação feita ainda nesta sessão. Rode uma em **Testar predição**.")
         return
 
     _mostrar_contribuicoes(resultado.explicacao, resultado.explicacao_texto)
@@ -569,35 +567,35 @@ def _aba_dev():
 
 
 def _visao_funcionario():
-    nomes = list(ABAS_FUNCIONARIO)
-    if APP_ENV == "dev":
-        nomes.append(ABA_DEV)
-
-    abas = st.tabs(nomes)
-    with abas[0]:
+    fila, time_tecnico = st.tabs(ABAS_FUNCIONARIO)
+    with fila:
         _aba_fila_do_dia()
-    # "Time técnico" é preenchida ANTES de "Explicabilidade", fora da ordem
-    # visual: o envio do "Testar predição" grava o resultado na sessão, e a
-    # Explicabilidade só o enxerga na mesma execução se vier depois no script.
-    with abas[2]:
+    with time_tecnico:
         _aba_time_tecnico()
-    with abas[1]:
-        _aba_explicabilidade()
-    if APP_ENV == "dev":
-        with abas[3]:
-            _aba_dev()
 
 
 def _aba_time_tecnico():
     st.caption(
-        "Área do time técnico: o painel do SLO em produção e o teste manual do "
-        "modelo. Não faz parte da rotina da recepção."
+        "Área do time técnico: o painel do SLO em produção, o teste manual do "
+        "modelo e a explicação dele. Não faz parte da rotina da recepção."
     )
-    observabilidade, testar_predicao = st.tabs(SUBABAS_TIME_TECNICO)
-    with observabilidade:
+    nomes = list(SUBABAS_TIME_TECNICO)
+    if APP_ENV == "dev":
+        nomes.append(ABA_DEV)
+
+    # "Explicabilidade" vem depois de "Testar predição" também no script: o
+    # envio do teste grava o resultado na sessão, e a explicação só o enxerga
+    # na mesma execução se for desenhada depois.
+    subabas = st.tabs(nomes)
+    with subabas[0]:
         _aba_observabilidade()
-    with testar_predicao:
+    with subabas[1]:
         _aba_testar_predicao()
+    with subabas[2]:
+        _aba_explicabilidade()
+    if APP_ENV == "dev":
+        with subabas[3]:
+            _aba_dev()
 
 
 def _novo_agendamento():

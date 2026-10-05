@@ -111,15 +111,16 @@ def test_diagnostico_tecnico_fica_na_aba_de_dev(monkeypatch):
 # aparecem logo depois dela.
 ABAS_EM_PROD = [
     "Fila do dia",
-    "Explicabilidade",
     "Time técnico",
     "Observabilidade",
     "Testar predição",
+    "Explicabilidade",
 ]
 
 
 def test_abas_do_funcionario_existem_em_dev(monkeypatch):
-    """A rotina da recepção primeiro; o que é do time técnico numa aba própria."""
+    """A rotina da recepção primeiro; o que é do time técnico numa aba própria,
+    com o disparo manual do job como última subaba (só em dev)."""
     at = _rodar(monkeypatch, app_env="dev")
 
     rotulos = [aba.label for aba in at.tabs]
@@ -497,9 +498,8 @@ def test_aviso_de_desfecho_aparece_na_fila_e_some_depois(monkeypatch, caches_do_
 
 
 def test_explicabilidade_mostra_fatores_em_portugues_na_mesma_execucao(monkeypatch):
-    """A aba "Explicabilidade" vem antes do "Time técnico" na tela, mas é
-    preenchida depois no script -- senão só enxergaria a predição na execução
-    seguinte."""
+    """A subaba "Explicabilidade" é desenhada depois de "Testar predição" no
+    script -- senão só enxergaria a predição na execução seguinte."""
     at = _rodar(monkeypatch, backend="processo")
     _botao(at, "Prever no-show").click().run()
 
