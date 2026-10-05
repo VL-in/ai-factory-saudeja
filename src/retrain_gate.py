@@ -42,7 +42,7 @@ No código 0, o campeão só é reescrito direto no bootstrap (sem campeão para
 o canário enfrentar) ou com `canario.habilitado: false`. O workflow faz
 `dvc push` + PR nos dois casos.
 
-**Canário (ADR-009).** Aprovar no gate deixou de ser promover:
+**Canário (ADR-008).** Aprovar no gate deixou de ser promover:
 o fold de teste mede o modelo offline, e o canário mede o mesmo modelo na
 fila real, numa fração dela, contra o campeão no mesmo período
 (`src/canario.py`). Por isso, com campeão registrado, o código 0 grava o
@@ -391,7 +391,7 @@ def montar_champion(
         "_comentario": (
             "Campeão em produção. Reescrito SOMENTE por "
             "src/retrain_gate.py (promoção direta) ou por src/canario.py (promoção "
-            "depois do canário, ADR-009). Versionado em git porque o MLflow deste "
+            "depois do canário, ADR-008). Versionado em git porque o MLflow deste "
             "repo é efêmero e não sobrevive entre execuções do workflow mensal."
         ),
         "model_version": calcular_model_version(caminho_modelo),
@@ -497,7 +497,7 @@ def formatar_resumo(
         linhas += [
             "O desafiante **não** substituiu o campeão: ele entra como canário "
             "(`data/canario/`) e decide só uma fração da fila do job D-2 até os "
-            "guardrails de produção confirmarem a promoção (`canario.yml`, ADR-009). "
+            "guardrails de produção confirmarem a promoção (`canario.yml`, ADR-008). "
             "`data/champion_metrics.json` e o `dvc.lock` de `main` seguem sendo os do "
             "campeão.",
             "",

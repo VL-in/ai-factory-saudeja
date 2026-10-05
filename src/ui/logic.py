@@ -70,7 +70,15 @@ class ErroValidacaoCadastro(Exception):
     """Dado do formulário de cadastro recusado antes de chegar ao
     banco -- CPF com dígito verificador inválido, horário fora da grade de
     funcionamento da clínica (agenda_clinica). Mesma filosofia de
-    ErroValidacao para a predição: culpa do preenchimento, não do sistema."""
+    ErroValidacao para a predição: culpa do preenchimento, não do sistema.
+
+    Carrega TODOS os problemas do formulário (`problemas`), não só o
+    primeiro: parar no primeiro obrigava o paciente a reenviar uma vez por
+    campo errado para descobrir o seguinte."""
+
+    def __init__(self, problemas: list[str] | str):
+        self.problemas = [problemas] if isinstance(problemas, str) else list(problemas)
+        super().__init__("\n".join(self.problemas))
 
 
 @dataclass(frozen=True)
@@ -384,6 +392,56 @@ STATUS_CONCLUIDO = "concluido"
 STATUS_NO_SHOW = "no_show"
 STATUS_CANCELADO = "cancelado"
 
+# O que a recepção lê no lugar do valor cru de `agendamentos.status`.
+ROTULOS_STATUS = {
+    "agendado": "Agendado",
+    STATUS_CONCLUIDO: "Realizada",
+    STATUS_NO_SHOW: "Faltou",
+    STATUS_CANCELADO: "Cancelada",
+}
+
+
+def rotulo_status(status: str) -> str:
+    """Status desconhecido aparece cru em vez de sumir: um valor novo no
+    banco continua visível até ganhar rótulo aqui."""
+    return ROTULOS_STATUS.get(status, status)
+
+
+# Nome de cada feature do modelo (src/preprocess.py) na linguagem da
+# recepção. Só o nome: o valor das categóricas na explicação é o código do
+# label encoding (sexo=1, dia_de_semana=2), que não diz nada a quem lê.
+ROTULOS_FEATURES = {
+    "idade": "Idade",
+    "sexo": "Sexo",
+    "especialidade": "Especialidade",
+    "distancia_km": "Distância até a clínica",
+    "dias_entre_agendamento_consulta": "Antecedência do agendamento",
+    "historico_noshow": "Faltas anteriores",
+    "dia_de_semana": "Dia da semana da consulta",
+    "horario": "Horário da consulta",
+}
+
+
+def principais_motivos(explicacao: list, quantidade: int = 3) -> list[dict]:
+    """Os fatores que mais pesaram numa predição, prontos para a tela:
+    `{"rotulo", "aumenta"}`. A explicação de src/explain.py já vem ordenada
+    por |contribuição|; contribuição zero não é motivo de nada e fica de fora.
+    O número em log-odds não vai para a recepção -- fica nos detalhes
+    técnicos."""
+    motivos = []
+    for contribuicao in explicacao:
+        if contribuicao["contribuicao"] == 0:
+            continue
+        motivos.append(
+            {
+                "rotulo": ROTULOS_FEATURES.get(contribuicao["feature"], contribuicao["feature"]),
+                "aumenta": contribuicao["contribuicao"] > 0,
+            }
+        )
+        if len(motivos) == quantidade:
+            break
+    return motivos
+
 
 class ErroDesfechoForaDePrazo(Exception):
     """Desfecho pedido para consulta que ainda não aconteceu."""
@@ -544,15 +602,93 @@ def nome_valido(nome_completo: str) -> bool:
     return NOME_MINIMO <= len((nome_completo or "").strip()) <= NOME_MAXIMO
 
 
+# Limite inferior do formulário e da validação do cadastro (decisão da autora,
+# 2026-10-05). Note que o contrato de features aceita idade só até 120 anos
+# (`contrato_features`, faixa de negócio): quem nasceu antes disso passa aqui
+# e é recusado no job D-2.
+DATA_NASCIMENTO_MINIMA = date(1900, 1, 1)
+
+
+def data_nascimento_valida(data_nascimento: date | None, hoje: date | None = None) -> bool:
+    """Obrigatória e dentro da faixa do formulário. Sem limite mínimo de
+    idade: a clínica atende pediatria, então um recém-nascido é paciente
+    válido."""
+    if data_nascimento is None:
+        return False
+    return DATA_NASCIMENTO_MINIMA <= data_nascimento <= (hoje or hoje_na_clinica())
+
+
+def validar_cadastro(
+    nome_completo: str | None,
+    cpf: str,
+    telefone: str,
+    data_nascimento: date | None,
+    especialidade: str,
+    data_consulta: date,
+    hora_consulta: time | None,
+) -> list[str]:
+    """Todos os problemas do formulário, na ordem em que os campos aparecem
+    na tela -- lista vazia quando dá para gravar. Só confere a forma: não
+    muda valor, formato nem opção que vira feature do modelo.
+
+    `nome_completo=None` continua aceito (quem chama sem nome, ver
+    `cadastrar_paciente_e_agendamento`); string vazia é campo em branco."""
+    hoje = hoje_na_clinica()
+    problemas = []
+
+    if nome_completo is not None and not nome_valido(nome_completo):
+        problemas.append(
+            f"Nome inválido -- informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
+        )
+    if not cpf_valido(cpf):
+        problemas.append("CPF inválido -- confira os números digitados.")
+    if not telefone_valido(telefone):
+        problemas.append("Telefone inválido -- informe DDD + número (ex. (11) 98765-4321).")
+    if data_nascimento is None:
+        problemas.append("Informe a data de nascimento.")
+    elif not data_nascimento_valida(data_nascimento, hoje):
+        problemas.append(
+            "Data de nascimento inválida -- informe uma data entre "
+            f"{DATA_NASCIMENTO_MINIMA:%d/%m/%Y} e hoje."
+        )
+
+    # Antes, sem lista de especialidades, o formulário caía em texto livre e
+    # gravava qualquer coisa -- o erro só aparecia no job D-2, dias depois,
+    # como agendamento em quarentena.
+    especialidades = listar_especialidades()
+    if not especialidades:
+        problemas.append(
+            "Agendamento indisponível no momento: a lista de especialidades não "
+            "está configurada. Tente mais tarde ou fale com a clínica."
+        )
+    elif especialidade not in especialidades:
+        problemas.append("Especialidade inválida -- escolha uma das opções da lista.")
+
+    if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje):
+        problemas.append(
+            "Data da consulta inválida -- escolha entre hoje e "
+            f"{agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS} dias à frente."
+        )
+    if hora_consulta is None:
+        problemas.append("Escolha uma data em que a clínica atenda (não há horários aos domingos).")
+    elif not agenda_clinica.horario_valido(data_consulta, hora_consulta):
+        problemas.append(
+            "Horário fora do funcionamento da clínica para esta data (seg-sex "
+            "08h-11h30/13h-18h, sáb 08h-11h30, fechado aos domingos)."
+        )
+
+    return problemas
+
+
 def cadastrar_paciente_e_agendamento(
     cpf: str,
     telefone: str,
-    data_nascimento: date,
+    data_nascimento: date | None,
     sexo: str,
     especialidade: str,
     distancia_km: float,
     data_consulta: date,
-    hora_consulta: time,
+    hora_consulta: time | None,
     nome_completo: str | None = None,
 ) -> dict:
     """Cadastro do paciente (visão Paciente) --
@@ -580,26 +716,19 @@ def cadastrar_paciente_e_agendamento(
     `timestamptz`, então gravar um datetime naive deixaria o Postgres
     interpretá-lo no fuso do servidor (UTC no container) e a consulta
     apareceria 3h deslocada na fila do dia."""
-    if nome_completo is not None and not nome_valido(nome_completo):
-        raise ErroValidacaoCadastro(
-            f"Nome inválido -- informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
-        )
-    if not cpf_valido(cpf):
-        raise ErroValidacaoCadastro("CPF inválido -- confira os números digitados.")
-    if not telefone_valido(telefone):
-        raise ErroValidacaoCadastro(
-            "Telefone inválido -- informe DDD + número (ex. (11) 98765-4321)."
-        )
-    if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje_na_clinica()):
-        raise ErroValidacaoCadastro(
-            "Data da consulta inválida -- escolha entre hoje e "
-            f"{agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS} dias à frente."
-        )
-    if not agenda_clinica.horario_valido(data_consulta, hora_consulta):
-        raise ErroValidacaoCadastro(
-            "Horário fora do funcionamento da clínica para esta data (seg-sex "
-            "08h-11h30/13h-18h, sáb 08h-11h30, fechado aos domingos)."
-        )
+    problemas = validar_cadastro(
+        nome_completo=nome_completo,
+        cpf=cpf,
+        telefone=telefone,
+        data_nascimento=data_nascimento,
+        especialidade=especialidade,
+        data_consulta=data_consulta,
+        hora_consulta=hora_consulta,
+    )
+    # As duas checagens de None nunca valem sem `problemas` (validar_cadastro
+    # já as reporta): estão aqui só para o mypy estreitar o tipo abaixo.
+    if problemas or data_nascimento is None or hora_consulta is None:
+        raise ErroValidacaoCadastro(problemas)
 
     try:
         paciente = repositories.inserir_paciente(
@@ -702,7 +831,7 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
     }
 
 
-# --- Autenticação do funcionário (ADR-008) -----------------------------------
+# --- Autenticação do funcionário (docs/architecture.md §7) --------------------
 
 # 30 min sem nenhuma interação encerra a sessão. A tela da recepção fica ligada
 # o dia todo com nome de paciente (ADR-007); sem limite, quem sentasse no
@@ -732,7 +861,7 @@ class SessaoFuncionario:
     """O que a UI guarda de quem está logado, em `st.session_state` (memória do
     servidor, nunca cookie). Sem o token do Supabase de propósito: ele só
     serviu para provar a senha -- os dados continuam sendo lidos com a chave
-    secreta do backend (ADR-008) --, então guardá-lo só criaria um segredo a
+    secreta do backend (docs/architecture.md §7) --, então guardá-lo só criaria um segredo a
     mais para vazar."""
 
     id_usuario: str
@@ -751,7 +880,7 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
     if exc.status == 429 or exc.code == "over_request_rate_limit":
         # O limite do Supabase Auth é por IP, e todos os funcionários chegam
         # pelo mesmo IP (o do servidor do Streamlit) -- quem aparece aqui pode
-        # nem ter errado a própria senha. Ver ADR-008, riscos.
+        # nem ter errado a própria senha. Ver docs/LGPD.md §9, risco 6.
         return ErroAutenticacaoIndisponivel(
             "muitas tentativas de login em pouco tempo. Aguarde alguns minutos e tente de novo."
         )

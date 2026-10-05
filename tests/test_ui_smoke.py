@@ -7,7 +7,7 @@ gating de APP_ENV e de login, placeholders dos passos futuros) e UM caminho
 feliz ponta a ponta pelo formulário. A lógica de predição e a de autenticação
 são cobertas por tests/test_ui_logic.py -- aqui o que se testa é a tela.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import streamlit as st
@@ -17,6 +17,7 @@ from ui import logic
 
 CAMINHO_APP = "src/ui/app.py"
 TIMEOUT = 60  # primeiro run carrega modelo + TreeExplainer
+PERFIL_FUNCIONARIO = "Funcionário da clínica"
 
 
 def _sessao(ultimo_uso=None):
@@ -31,12 +32,18 @@ def _botao(at, rotulo):
     return next(b for b in at.button if b.label == rotulo)
 
 
-def _rodar(monkeypatch, app_env="dev", backend="processo", sessao="logado"):
+def _rodar(
+    monkeypatch, app_env="dev", backend="processo", sessao="logado", perfil=PERFIL_FUNCIONARIO
+):
     """`sessao="logado"` (default) entra já autenticado: o login em si é
     testado nos testes próprios dele, e os demais testes são sobre as abas que
     ficam atrás dele. Injetar a sessão em `session_state` é o mesmo estado que
     um login bem-sucedido deixa (app.py::_tela_login). Passe `None` para
-    começar deslogado ou uma `SessaoFuncionario` específica."""
+    começar deslogado ou uma `SessaoFuncionario` específica.
+
+    `perfil` é escolhido no seletor da sidebar depois do primeiro run, como
+    a equipe faz: o app abre na visão do paciente, e a maioria dos testes é
+    sobre a do funcionário. Passe `None` para ficar na entrada padrão."""
     monkeypatch.setenv("APP_ENV", app_env)
     monkeypatch.setenv("PREDICT_BACKEND", backend)
     # Determinístico independente do .env do dev: os testes de UI não devem
@@ -57,7 +64,10 @@ def _rodar(monkeypatch, app_env="dev", backend="processo", sessao="logado"):
         sessao = _sessao()
     if sessao is not None:
         at.session_state["funcionario"] = sessao
-    return at.run()
+    at.run()
+    if perfil is not None:
+        at.sidebar.radio[0].set_value(perfil).run()
+    return at
 
 
 def test_app_carrega_sem_excecao(monkeypatch):
@@ -66,25 +76,64 @@ def test_app_carrega_sem_excecao(monkeypatch):
     assert not at.exception
 
 
+def test_entrada_padrao_e_a_visao_do_paciente(monkeypatch):
+    """A URL pública é a porta do autoagendamento: quem chega sem escolher
+    nada vê o cadastro, não o login da equipe -- e o título não anuncia que o
+    paciente será classificado como provável faltante."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    assert not at.exception
+    assert at.sidebar.radio[0].value == "Paciente"
+    assert "Nome completo" in [campo.label for campo in at.text_input]
+    assert [t.value for t in at.title] == ["SaúdeJá"]
+
+
+def test_sidebar_nao_expoe_diagnostico_tecnico(monkeypatch):
+    """APP_ENV, backend e status do Supabase são diagnóstico de quem mantém o
+    sistema: na sidebar, apareciam para qualquer paciente na URL pública."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    textos_da_sidebar = " ".join(
+        e.value for e in (*at.sidebar.caption, *at.sidebar.success, *at.sidebar.warning)
+    )
+    assert "APP_ENV" not in textos_da_sidebar
+    assert "Supabase" not in textos_da_sidebar
+
+
+def test_diagnostico_tecnico_fica_na_aba_de_dev(monkeypatch):
+    at = _rodar(monkeypatch, app_env="dev")
+
+    assert any("APP_ENV" in legenda.value for legenda in at.caption)
+    assert any("Supabase" in aviso.value for aviso in at.warning)
+
+
+# `at.tabs` lista também as subabas, na ordem da árvore: as do "Time técnico"
+# aparecem logo depois dela.
+ABAS_EM_PROD = [
+    "Fila do dia",
+    "Time técnico",
+    "Observabilidade",
+    "Testar predição",
+    "Explicabilidade",
+]
+
+
 def test_abas_do_funcionario_existem_em_dev(monkeypatch):
+    """A rotina da recepção primeiro; o que é do time técnico numa aba própria,
+    com o disparo manual do job como última subaba (só em dev)."""
     at = _rodar(monkeypatch, app_env="dev")
 
     rotulos = [aba.label for aba in at.tabs]
-    assert rotulos == [
-        "Testar predição",
-        "Explicabilidade",
-        "Fila do dia",
-        "Observabilidade",
-        "Dev: disparo manual",
-    ]
+    assert rotulos == [*ABAS_EM_PROD, "Dev: disparo manual"]
 
 
 def test_aba_de_dev_some_fora_do_ambiente_de_dev(monkeypatch):
+    """O "Time técnico" continua em produção: é onde o painel do SLO de
+    produção é lido (ADR-006)."""
     at = _rodar(monkeypatch, app_env="prod")
 
     rotulos = [aba.label for aba in at.tabs]
-    assert "Dev: disparo manual" not in rotulos
-    assert len(rotulos) == 4
+    assert rotulos == ABAS_EM_PROD
 
 
 def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
@@ -98,13 +147,77 @@ def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
     assert not at.exception
     assert at.text_input  # campos de nome completo/CPF, não mais placeholder
 
-    at.text_input[0].set_value("Paciente de Teste").run()  # nome completo
-    at.text_input[1].set_value("111.444.777-35").run()  # CPF válido
-    at.text_input[2].set_value("(11) 98765-4321").run()  # telefone válido
+    _preencher_cadastro_valido(at)
     _botao(at, "Agendar").click().run()
 
     assert not at.exception
     assert any("cadastrar" in erro.value.lower() for erro in at.error)
+
+
+def _preencher_cadastro_valido(at):
+    at.text_input[0].set_value("Paciente de Teste")  # nome completo
+    at.text_input[1].set_value("111.444.777-35")  # CPF válido
+    at.text_input[2].set_value("(11) 98765-4321")  # telefone válido
+    # Sem valor padrão desde a revisão de UX: precisa ser preenchida.
+    nascimento = next(d for d in at.date_input if d.label == "Data de nascimento")
+    nascimento.set_value(date(1990, 1, 1))
+
+
+def test_cadastro_em_branco_lista_todos_os_problemas_sem_tocar_o_banco(monkeypatch):
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    _botao(at, "Agendar").click().run()
+
+    assert not at.exception
+    assert not at.error  # não chegou à persistência
+    aviso = next(w.value for w in at.warning if "Corrija os campos" in w.value)
+    for problema in ("Nome inválido", "CPF inválido", "Telefone inválido", "data de nascimento"):
+        assert problema in aviso
+
+
+def test_data_de_nascimento_comeca_vazia(monkeypatch):
+    """Um 01/01/1990 pré-preenchido e esquecido virava idade errada no modelo."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    nascimento = next(d for d in at.date_input if d.label == "Data de nascimento")
+    assert nascimento.value is None
+
+
+def test_agendamento_confirmado_troca_o_formulario_pela_confirmacao(monkeypatch):
+    """Com o form ainda na tela, um segundo clique em "Agendar" gravava o
+    mesmo agendamento duas vezes. A confirmação é neutra: nem todo
+    agendamento recebe lembrete."""
+    chamadas = []
+    monkeypatch.setattr(
+        logic, "cadastrar_paciente_e_agendamento", lambda **kw: chamadas.append(kw) or {}
+    )
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    _preencher_cadastro_valido(at)
+    _botao(at, "Agendar").click().run()
+
+    assert not at.exception
+    assert len(chamadas) == 1
+    confirmacao = next(s.value for s in at.success)
+    assert confirmacao.startswith("Agendamento confirmado")
+    assert "lembrete" not in confirmacao.lower()
+    assert not [b for b in at.button if b.label == "Agendar"]
+
+    _botao(at, "Fazer outro agendamento").click().run()
+
+    assert not at.exception
+    assert not at.success
+    assert [b for b in at.button if b.label == "Agendar"]
+    assert at.text_input[0].value == ""
+
+
+def test_aviso_de_privacidade_do_paciente_sem_jargao_tecnico(monkeypatch):
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    textos = " ".join(c.value for c in at.caption) + " ".join(m.value for m in at.markdown)
+    for jargao in ("hash", "ADR", "Infobip", "LLM", "dataset", "features do modelo", ".md"):
+        assert jargao not in textos
+    assert [e.label for e in at.expander] == ["Como usamos seus dados"]
 
 
 def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypatch):
@@ -121,7 +234,7 @@ def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypat
 
 def test_aba_observabilidade_sem_supabase_avisa_sem_derrubar_a_tela(monkeypatch):
     """O painel de observabilidade é diagnóstico passivo (mesma escolha do status do
-    banco na sidebar), então sem Supabase ele avisa -- não derruba a tela nem
+    banco na aba de dev), então sem Supabase ele avisa -- não derruba a tela nem
     impede a predição manual, que não depende de banco nenhum."""
     at = _rodar(monkeypatch)
 
@@ -157,7 +270,7 @@ def test_formulario_produz_predicao_e_explicacao(monkeypatch):
     assert at.metric  # os cards de probabilidade/threshold/classe renderizaram
 
 
-# --- login do funcionário (ADR-008) -------------------------------------------
+# --- login do funcionário (docs/architecture.md §7) ---------------------------
 
 
 def test_visao_do_funcionario_sem_login_mostra_so_a_tela_de_login(monkeypatch):
@@ -203,12 +316,7 @@ def test_login_bem_sucedido_libera_as_abas(monkeypatch):
     _botao(at, "Entrar").click().run()
 
     assert not at.exception
-    assert [aba.label for aba in at.tabs][:4] == [
-        "Testar predição",
-        "Explicabilidade",
-        "Fila do dia",
-        "Observabilidade",
-    ]
+    assert [aba.label for aba in at.tabs][: len(ABAS_EM_PROD)] == ABAS_EM_PROD
     assert any("recepcao@clinica.test" in legenda.value for legenda in at.sidebar.caption)
 
 
@@ -346,3 +454,58 @@ def test_aba_dev_com_job_bem_sucedido_mostra_os_contadores(monkeypatch, caches_d
     contadores = {m.label: m.value for m in at.metric}
     assert contadores["Mensagens disparadas"] == "2"
     assert any("sem erros" in s.value for s in at.success)
+
+
+# --- visão do funcionário (revisão de UX, bloco F) ------------------------------
+
+
+def test_fila_mostra_status_e_previsao_incerta_em_linguagem_da_recepcao(
+    monkeypatch, caches_do_streamlit_limpos
+):
+    fila = [_item_fila(0, 0.81, 1, fora_do_dominio=True, status=logic.STATUS_NO_SHOW)]
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", lambda dia: fila)
+
+    at = _rodar(monkeypatch)
+
+    tabela = at.dataframe[0].value
+    assert "Fora do domínio" not in tabela.columns
+    assert bool(tabela["Previsão incerta"].iloc[0])
+    assert tabela["Status"].iloc[0] == "Faltou"
+
+
+def test_aviso_de_desfecho_aparece_na_fila_e_some_depois(monkeypatch, caches_do_streamlit_limpos):
+    """Antes, o st.success do desfecho era descartado pelo st.rerun() logo em
+    seguida: o funcionário clicava sem ver confirmação nenhuma. Agora o
+    callback guarda o aviso, e a Fila do dia o mostra uma vez."""
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", lambda dia: [_item_fila(0, 0.81, 1)])
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("PREDICT_BACKEND", "processo")
+    monkeypatch.setenv("SUPABASE_URL", "")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "")
+    at = AppTest.from_file(CAMINHO_APP, default_timeout=TIMEOUT)
+    at.session_state["funcionario"] = _sessao()
+    at.session_state["aviso_desfecho"] = ("ok", "Desfecho registrado: paciente faltou.")
+    at.run()
+    at.sidebar.radio[0].set_value(PERFIL_FUNCIONARIO).run()
+
+    assert not at.exception
+    assert any("Desfecho registrado" in s.value for s in at.success)
+    assert "aviso_desfecho" not in at.session_state
+
+    at.run()
+
+    assert not any("Desfecho registrado" in s.value for s in at.success)
+
+
+def test_explicabilidade_mostra_fatores_em_portugues_na_mesma_execucao(monkeypatch):
+    """A subaba "Explicabilidade" é desenhada depois de "Testar predição" no
+    script -- senão só enxergaria a predição na execução seguinte."""
+    at = _rodar(monkeypatch, backend="processo")
+    _botao(at, "Prever no-show").click().run()
+
+    assert not at.exception
+    fatores = [m.value for m in at.markdown if m.value.startswith("Principais fatores")]
+    assert fatores
+    assert "historico_noshow" not in fatores[0]
+    assert "log-odds" not in fatores[0]
+    assert "Detalhes técnicos" in [e.label for e in at.expander]

@@ -21,7 +21,7 @@ O que cada bloco protege:
 - **sem re-treino efetivo**: mês sem desfecho novo falha (decisão de
   2026-09-21), em vez de reproduzir a mesma métrica e trocar a
   `model_version` em produção à toa.
-- **canário** (ADR-009): com campeão registrado, aprovar abre o canário
+- **canário** (ADR-008): com campeão registrado, aprovar abre o canário
   e não toca no campeão nem no `dvc.lock`; canário ativo impede o re-treino
   (código 4); modelo já revertido num canário é bloqueado.
 
@@ -491,7 +491,7 @@ def test_dataset_barrado_pelo_validate_data_vira_codigo_3_com_o_motivo(ambiente,
 
 
 # --------------------------------------------------------------------------
-# Canário (ADR-009)
+# Canário (ADR-008)
 # --------------------------------------------------------------------------
 @pytest.fixture
 def com_canario(ambiente, monkeypatch):

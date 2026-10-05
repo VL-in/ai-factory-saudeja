@@ -1,4 +1,4 @@
--- SaudeJa - canario do modelo com rollback automatico (ADR-009).
+-- SaudeJa - canario do modelo com rollback automatico (ADR-008).
 --
 -- Estado OPERACIONAL do rollback: um canario listado aqui deixa de receber
 -- trafego na proxima execucao do job D-2, mesmo que `data/canario.json` ainda

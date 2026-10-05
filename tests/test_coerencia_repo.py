@@ -477,7 +477,7 @@ def test_dependencias_do_dvc_estao_em_lf_no_checkout():
     )
 
 
-# --- canário do modelo (ADR-009) ------------------------------------------------
+# --- canário do modelo (ADR-008) ------------------------------------------------
 
 
 def test_canario_nao_aciona_deploy_mas_a_promocao_aciona():
@@ -586,7 +586,7 @@ def test_filtro_de_deploy_do_ci_espelha_o_paths_ignore_do_deploy():
 
     for caminho in (
         "docs/logs/CHANGELOG.md",
-        "docs/adr/adr-009-canario-do-modelo.md",
+        "docs/adr/adr-008-canario-do-modelo.md",
         "data/canario.json",
         "data/canario/model.pkl.dvc",
         "data/canario_historico.json",

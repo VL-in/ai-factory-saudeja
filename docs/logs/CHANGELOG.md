@@ -8,12 +8,34 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [v2.1.0] (Vanessa + Claude) - 2026-10-05
+
+### Modificado
+- **A interface abre na tela de agendamento do paciente.** Antes, quem chegava pela URL pública caía no login da equipe. Para entrar, a equipe escolhe o perfil "Funcionário da clínica" na barra lateral.
+- O título da interface passa a ser só "SaúdeJá", sem "predição de no-show". O paciente não precisa saber, ao agendar, que o agendamento passa por uma avaliação de risco de falta.
+- A barra lateral não mostra mais o ambiente, o modo de predição nem o status do banco, que apareciam para qualquer visitante. Esse diagnóstico passa para "Time técnico → Dev: disparo manual", que só existe no ambiente de desenvolvimento. Em produção, um banco fora do ar continua aparecendo como erro na "Fila do dia" e no cadastro.
+- Botões principais e destaques em verde-azulado, nos temas claro e escuro, no lugar do vermelho padrão do Streamlit, que num contexto de saúde se confundia com aviso de erro.
+- Os textos da "Fila do dia" usam a linguagem da recepção, sem termos técnicos como "job D-2" e "SHAP", e os ícones da interface seguem um único estilo.
+- **O cadastro do paciente mostra todos os campos com problema de uma vez.** Antes, o agendamento parava no primeiro erro, e o paciente precisava reenviar uma vez para cada campo errado.
+- **A data de nascimento passa a ser obrigatória**, entre 01/01/1900 e hoje. O formato do campo não mudou.
+- O aviso de privacidade do cadastro está em linguagem simples, com o detalhe em "Como usamos seus dados": o CPF não é guardado, nome e telefone servem ao atendimento e ao contato, e os demais dados ajudam a clínica a decidir quais consultas confirmar.
+- Depois de agendar, o formulário dá lugar à confirmação com a data e o horário da consulta, e ao botão "Fazer outro agendamento". A confirmação não promete lembrete, porque nem todo agendamento recebe um.
+- **A visão da equipe tem duas abas: "Fila do dia" e "Time técnico".** A aba nova reúne o que não é rotina da recepção: "Observabilidade", "Testar predição", "Explicabilidade" e, só no ambiente de desenvolvimento, "Dev: disparo manual". Ela continua em produção, porque é lá que os números do SLO de produção são lidos. A explicação do risco de cada paciente continua no detalhe da linha da "Fila do dia".
+- **O motivo do risco aparece em português**: os três fatores que mais pesaram na avaliação ("Faltas anteriores: aumenta o risco de falta"), no lugar da tabela de contribuições em log-odds e do gráfico que repetia a tabela. O dado cru, o identificador interno do paciente e a versão do modelo ficam em "Detalhes técnicos".
+- A situação do agendamento aparece como "Agendado", "Realizada", "Faltou" ou "Cancelada", e não mais como `agendado`, `concluido`, `no_show` ou `cancelado`. A coluna "Fora do domínio" passa a se chamar "Previsão incerta".
+
+### Corrigido
+- Ao registrar o desfecho de um agendamento na "Fila do dia", a confirmação sumia antes de aparecer, e o funcionário não sabia se o clique tinha funcionado. Agora o aviso aparece no topo da fila.
+- Um segundo clique em "Agendar" gravava o mesmo agendamento duas vezes, porque o formulário continuava preenchido na tela.
+- A data de nascimento vinha preenchida com 01/01/1990. Quem não mexia no campo era cadastrado com essa data, e a idade errada chegava ao modelo sem ninguém perceber.
+- Sem a lista de especialidades configurada, o cadastro aceitava qualquer texto como especialidade, e o erro só aparecia no job diário, com o agendamento recusado. Agora o cadastro é recusado na hora, com uma mensagem clara.
+
 ## [v2.0.0] (Vanessa + Claude) - 2026-10-04
 
 Primeiro deploy do SaudeJá em produção. O SaudeJá prevê quais pacientes têm alta chance de faltar à consulta e manda lembrete por SMS só para eles, dois dias antes do atendimento, sem o custo de avisar todo mundo. A partir desta versão, cada publicação em produção ganha um número de versão e uma página de Release com as mudanças.
 
 ### Adicionado
-- **Ambientes de desenvolvimento e de produção separados**, cada um com Space, banco e credenciais próprios ([ADR-010](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-010-ambientes-e-releases.md)). Enviar código ao branch `dev` publica no ambiente de desenvolvimento e aplica as migrations no banco de desenvolvimento primeiro. A produção usa um banco novo, que nunca recebe dado de teste.
+- **Ambientes de desenvolvimento e de produção separados**, cada um com Space, banco e credenciais próprios ([architecture.md](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/architecture.md#6-deployment--infrastructure)). Enviar código ao branch `dev` publica no ambiente de desenvolvimento e aplica as migrations no banco de desenvolvimento primeiro. A produção usa um banco novo, que nunca recebe dado de teste.
 - **Releases numeradas (SemVer).** Cada publicação em produção vira uma versão `vX.Y.Z` no GitHub, com estas notas. A versão vem do topo deste arquivo e é conferida antes de o banco de produção ser migrado. A troca do modelo pelo re-treino ou pelo canário sobe a versão PATCH automaticamente.
 - **Alerta diário de observabilidade.** Todo dia às 10h17, um workflow confere as últimas 24 horas e avisa por e-mail se alguma predição ficou sem explicação, se houve erro (inclusive paciente em quarentena), se o job D-2 não rodou ou se ele levou mais de 10 minutos. Antes, essa degradação só aparecia para quem abrisse a aba "Observabilidade".
 
@@ -29,13 +51,13 @@ Primeiro deploy do SaudeJá em produção. O SaudeJá prevê quais pacientes tê
 ### Corrigido
 - O CI do GitHub falharia na primeira execução: quatro testes de observabilidade dependiam de uma variável que o próprio CI desliga.
 - Os pedidos de mudança abertos pelo re-treino e pelo canário ficam presos a este repositório e não podem cair no repositório de origem do fork.
-- Com o login por e-mail desligado na configuração do Supabase, a tela de login dizia "E-mail ou senha incorretos." a qualquer funcionário. Agora informa que o login está indisponível e pede para procurar o administrador. O Supabase local também voltou a aceitar login por e-mail: a trava de auto-cadastro ([ADR-008](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-008-login-da-equipe.md)) estava desligando o provedor de e-mail inteiro.
+- Com o login por e-mail desligado na configuração do Supabase, a tela de login dizia "E-mail ou senha incorretos." a qualquer funcionário. Agora informa que o login está indisponível e pede para procurar o administrador. O Supabase local também voltou a aceitar login por e-mail: a trava de auto-cadastro estava desligando o provedor de e-mail inteiro.
 - A aba "Observabilidade" podia falhar ao abrir, de vez em quando, com `Invalid isoformat string`. O horário da última execução do job vem do banco às vezes com menos casas decimais nos segundos, e a leitura recusava esse formato.
 
 ## [v1.14] (Vanessa + Claude) - 2026-10-01
 
 ### Adicionado
-- **Canário do modelo.** O modelo novo aprovado pelo re-treino mensal não substitui mais o modelo em produção de uma vez. Primeiro, ele decide 20% da fila do job diário; o modelo atual decide o resto. Os pacientes são sorteados e ficam no mesmo modelo durante todo o período. Os dois modelos são comparados na fila real pela fração de pacientes que recebe lembrete pago e pela fração de faltas entre os pacientes classificados como baixo risco. O modelo novo só passa a valer para todos depois de pelo menos 7 dias sem ser pior que o atual além da margem ([ADR-009](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-009-canario-do-modelo.md)).
+- **Canário do modelo.** O modelo novo aprovado pelo re-treino mensal não substitui mais o modelo em produção de uma vez. Primeiro, ele decide 20% da fila do job diário; o modelo atual decide o resto. Os pacientes são sorteados e ficam no mesmo modelo durante todo o período. Os dois modelos são comparados na fila real pela fração de pacientes que recebe lembrete pago e pela fração de faltas entre os pacientes classificados como baixo risco. O modelo novo só passa a valer para todos depois de pelo menos 7 dias sem ser pior que o atual além da margem ([ADR-008](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-008-canario-do-modelo.md)).
 - **Volta automática ao modelo atual (rollback).** O job diário volta a usar só o modelo atual, já na execução em que o problema aparece, quando o modelo novo manda lembrete a muito mais pacientes, deixa passar mais faltas ou não consegue avaliar parte da fila. Ele também volta se, em 21 dias, não houver evidência de que o modelo novo é tão bom quanto o atual. Não é preciso deploy.
 - Workflow `canario.yml`: avalia o canário todo dia às 09h47 e abre o pedido de promoção ou de reversão. Também pode ser disparado à mão para reverter, informando o motivo.
 - Variável do repositório `CANARIO_DESLIGADO`: com `true`, o job diário ignora o canário a partir da próxima execução, sem pedido de mudança nem deploy.
@@ -97,7 +119,7 @@ Primeiro deploy do SaudeJá em produção. O SaudeJá prevê quais pacientes tê
 ## [v1.11] (Vanessa + Claude) - 2026-09-28
 
 ### Adicionado
-- **Tela de login para a equipe da clínica.** A visão "Funcionário da clínica" passa a pedir e-mail e senha, verificados pelo Supabase Auth do mesmo projeto do banco. Antes do login nenhuma aba é exibida: nem a fila do dia, nem a predição manual, nem a observabilidade. A visão "Paciente" continua aberta ([ADR-008](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-008-login-da-equipe.md)).
+- **Tela de login para a equipe da clínica.** A visão "Funcionário da clínica" passa a pedir e-mail e senha, verificados pelo Supabase Auth do mesmo projeto do banco. Antes do login nenhuma aba é exibida: nem a fila do dia, nem a predição manual, nem a observabilidade. A visão "Paciente" continua aberta ([architecture.md](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/architecture.md#7-security-considerations)).
 - A barra lateral mostra com qual e-mail a pessoa está conectada e tem o botão **Sair**.
 - `scripts/criar_funcionario.py` cria a conta de um funcionário. A senha é digitada no terminal, sem eco, e a conta nasce com o e-mail confirmado. Para desativar alguém, apague ou bana o usuário no Dashboard do Supabase.
 

@@ -72,7 +72,7 @@ dados:
   # re-treino, sem bloquear. 0.2 e' o corte usual de "mudanca relevante".
   psi_alerta: 0.2
 
-# Canario do modelo (ADR-009, src/canario.py). O desafiante que
+# Canario do modelo (ADR-008, src/canario.py). O desafiante que
 # passa no gate nao substitui o campeao de uma vez: decide `fracao` da fila do
 # job D-2 (sorteio estavel por paciente) e e' comparado ao campeao no MESMO
 # periodo, na fila real. Os guardrails sao de NAO-INFERIORIDADE: o canario pode

@@ -1,5 +1,5 @@
 """
-SaúdeJá — canário do modelo com rollback automático (ADR-009).
+SaúdeJá — canário do modelo com rollback automático (ADR-008).
 
 O gate do re-treino (`src/retrain_gate.py`) mede o desafiante **offline**, no
 fold de teste isolado. Este módulo cobre o que o fold não mede: como o modelo
@@ -21,7 +21,7 @@ hash com a `model_version` do canário como semente. Estável durante o canário
 -- o mesmo paciente não alterna de modelo entre uma consulta e outra -- e
 renovada a cada canário, para não serem sempre os mesmos pacientes a receber
 o modelo em observação. Quando o produto tiver a entidade clínica, a unidade
-pode passar a ser ela (ADR-009); `braco()` recebe a unidade como texto.
+pode passar a ser ela (ADR-008); `braco()` recebe a unidade como texto.
 
 **Guardrails, sem fold de teste** -- medidos no banco, por braço
 (`predicoes.model_version`), desde o início do canário:
@@ -205,7 +205,7 @@ def carregar_historico() -> dict[str, Any]:
     if not caminho.exists():
         return {
             "_comentario": (
-                "Histórico dos canários (ADR-009): cada canário encerrado, "
+                "Histórico dos canários (ADR-008): cada canário encerrado, "
                 "promovido ou revertido. Reescrito só por src/canario.py. O gate de "
                 "re-treino lê os revertidos para nunca reabrir canário com um modelo que "
                 "já falhou em produção."
@@ -283,7 +283,7 @@ def iniciar(
 
     canario = {
         "_comentario": (
-            "Canário em observação (ADR-009). Existe só enquanto o canário "
+            "Canário em observação (ADR-008). Existe só enquanto o canário "
             "está ativo: o job D-2 manda canario.fracao da fila para este modelo e o "
             "resto para o campeão. Criado por src/retrain_gate.py; removido por "
             "src/canario.py ao promover ou reverter."
@@ -338,7 +338,7 @@ def promover(evidencia: dict[str, Any] | None = None) -> dict[str, Any]:
         "_comentario": (
             "Campeão em produção. Reescrito SOMENTE por src/retrain_gate.py "
             "(promoção direta) ou por src/canario.py (promoção depois do canário, "
-            "ADR-009). Versionado em git porque o MLflow deste repo é efêmero e não "
+            "ADR-008). Versionado em git porque o MLflow deste repo é efêmero e não "
             "sobrevive entre execuções do workflow mensal."
         ),
         "model_version": registro["model_version"],
@@ -864,7 +864,7 @@ def _saida_do_workflow(chave: str, valor: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Canário do modelo (ADR-009)")
+    parser = argparse.ArgumentParser(description="Canário do modelo (ADR-008)")
     sub = parser.add_subparsers(dest="comando", required=True)
     sub.add_parser("status", help="mostra o canário ativo, se houver")
     p_verificar = sub.add_parser(

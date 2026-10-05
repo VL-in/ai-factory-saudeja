@@ -1,4 +1,4 @@
-# ADR-009: Canário do modelo com rollback automático no job D-2
+# ADR-008: Canário do modelo com rollback automático no job D-2
 
 ## Status
 Aceito — 2026-10-01. Complementa o gate de promoção do re-treino ([`src/retrain_gate.py`](../../src/retrain_gate.py)): aprovar no gate deixa de ser promover.

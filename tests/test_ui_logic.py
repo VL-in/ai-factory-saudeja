@@ -557,7 +557,7 @@ def test_proxima_data_disponivel_nunca_cai_num_domingo():
     assert logic.proxima_data_disponivel(domingo).weekday() != 6
 
 
-# --- autenticação do funcionário (ADR-008) -------------------------------------
+# --- autenticação do funcionário (docs/architecture.md §7) ---------------------
 # O Supabase Auth de verdade é exercitado em tests/test_db.py (integracao,
 # contra o Supabase CLI local); aqui só o transporte é trocado, para cobrir a
 # tradução de cada resposta de erro sem depender de rede.
@@ -682,7 +682,7 @@ def test_autenticar_sem_supabase_configurado_e_indisponibilidade(monkeypatch):
 
 
 def test_login_usa_client_descartavel_nunca_o_singleton_do_backend(monkeypatch):
-    """Regressão de desenho (ADR-008): o supabase-py troca o Authorization do
+    """Regressão de desenho (docs/architecture.md §7): o supabase-py troca o Authorization do
     client pelo JWT do usuário depois do sign-in. No singleton, o backend
     passaria a consultar como `authenticated` (RLS sem policies -> tabela
     vazia) para TODOS os navegadores conectados ao mesmo processo."""
@@ -797,3 +797,143 @@ def test_recusa_do_repositorio_por_prazo_vira_erro_de_prazo_e_nao_de_persistenci
 
     with pytest.raises(logic.ErroDesfechoForaDePrazo):
         logic.atualizar_status_agendamento("a1", logic.STATUS_NO_SHOW)
+
+
+# --- validação completa do cadastro (revisão de UX, 2026-10-05) -----------------
+
+HOJE_FIXO = date(2026, 9, 29)
+
+
+def _campos_validos(**sobrescritos):
+    campos = {
+        "nome_completo": "Ana Souza",
+        "cpf": "529.982.247-25",
+        "telefone": "(11) 98765-4321",
+        "data_nascimento": date(1990, 1, 1),
+        "especialidade": "cardiologia",
+        "data_consulta": date(2026, 9, 30),
+        "hora_consulta": time(10, 0),
+    }
+    campos.update(sobrescritos)
+    return campos
+
+
+@pytest.fixture
+def hoje_fixo(monkeypatch):
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: HOJE_FIXO)
+
+
+def test_validar_cadastro_aceita_formulario_correto(hoje_fixo):
+    assert logic.validar_cadastro(**_campos_validos()) == []
+
+
+def test_validar_cadastro_devolve_todos_os_problemas_de_uma_vez(hoje_fixo):
+    """Parar no primeiro erro obrigava a reenviar uma vez por campo errado."""
+    problemas = logic.validar_cadastro(
+        **_campos_validos(
+            nome_completo="",
+            cpf="123",
+            telefone="9",
+            data_nascimento=None,
+            especialidade="cardio",
+            hora_consulta=None,
+        )
+    )
+
+    assert len(problemas) == 6
+    assert problemas[0].startswith("Nome inválido")  # na ordem dos campos da tela
+    assert "Informe a data de nascimento." in problemas
+
+
+@pytest.mark.parametrize(
+    "data_nascimento, valida",
+    [
+        (date(1900, 1, 1), True),
+        (date(1899, 12, 31), False),
+        (HOJE_FIXO, True),  # recém-nascido: a clínica atende pediatria
+        (HOJE_FIXO + timedelta(days=1), False),
+        (None, False),
+    ],
+)
+def test_data_nascimento_entre_1900_e_hoje(data_nascimento, valida):
+    assert logic.data_nascimento_valida(data_nascimento, hoje=HOJE_FIXO) is valida
+
+
+def test_especialidade_fora_da_lista_e_recusada(hoje_fixo):
+    problemas = logic.validar_cadastro(**_campos_validos(especialidade="cardio"))
+
+    assert problemas == ["Especialidade inválida -- escolha uma das opções da lista."]
+
+
+def test_sem_lista_de_especialidades_o_cadastro_e_recusado(hoje_fixo, monkeypatch):
+    """Antes, sem lista, o formulário caía em texto livre e gravava qualquer
+    coisa -- o erro só aparecia dias depois, como quarentena no job D-2."""
+    monkeypatch.setattr(logic, "listar_especialidades", lambda: [])
+
+    problemas = logic.validar_cadastro(**_campos_validos())
+
+    assert len(problemas) == 1
+    assert "especialidades não está configurada" in problemas[0]
+
+
+def test_cadastro_com_varios_erros_nao_toca_o_banco_e_lista_todos(hoje_fixo, monkeypatch):
+    def _nao_deveria_ser_chamado(**kwargs):
+        raise AssertionError("cadastro chegou ao banco com campos inválidos")
+
+    monkeypatch.setattr(logic.repositories, "inserir_paciente", _nao_deveria_ser_chamado)
+
+    with pytest.raises(logic.ErroValidacaoCadastro) as erro:
+        logic.cadastrar_paciente_e_agendamento(
+            cpf="123",
+            telefone="(11) 98765-4321",
+            data_nascimento=None,
+            sexo="F",
+            especialidade="cardiologia",
+            distancia_km=5.5,
+            data_consulta=date(2026, 9, 30),
+            hora_consulta=time(10, 0),
+            nome_completo="Ana Souza",
+        )
+
+    assert erro.value.problemas == [
+        "CPF inválido -- confira os números digitados.",
+        "Informe a data de nascimento.",
+    ]
+
+
+# --- rótulos para a recepção (revisão de UX, bloco F) ---------------------------
+
+
+def test_rotulo_status_traduz_e_mantem_desconhecido_visivel():
+    assert logic.rotulo_status(logic.STATUS_NO_SHOW) == "Faltou"
+    assert logic.rotulo_status("agendado") == "Agendado"
+    assert logic.rotulo_status("status_novo") == "status_novo"
+
+
+def test_principais_motivos_traduz_ignora_zero_e_limita_a_quantidade():
+    explicacao = [
+        {"feature": "historico_noshow", "contribuicao": 0.8},
+        {"feature": "dias_entre_agendamento_consulta", "contribuicao": -0.5},
+        {"feature": "idade", "contribuicao": 0.0},
+        {"feature": "feature_nova", "contribuicao": 0.2},
+        {"feature": "sexo", "contribuicao": 0.1},
+    ]
+
+    assert logic.principais_motivos(explicacao) == [
+        {"rotulo": "Faltas anteriores", "aumenta": True},
+        {"rotulo": "Antecedência do agendamento", "aumenta": False},
+        {"rotulo": "feature_nova", "aumenta": True},  # sem rótulo: aparece crua
+    ]
+
+
+def test_toda_feature_do_modelo_tem_rotulo_para_a_recepcao():
+    """Feature nova no modelo sem rótulo apareceria crua para a recepção.
+    Os nomes vêm do contrato de features (numéricas) e do pré-processamento
+    (categóricas, inclusive as temporais), não de uma lista copiada aqui."""
+    import contrato_features
+    import preprocess
+
+    features = {campo.nome for campo in contrato_features.CAMPOS_NUMERICOS} | set(
+        preprocess.COLUNAS_CATEGORICAS
+    )
+    assert features <= set(logic.ROTULOS_FEATURES)
