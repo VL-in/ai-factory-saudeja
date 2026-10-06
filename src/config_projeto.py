@@ -15,6 +15,8 @@ que vale tanto no repositório local quanto na imagem Docker (src/ em
 tendo precedência -- é assim que o dvc.yaml aponta os caminhos para dentro
 do bind mount do container.
 """
+# ENSAIO DE ROLLBACK (2026-10-05): marcador sem efeito no comportamento, só
+# para provar que o deploy de dev o leva ao Space. O commit seguinte o reverte.
 import os
 from datetime import date, datetime
 from pathlib import Path
