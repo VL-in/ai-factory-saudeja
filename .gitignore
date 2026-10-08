@@ -10,7 +10,13 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
 
 # Virtualenv
 venv/
@@ -25,6 +31,9 @@ ENV/
 # Ambiente
 .env
 .env.local
+.env.*.local
+# Segredos do Streamlit (o config.toml do tema continua versionado)
+.streamlit/secrets.toml
 
 # Modelo treinado (binário, não versionar)
 model.pkl
@@ -39,11 +48,24 @@ data/processed/
 mlruns/
 data/mlflow.db
 
+# Logs locais (podem conter PII -- docs/LGPD.md; audite com
+# scripts/auditoria_lgpd.py antes de compartilhar qualquer um)
+*.log
+
+# Artefatos locais de ferramentas (mesma lista do .dockerignore)
+.deepeval/
+notebooks/
+
+# Configuracao local do Claude Code (a do projeto, se houver, fica em .claude/settings.json)
+.claude/settings.local.json
+
 # IDE
 .vscode/
 .idea/
 *.swp
 .DS_Store
+Thumbs.db
+desktop.ini
 
 # Documentacao (rascunho pessoal, nao versionar)
 docs/playbook/
