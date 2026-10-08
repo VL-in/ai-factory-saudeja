@@ -1,12 +1,14 @@
 # SaudeJa — Classificador de no-show em agendamentos médicos
 
-> Status: em desenvolvimento — (AI Factory: Build, Deploy and Showcase)
+> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.1.0](docs/logs/CHANGELOG.md). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
 
 Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia lembrete por SMS só para eles, dois dias antes do atendimento.
 
 ## Visão Geral
 
-SaudeJá é um SaaS voltado para clínicas particulares de saúde de médio e pequeno porte que oferece serviço de agendamento online, prontuário, faturamento e comunicação com pacientes. Atualmente visa desenvolver uma funcionalidade para prevê pacientes que se ausenta de agendamentos médicos usando o classificador LightGBM. O repositório foi herdado com um pipeline de treinamento que resulta em um modelo com desempenho de Acurácia 78% no test set, F1-score para classe positiva de 0,65 e ROC-AUC de 0,81, dentro da disciplina AI Factory: Build, Deploy and Showcase.
+SaudeJá é um SaaS voltado para clínicas particulares de saúde de médio e pequeno porte que oferece serviço de agendamento online, prontuário, faturamento e comunicação com pacientes. Este repositório desenvolve a funcionalidade que prevê quais pacientes vão faltar à consulta, usando o classificador LightGBM, dentro da disciplina AI Factory: Build, Deploy and Showcase.
+
+O repositório foi herdado com um pipeline de treinamento que reportava acurácia de 78%, F1-score de 0,65 para a classe positiva e ROC-AUC de 0,81. Medido no fold de teste isolado, o modelo em produção tem acurácia de 0,67, F1-score de 0,42 para a classe positiva e ROC-AUC de 0,64 ([`data/champion_metrics.json`](data/champion_metrics.json), [ADR-003](docs/adr/adr-003-SMOTE-NC.md)). O recall e o F1 da classe positiva ficam abaixo dos alvos do [SLO](docs/SLO.md) por limite do dataset. Essa exceção está documentada e será decidida na validação final.
 
 
 ## Problema
@@ -17,7 +19,8 @@ O no-show custa em média **R$ 180 por consulta perdida** e a taxa nacional gira
 
 | Ambiente | Endereço |
 |---|---|
-| Produção (Hugging Face Space) | _ainda não publicada — será adicionada após o primeiro deploy_ |
+| Produção (Hugging Face Space) | _no ar desde a v2.0.0; o endereço entra aqui depois que o UptimeRobot estiver monitorando a produção_ |
+| Desenvolvimento (Hugging Face Space) | _uso interno; o id do Space fica na variável `HF_SPACE_ID` do environment `dev`_ |
 
 O Space publica só a interface Streamlit (porta 7860). A API FastAPI roda no mesmo container, mas não fica exposta publicamente. A visão **Paciente** é aberta; a visão **Funcionário** exige uma conta criada pelo administrador (ver [Criar conta de funcionário](#criar-conta-de-funcionário)).
 
@@ -177,7 +180,7 @@ Variáveis principais:
 
 | Variável | Efeito |
 |---|---|
-| `APP_ENV` | `dev` exibe a aba "Dev: disparo manual", que executa o job D-2 pela interface. Use `prod` em produção |
+| `APP_ENV` | `dev` exibe "Time técnico → Dev: disparo manual", que executa o job D-2 pela interface e mostra o diagnóstico (ambiente, modo de predição, status do banco). Use `prod` em produção |
 | `PREDICT_BACKEND` | `processo` (padrão) ou `api` |
 | `MESSAGING_PROVIDER` | `stub` (padrão, não envia nada) ou `infobip` (SMS real) |
 | `TIMEZONE_CLINICA` | Fuso usado em datas e na fila do dia (padrão `America/Sao_Paulo`) |
@@ -366,15 +369,34 @@ gh pr create --base main
 
 - **Migrations não voltam com o código.** O `supabase db push` só aplica migrations novas. Se a versão revertida trouxe uma migration aditiva (coluna ou tabela nova), o código antigo convive com ela. Se a migration foi destrutiva, o caminho é uma correção para frente, não um revert.
 - O `workflow_dispatch` do `deploy.yml` não serve para voltar a uma tag antiga: fora de `main`, ele escolhe o environment `dev`. Em `main`, ele só reenvia o commit atual.
+- Este caminho foi ensaiado em `dev` no [RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md): 6 min 56 s do push do revert até o Space saudável, quase tudo de CI. Em produção, some o CI do PR e o do deploy.
+- Para conferir o que está no ar, compare o digest da árvore do Space, não o SHA do commit: o `hub-sync` cria um commit novo a cada sync, mesmo com conteúdo idêntico. Os comandos estão no RB-001.
+
+### Registros de incidente e de rollback
+
+| Tipo | Pasta | Registros |
+|---|---|---|
+| Post-mortem | [`docs/post-mortem/`](docs/post-mortem/) | [PM-001](docs/post-mortem/PM-001.md): falhas no primeiro deploy de dev (04/10/2026, SEV-3) |
+| Relatório de rollback | [`docs/rollbacks/`](docs/rollbacks/) | [RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md): ensaio de rollback de código em dev (05/10/2026) |
+
+Cada registro termina com uma tabela de ações. As ações em aberto também aparecem no [Roadmap](#roadmap).
 
 ## Roadmap
 
 - [x] Etapa 1: adoção do protótipo
 - [x] Etapa 2: escolha da stack (ADR-001)
 - [x] Etapa 3: arquitetura C4 + ADR-002 + repositório
-- [ ] Etapa 4: deploy manual
-- [ ] Etapa 5: CI/CD
-- (etc.)
+- [x] Etapa 4: produto deployável — inferência, SHAP, API, interface, banco, job D-2, mensageria e blindagem LGPD
+- [x] Etapa 5: CI/CD, re-treino mensal com gate, canário do modelo e observabilidade com alertas
+- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 e v2.1.0)
+- [ ] Etapa 7: operação e ensaios
+  - [x] Ensaio de rollback de código em dev ([RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md))
+  - [ ] Guarda no `deploy.yml` que recusa um `HF_SPACE_ID` de outro environment ([PM-001](docs/post-mortem/PM-001.md))
+  - [ ] Conferência de que o modelo do `dvc.lock` está no remote antes do push ([PM-001](docs/post-mortem/PM-001.md))
+  - [ ] RB-002: rollback de código com migration aditiva
+  - [ ] Ensaio do rollback do modelo (canário)
+- [ ] Etapa 8: validação final para o pitch — números do SLA/SLO medidos em produção e decisão sobre o gap de recall
+- [ ] Etapa 9 (opcional): assistente com LLM para a equipe da clínica
 
 ## Autor
 

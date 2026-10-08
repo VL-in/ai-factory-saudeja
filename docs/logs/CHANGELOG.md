@@ -8,6 +8,14 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado] (Vanessa + Claude) - 2026-10-08
+
+### Modificado
+- **O README descreve o estado atual do projeto.** Ele mostra que o SaúdeJá está em produção desde a v2.0.0 e traz o roteiro com as etapas concluídas e as que faltam, incluindo as ações em aberto do post-mortem e do ensaio de rollback.
+- O README passa a separar as métricas que o pipeline herdado reportava (acurácia de 78%, F1 de 0,65, ROC-AUC de 0,81) das medidas do modelo em produção no fold de teste isolado (0,67, 0,42 e 0,64). A diferença até os alvos do [SLO](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/SLO.md) será decidida na validação final.
+- A seção de rollback do README cita o tempo medido no ensaio em dev (6 min 56 s) e explica como conferir o que está no ar. A seção nova "Registros de incidente e de rollback" aponta para o [PM-001](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/post-mortem/PM-001.md) e o [RB-001](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/rollbacks/RB-001-ensaio-rollback-dev.md).
+- O endereço público de produção entra no README depois que o monitoramento de disponibilidade estiver configurado.
+
 ## [v2.1.0] (Vanessa + Claude) - 2026-10-05
 
 ### Modificado
