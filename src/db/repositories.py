@@ -204,7 +204,7 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[Linha]:
 def marcar_lembrete_enviado(id_agendamento: str) -> None:
     """Grava no próprio agendamento que o paciente recebeu lembrete. Em
     `agendamentos`, e não só em `mensagens_disparadas`, por
-    dois motivos: `mensagens_disparadas` é purgada em 365 dias (LGPD §5), e o
+    dois motivos: `mensagens_disparadas` é purgada em 90 dias (LGPD §5), e o
     re-treino precisa do dado enquanto o agendamento existir -- o SMS é uma
     intervenção que muda o desfecho (feedback loop); e é o filtro que impede
     reenvio na janela de três dias do job."""
@@ -250,7 +250,7 @@ def gravar_predicao(
 
 
 def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> Linha:
-    """Auditoria de disparo (SLA §6) -- uma linha por agendamento processado
+    """Auditoria de disparo (`docs/LGPD/LGPD.md` §5) -- uma linha por agendamento processado
     pelo job D-2, enviado ou não: `status_envio` distingue
     'enviado' (probabilidade acima do threshold, lembrete pago disparado) de
     'nao_enviado' (abaixo do threshold, nenhum custo de mensageria), então a

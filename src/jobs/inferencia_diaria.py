@@ -9,7 +9,7 @@ explicação reaproveitando `src/inference.py`/`src/explain.py` -- os mesmos
 módulos que a API usa, sem lógica de predição duplicada --, grava
 o resultado em `predicoes` e decide o disparo de lembrete pago conforme o
 threshold de `params.yaml`, sempre registrando a decisão (enviado ou não)
-em `mensagens_disparadas` para auditoria (SLA §6).
+em `mensagens_disparadas` para auditoria (`docs/LGPD/LGPD.md` §5).
 
 Importa o modelo em processo (decisão do ADR-005 b), não via HTTP à API. Roda
 no runner do GitHub Actions (`.github/workflows/job_d2.yml`), não
@@ -378,7 +378,7 @@ def _enviar_lembrete(
     resultado: dict[str, Any],
     status: str,
 ) -> None:
-    """Envia o lembrete, registra a auditoria (SLA §6) e marca
+    """Envia o lembrete, registra a auditoria (`docs/LGPD/LGPD.md` §5) e marca
     `agendamentos.lembrete_enviado` -- o registro que o re-treino usa para não
     confundir "compareceu" com "compareceu porque foi lembrado", e que impede
     reenvio na janela de três dias do job."""
@@ -436,7 +436,7 @@ def purgar_dados_derivados_antigos() -> dict[str, int]:
 
     Roda junto da purga de `eventos_app` e falha do mesmo jeito: sem derrubar o
     job. Perder a limpeza de um dia é irrelevante perto de perder a fila de
-    lembretes, e a janela (365 dias) tem folga de sobra para uma execução
+    lembretes, e a janela (90 dias) tem folga de sobra para uma execução
     perdida não virar retenção indevida."""
     try:
         limite = observabilidade.inicio_da_janela(
