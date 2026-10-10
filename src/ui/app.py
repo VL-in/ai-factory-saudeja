@@ -305,6 +305,33 @@ def _mostrar_aviso_desfecho():
         st.error(mensagem)
 
 
+CANAL_REVISAO_SAUDEJA = "dpo@saudeja.com.br"
+
+
+def _orientacao_revisao_de_decisao():
+    """Canal do art. 20 da LGPD para quem atende. A clínica é a controladora da
+    decisão de lembrar (docs/LGPD/LGPD.md §1) e responde ao paciente; a
+    SaúdeJá dá o apoio técnico. Procedimento completo em
+    docs/LGPD/PROCEDIMENTO-REVISAO.md."""
+    with st.expander("Paciente pediu revisão da decisão de lembrete?"):
+        st.markdown(
+            "O paciente pode pedir explicação e revisão da decisão automática de "
+            "enviar ou não o lembrete (LGPD, art. 20). Responda em até **15 dias**.\n\n"
+            "1. Confirme a identidade de quem pede (CPF e data de nascimento).\n"
+            "2. Escolha a data da consulta acima e abra a linha do paciente: a "
+            "explicação mostra os fatores que aumentaram ou reduziram o risco.\n"
+            "3. Se algum dado estiver errado (distância, histórico, horário), "
+            "corrija o cadastro.\n"
+            "4. Se o lembrete deveria ter sido enviado, avise o paciente por "
+            "telefone. A decisão nunca afeta o atendimento.\n"
+            "5. Explique ao paciente o resultado. Se a predição não aparecer "
+            "(mais de 90 dias) ou se o paciente contestar o critério, escreva para "
+            f"**{CANAL_REVISAO_SAUDEJA}** com o assunto \"Revisão art. 20\" e o "
+            "código do agendamento (em \"Detalhes técnicos\" da linha). **Não envie "
+            "nome, CPF, telefone nem o identificador interno do paciente.**"
+        )
+
+
 def _aba_fila_do_dia():
     st.subheader("Fila do dia")
     st.caption(
@@ -318,6 +345,7 @@ def _aba_fila_do_dia():
         ":material/lock: Esta tela mostra **nome de paciente** e é de uso "
         "restrito da equipe. Evite deixá-la visível para a sala de espera."
     )
+    _orientacao_revisao_de_decisao()
     _mostrar_aviso_desfecho()
 
     dia = st.date_input("Data da fila", value=logic.hoje_na_clinica())
@@ -422,6 +450,10 @@ def _aba_fila_do_dia():
     # e nos logs (onde o nome nunca aparece), então sem ele o suporte perde o
     # único identificador comum entre tela e diagnóstico.
     with st.expander("Detalhes técnicos"):
+        # O código do agendamento é o que vai num pedido de revisão à SaúdeJá
+        # (_orientacao_revisao_de_decisao): uuid interno, sem dado pessoal.
+        # O identificador do paciente não vai, porque o hash do CPF é reversível.
+        st.caption(f"código do agendamento: `{item.id_agendamento}`")
         st.caption(f"identificador interno: `{item.id_paciente_externo}`")
         if item.tem_predicao:
             st.caption(
