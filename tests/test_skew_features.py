@@ -105,6 +105,14 @@ def test_sms_informa_o_horario_da_clinica():
     assert "02/10/2026 às 18:00" in mensagem
 
 
+def test_sms_nao_revela_a_especialidade():
+    """A especialidade é dado sensível (LGPD.md §2): não vai para o log da
+    Infobip nem para a tela bloqueada do celular do paciente."""
+    linha = _linha_do_banco()
+    mensagem = job._mensagem_de_lembrete(linha)
+    assert linha["especialidade"].lower() not in mensagem.lower()
+
+
 def test_sms_de_agendamento_malformado_cai_na_mensagem_generica():
     mensagem = job._mensagem_de_lembrete(_linha_do_banco(data_hora_agendada=None))
     assert "consulta" in mensagem

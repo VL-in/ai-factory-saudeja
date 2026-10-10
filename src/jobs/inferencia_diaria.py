@@ -361,12 +361,17 @@ def _registrar_quarentena(
 def _mensagem_de_lembrete(agendamento: dict[str, Any]) -> str:
     """Texto do SMS, com data e hora no fuso da clínica. Se o próprio
     agendamento estiver malformado (é o caso da quarentena), cai numa mensagem
-    genérica em vez de deixar de lembrar o paciente."""
+    genérica em vez de deixar de lembrar o paciente.
+
+    Sem a especialidade, de propósito (`docs/LGPD/LGPD.md` §2.1): ela é dado
+    sensível, e o texto fica no log da Infobip (3 meses por padrão) e na tela
+    bloqueada do celular, visível a quem estiver perto. Data e hora bastam para
+    o paciente reconhecer a consulta."""
     try:
         quando = para_horario_da_clinica(agendamento["data_hora_agendada"])
         return (
-            f"Olá! Confirmamos sua consulta de {agendamento['especialidade']} em "
-            f"{quando:%d/%m/%Y às %H:%M}. Poderá comparecer?"
+            f"Olá! Confirmamos sua consulta em {quando:%d/%m/%Y às %H:%M}. "
+            "Poderá comparecer?"
         )
     except Exception:
         return "Olá! Lembramos da sua consulta agendada nos próximos dias. Poderá comparecer?"
