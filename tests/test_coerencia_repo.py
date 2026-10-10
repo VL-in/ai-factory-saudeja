@@ -389,6 +389,89 @@ def test_a_guarda_de_log_realmente_detecta_pii():
         assert not achados, f"falso positivo da guarda: {codigo}"
 
 
+# Filtros do supabase-py/postgrest-py. Cada um vira query string da requisição
+# ao PostgREST (`?telefone=eq.5511...`), e a URL inteira fica no log de API do
+# Supabase -- um log do provedor, que o filtro de `src/logging_config.py` não
+# alcança. O corpo do POST (insert/upsert/rpc) não entra nesse log.
+_METODOS_DE_FILTRO_POSTGREST = frozenset(
+    {"eq", "neq", "in_", "like", "ilike", "gt", "gte", "lt", "lte", "contains", "match",
+     "filter", "or_", "text_search"}
+)
+# Colunas cujo VALOR é dado pessoal. `id_paciente_externo` entra apesar de ser
+# hash: é reversível por força bruta sobre o espaço de CPFs (LGPD.md, Quadro 2).
+_COLUNAS_DE_PII_NO_BANCO = frozenset(
+    {"id_paciente_externo", "telefone", "nome_completo", "data_nascimento", "cpf", "email"}
+)
+
+
+def _colunas_filtradas(no: ast.Call):
+    """Colunas usadas como filtro numa chamada `.eq("coluna", valor)`,
+    `.match({"coluna": valor})` ou `.or_("coluna.eq.valor,...")`."""
+    func = no.func
+    if not isinstance(func, ast.Attribute) or func.attr not in _METODOS_DE_FILTRO_POSTGREST:
+        return
+    if not no.args:
+        return
+    primeiro = no.args[0]
+    if isinstance(primeiro, ast.Dict):
+        for chave in primeiro.keys:
+            if isinstance(chave, ast.Constant) and isinstance(chave.value, str):
+                yield chave.value
+    elif isinstance(primeiro, ast.Constant) and isinstance(primeiro.value, str):
+        # `or_`/`filter` com expressão: a coluna é o trecho antes do primeiro ponto
+        # de cada condição; para os demais, o próprio argumento.
+        for condicao in primeiro.value.split(","):
+            yield condicao.strip().strip("()").split(".", 1)[0]
+
+
+def _filtros_por_pii(codigo: str, origem: str = "<teste>") -> list[str]:
+    arvore = ast.parse(codigo, filename=origem)
+    return [
+        f"{origem}:{no.lineno} -> {coluna}"
+        for no in ast.walk(arvore)
+        if isinstance(no, ast.Call)
+        for coluna in _colunas_filtradas(no)
+        if coluna in _COLUNAS_DE_PII_NO_BANCO
+    ]
+
+
+def test_nenhuma_consulta_ao_supabase_filtra_por_dado_pessoal():
+    """O valor de um filtro do PostgREST viaja na URL, e a URL fica no log de API
+    do Supabase (LGPD.md §8). Consultar por dado pessoal -- hoje ou numa futura
+    ferramenta de LLM que consulte o banco -- tem de passar o valor no corpo de
+    um POST, via `rpc()` para uma função do Postgres, nunca como filtro de GET.
+    Filtrar por uuid interno, status ou data continua permitido."""
+    encontrados = []
+    for arquivo in sorted((REPO_ROOT / "src").rglob("*.py")):
+        encontrados += _filtros_por_pii(
+            arquivo.read_text(encoding="utf-8"), str(arquivo.relative_to(REPO_ROOT))
+        )
+    assert not encontrados, (
+        "Consulta ao Supabase filtrando por dado pessoal -- o valor iria para a URL e "
+        f"para o log de API do provedor. Use rpc() com o valor no corpo: {encontrados}"
+    )
+
+
+def test_a_guarda_de_filtro_realmente_detecta_pii():
+    """Controle negativo da guarda acima, no mesmo espírito da guarda de log."""
+    deve_flagrar = [
+        'c.table("pacientes").select("id").eq("id_paciente_externo", h).execute()',
+        'c.table("pacientes").select("id").in_("telefone", fones).execute()',
+        'c.table("pacientes").select("id").match({"nome_completo": n}).execute()',
+        'c.table("pacientes").select("id").or_("email.eq.x,cpf.eq.y").execute()',
+    ]
+    nao_deve_flagrar = [
+        'c.table("agendamentos").select("*").eq("id_paciente", uuid).execute()',
+        'c.table("agendamentos").select("*").in_("status", ["no_show"]).execute()',
+        'c.table("pacientes").upsert(r, on_conflict="id_paciente_externo").execute()',
+        'c.rpc("buscar_paciente", {"id_paciente_externo": h}).execute()',
+    ]
+    for codigo in deve_flagrar:
+        assert _filtros_por_pii(codigo), f"guarda deixou passar: {codigo}"
+    for codigo in nao_deve_flagrar:
+        assert not _filtros_por_pii(codigo), f"falso positivo da guarda: {codigo}"
+
+
 def test_architecture_md_sem_placeholder_generico():
     """docs/architecture.md é um template genérico -- este teste falha se algum
     placeholder tipo '[e.g., ...]' ainda não foi preenchido com conteúdo real
