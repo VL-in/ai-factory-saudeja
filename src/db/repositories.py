@@ -14,6 +14,7 @@ from typing import Any, cast
 from postgrest.types import CountMethod
 
 from config_projeto import fuso_da_clinica, hoje_na_clinica
+from consentimento import RETENCAO_PROVA_APOS_ELIMINACAO_DIAS
 from db.client import obter_client
 
 Linha = dict[str, Any]
@@ -623,3 +624,157 @@ def registrar_canario_revertido(model_version: str, motivo: str) -> None:
         on_conflict="model_version",
         ignore_duplicates=True,
     ).execute()
+
+
+# --------------------------------------------------------------------------
+# consentimento e pedidos do titular (ADR-009)
+#
+# Toda consulta filtra por uuid interno (`id_paciente`, `id` do pedido), nunca
+# por `id_paciente_externo`: o valor de um filtro viaja na URL e fica no log de
+# API do Supabase (LGPD.md §8.1). O hash do CPF só é gravado, no corpo do insert.
+# --------------------------------------------------------------------------
+_COLUNAS_EVENTO_CONSENTIMENTO = "finalidade, acao, versao_termo, registrado_em"
+
+
+def registrar_consentimentos(
+    id_paciente: str,
+    id_paciente_externo: str,
+    decisoes: list[tuple[str, str]],
+    versao_termo: str,
+    canal: str,
+    consentido_por: str,
+    registrado_por: str | None = None,
+) -> list[Linha]:
+    """Grava um evento por par (finalidade, ação) de `decisoes`, num insert só.
+
+    Quem decide *quais* eventos gravar é a tela (só quando o estado muda); aqui
+    só se persiste. `registrado_por` fica nulo no autoagendamento. A tabela é
+    só de inserção no banco: não existe função para corrigir um evento, porque
+    corrigir apagaria a prova -- um engano se desfaz com um evento novo."""
+    if not decisoes:
+        return []
+    linhas = [
+        {
+            "id_paciente": id_paciente,
+            "id_paciente_externo": id_paciente_externo,
+            "finalidade": finalidade,
+            "acao": acao,
+            "versao_termo": versao_termo,
+            "canal": canal,
+            "consentido_por": consentido_por,
+            "registrado_por": registrado_por,
+        }
+        for finalidade, acao in decisoes
+    ]
+    return _linhas(obter_client().table("eventos_consentimento").insert(linhas).execute().data)
+
+
+def eventos_consentimento_do_paciente(id_paciente: str) -> list[Linha]:
+    """Eventos do paciente, do mais antigo ao mais recente, no formato que
+    `consentimento.consentimentos_vigentes` espera."""
+    return _linhas(
+        obter_client()
+        .table("eventos_consentimento")
+        .select(_COLUNAS_EVENTO_CONSENTIMENTO)
+        .eq("id_paciente", id_paciente)
+        .order("registrado_em")
+        .execute()
+        .data
+    )
+
+
+def purgar_provas_de_consentimento_expiradas(agora: datetime) -> int:
+    """Apaga os eventos de pacientes eliminados há mais de 365 dias (ADR-009).
+
+    O corte tem **um dia de folga** além do prazo: o trigger da migration
+    compara com o `now()` do banco e aborta o `delete` inteiro se uma única
+    linha ainda estiver dentro dos 365 dias. Sem a folga, um relógio do runner
+    alguns segundos adiantado faria a purga falhar justamente na linha da
+    fronteira. O prazo efetivo declarado fica em 365 dias mais até 1."""
+    corte = agora - timedelta(days=RETENCAO_PROVA_APOS_ELIMINACAO_DIAS + 1)
+    removidas = (
+        obter_client()
+        .table("eventos_consentimento")
+        .delete()
+        .lt("eliminado_em", corte.isoformat())
+        .execute()
+        .data
+    )
+    return len(removidas or [])
+
+
+TIPOS_PEDIDO = ("eliminacao", "revogacao_treino", "revogacao_lembrete", "revisao_decisao")
+
+
+def registrar_pedido(id_paciente: str, tipo: str) -> Linha:
+    """Pedido do titular, sempre `pendente`: só a clínica, controladora,
+    confirma (art. 39)."""
+    if tipo not in TIPOS_PEDIDO:
+        raise ValueError(f"tipo de pedido desconhecido: {tipo!r}")
+    return _primeira(
+        obter_client()
+        .table("pedidos_titular")
+        .insert({"id_paciente": id_paciente, "tipo": tipo})
+        .execute()
+        .data
+    )
+
+
+def _mudar_situacao_do_pedido(id_pedido: str, de: str, para: dict[str, Any]) -> bool:
+    """Update condicionado à situação atual: confirmar um pedido já recusado,
+    ou executar um que a clínica não confirmou, não muda nada. Devolve se a
+    linha mudou -- o workflow conta pedidos executados por esse retorno."""
+    linhas = (
+        obter_client()
+        .table("pedidos_titular")
+        .update(para)
+        .eq("id", id_pedido)
+        .eq("situacao", de)
+        .execute()
+        .data
+    )
+    return bool(linhas)
+
+
+def confirmar_pedido(id_pedido: str) -> bool:
+    return _mudar_situacao_do_pedido(
+        id_pedido,
+        de="pendente",
+        para={
+            "situacao": "confirmado_pela_clinica",
+            "confirmado_em": datetime.now().astimezone().isoformat(),
+        },
+    )
+
+
+def recusar_pedido(id_pedido: str) -> bool:
+    return _mudar_situacao_do_pedido(id_pedido, de="pendente", para={"situacao": "recusado"})
+
+
+def pedidos_confirmados() -> list[Linha]:
+    """Fila do workflow de purga: o que a clínica já confirmou e ainda não foi
+    executado, do mais antigo ao mais recente (o prazo de 15 dias corre)."""
+    return _linhas(
+        obter_client()
+        .table("pedidos_titular")
+        .select("id, id_paciente, tipo, confirmado_em")
+        .eq("situacao", "confirmado_pela_clinica")
+        .order("confirmado_em")
+        .execute()
+        .data
+    )
+
+
+def marcar_pedido_executado(id_pedido: str) -> bool:
+    """Executado e sem vínculo no mesmo update: o check da migration recusa um
+    pedido executado que ainda aponte para o paciente. Na eliminação o vínculo
+    já foi anulado pelo `set null`; na revogação é este update que o anula."""
+    return _mudar_situacao_do_pedido(
+        id_pedido,
+        de="confirmado_pela_clinica",
+        para={
+            "situacao": "executado",
+            "id_paciente": None,
+            "executado_em": datetime.now().astimezone().isoformat(),
+        },
+    )

@@ -603,3 +603,151 @@ def test_canario_revertido_faz_round_trip_e_a_primeira_gravacao_vale(db):
         assert linha["motivo"] == "primeiro motivo"
     finally:
         db.table("canarios_revertidos").delete().eq("model_version", "canario-teste-int").execute()
+
+
+# --- consentimento e pedidos do titular (ADR-009) ------------------------------
+
+
+def _criar_paciente_com_consentimento(repositories, id_externo):
+    paciente = repositories.inserir_paciente(
+        id_paciente_externo=id_externo,
+        data_nascimento=DATA_NASCIMENTO_PADRAO,
+        sexo="F",
+        telefone=TELEFONE_PADRAO,
+    )
+    eventos = repositories.registrar_consentimentos(
+        id_paciente=paciente["id"],
+        id_paciente_externo=id_externo,
+        decisoes=[("lembrete", "concedido"), ("transferencia_internacional", "concedido")],
+        versao_termo="teste-int",
+        canal="autoagendamento",
+        consentido_por="titular",
+    )
+    return paciente, eventos
+
+
+@pytest.mark.integracao
+def test_eventos_de_consentimento_fazem_round_trip_e_o_vigente_e_o_ultimo(db):
+    import consentimento
+    import db.repositories as repositories
+
+    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-1")
+    assert len(eventos) == 2
+    assert eventos[0]["registrado_por"] is None  # autoagendamento
+
+    repositories.registrar_consentimentos(
+        id_paciente=paciente["id"],
+        id_paciente_externo="hash-consent-1",
+        decisoes=[("lembrete", "revogado")],
+        versao_termo="teste-int",
+        canal="clinica",
+        consentido_por="titular",
+    )
+
+    lidos = repositories.eventos_consentimento_do_paciente(paciente["id"])
+    assert [e["acao"] for e in lidos if e["finalidade"] == "lembrete"] == [
+        "concedido",
+        "revogado",
+    ]
+    assert not consentimento.tem_consentimento(lidos, "lembrete")
+    assert consentimento.tem_consentimento(lidos, "transferencia_internacional")
+
+
+@pytest.mark.integracao
+def test_eventos_de_consentimento_recusam_update_e_delete(db):
+    """Só de inserção no banco, não por convenção: a chave secreta ignora RLS,
+    mas não o trigger. Corrigir um evento apagaria a prova (art. 8º, § 2º)."""
+    import db.repositories as repositories
+
+    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-2")
+    id_evento = eventos[0]["id"]
+
+    with pytest.raises(Exception, match="so' de insercao"):
+        db.table("eventos_consentimento").update({"acao": "revogado"}).eq("id", id_evento).execute()
+    with pytest.raises(Exception, match="365 dias"):
+        db.table("eventos_consentimento").delete().eq("id", id_evento).execute()
+
+    acoes = [e["acao"] for e in repositories.eventos_consentimento_do_paciente(paciente["id"])]
+    assert acoes == ["concedido", "concedido"]
+
+
+@pytest.mark.integracao
+def test_eliminar_o_paciente_mantem_a_prova_sem_vinculo_e_com_data(db):
+    """`on delete set null`, não `cascade` (ADR-009): os eventos sobrevivem à
+    eliminação, sem vínculo com o cadastro, e o trigger grava `eliminado_em`.
+    Antes de 365 dias, nem a purga consegue apagá-los."""
+    from datetime import timezone
+
+    import db.repositories as repositories
+
+    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-3")
+    ids = [e["id"] for e in eventos]
+
+    db.table("pacientes").delete().eq("id", paciente["id"]).execute()
+
+    restantes = (
+        db.table("eventos_consentimento")
+        .select("id, id_paciente, id_paciente_externo, eliminado_em")
+        .in_("id", ids)
+        .execute()
+        .data
+    )
+    assert len(restantes) == 2
+    assert all(r["id_paciente"] is None for r in restantes)
+    assert all(r["id_paciente_externo"] == "hash-consent-3" for r in restantes)
+    assert all(r["eliminado_em"] is not None for r in restantes)
+
+    # A purga de hoje não alcança uma eliminação de agora.
+    assert repositories.purgar_provas_de_consentimento_expiradas(datetime.now(timezone.utc)) == 0
+    # E nem com o relógio do chamador adiantado: o trigger compara com o now()
+    # do banco e recusaria o delete inteiro.
+    with pytest.raises(Exception, match="365 dias"):
+        repositories.purgar_provas_de_consentimento_expiradas(
+            datetime.now(timezone.utc) + timedelta(days=400)
+        )
+
+
+@pytest.mark.integracao
+def test_pedido_do_titular_percorre_as_situacoes_e_perde_o_vinculo_ao_executar(db):
+    import db.repositories as repositories
+
+    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-1")
+    pedido = repositories.registrar_pedido(paciente["id"], "revogacao_treino")
+    assert pedido["situacao"] == "pendente"
+
+    # Executar sem a clínica confirmar não muda nada.
+    assert not repositories.marcar_pedido_executado(pedido["id"])
+    assert repositories.confirmar_pedido(pedido["id"])
+    assert not repositories.recusar_pedido(pedido["id"])  # já saiu de pendente
+    assert [p["id"] for p in repositories.pedidos_confirmados()] == [pedido["id"]]
+
+    assert repositories.marcar_pedido_executado(pedido["id"])
+
+    linha = db.table("pedidos_titular").select("*").eq("id", pedido["id"]).execute().data[0]
+    assert linha["situacao"] == "executado"
+    assert linha["id_paciente"] is None
+    assert linha["executado_em"] is not None
+    assert repositories.pedidos_confirmados() == []
+    db.table("pedidos_titular").delete().eq("id", pedido["id"]).execute()
+
+
+@pytest.mark.integracao
+def test_pedido_executado_com_vinculo_e_recusado_pelo_banco(db):
+    """O check da migration é a guarda, não a função do repositório."""
+    import db.repositories as repositories
+
+    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-2")
+    pedido = repositories.registrar_pedido(paciente["id"], "eliminacao")
+
+    with pytest.raises(Exception, match="pedidos_titular_executado_sem_vinculo"):
+        db.table("pedidos_titular").update({"situacao": "executado"}).eq(
+            "id", pedido["id"]
+        ).execute()
+    db.table("pedidos_titular").delete().eq("id", pedido["id"]).execute()
+
+
+def test_tipo_de_pedido_desconhecido_e_recusado_antes_do_banco():
+    import db.repositories as repositories
+
+    with pytest.raises(ValueError):
+        repositories.registrar_pedido("00000000-0000-0000-0000-000000000000", "apagar")
