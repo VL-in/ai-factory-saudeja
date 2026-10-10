@@ -1,8 +1,10 @@
 -- SaudeJa - consentimento em tabela de eventos e pedidos do titular (ADR-009).
 --
 -- eventos_consentimento: prova do consentimento (LGPD art. 8, par. 2) do
--- lembrete (art. 7, I), do treino com desfechos reais (art. 11, I) e da
--- transferencia internacional (art. 33, VIII). Cada concessao ou revogacao e'
+-- treino com desfechos reais (art. 11, I) e da transferencia internacional
+-- (art. 33, VIII). O lembrete nao tem finalidade aqui: a base dele e' a
+-- execucao do contrato do paciente com a clinica (art. 7, V), sem
+-- consentimento (LGPD.md secao 3). Cada concessao ou revogacao e'
 -- um evento; o consentimento vigente e' o ultimo evento de cada finalidade
 -- (src/consentimento.py). Guardar so' o estado atual em colunas de `pacientes`
 -- foi descartado no ADR-009: a revogacao apagaria a prova da concessao.
@@ -68,7 +70,7 @@ create table eventos_consentimento (
     -- cliente e' ignorado.
     id_paciente_externo text not null,
     finalidade text not null
-        check (finalidade in ('lembrete', 'treino', 'transferencia_internacional')),
+        check (finalidade in ('treino', 'transferencia_internacional')),
     acao text not null check (acao in ('concedido', 'revogado')),
     versao_termo text not null,
     -- autoagendamento: o proprio paciente, na tela de agendamento;
@@ -155,9 +157,11 @@ create table pedidos_titular (
     id uuid primary key default gen_random_uuid(),
     id_paciente uuid references pacientes (id) on delete set null,
     -- A revogacao do consentimento da transferencia internacional nao tem tipo
-    -- proprio: equivale a `eliminacao` (LGPD.md 4.2).
+    -- proprio: equivale a `eliminacao` (LGPD.md 4.2). O lembrete tambem nao:
+    -- sem consentimento, nao ha' o que revogar, e a oposicao ao SMS (art. 18,
+    -- par. 2) e' atendida pela clinica, caso a caso.
     tipo text not null
-        check (tipo in ('eliminacao', 'revogacao_treino', 'revogacao_lembrete', 'revisao_decisao')),
+        check (tipo in ('eliminacao', 'revogacao_treino', 'revisao_decisao')),
     situacao text not null default 'pendente'
         check (situacao in ('pendente', 'confirmado_pela_clinica', 'executado', 'recusado')),
     criado_em timestamptz not null default now(),

@@ -127,7 +127,7 @@ Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase t
 - **Nome só na fila do dia**: não vai para log, API, dataset de treino, SMS nem LLM, e cada uma dessas saídas tem um teste ([ADR-007](docs/adr/adr-007-nome-do-paciente.md)).
 - **Log sem dado pessoal**: filtro de redação em todos os handlers do processo, mais uma guarda estática sobre o código ([`src/logging_config.py`](src/logging_config.py)).
 - **Consultas ao Supabase sem dado pessoal na URL**: um teste barra filtros por CPF, telefone, nome ou data de nascimento, porque a URL fica no log do provedor.
-- **SMS sem especialidade**: o lembrete só informa data e hora.
+- **SMS sem especialidade**: o lembrete só informa data e hora. Por isso ele não traz dado de saúde e faz parte do atendimento contratado com a clínica, sem pedir consentimento; o consentimento fica para o uso dos desfechos no treino do modelo e para o processamento fora do Brasil.
 - **Retenção automática**: predições, explicações e registros de lembrete são apagados em 90 dias, pelo job diário.
 - **Cópias com a mesma retenção**: o banco não tem backup; versões apagadas do remote do DVC ficam 1 dia no soft delete; cópias locais do DVC são apagadas por [`scripts/purgar_dvc_local.py`](scripts/purgar_dvc_local.py) ([`LGPD.md` §5.1](docs/LGPD/LGPD.md)).
 - **Acesso**: RLS em todas as tabelas (só o backend lê); visão Funcionário com login individual e sessão de 30 minutos.
@@ -140,7 +140,8 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 
 | Pendência | Onde está decidido |
 |---|---|
-| Coleta e prova do consentimento (lembrete e treino), com filtro no job D-2 e no export | [ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), não implementado |
+| Coleta e prova do consentimento (treino e transferência internacional), com filtro no export | [ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), não implementado |
+| Registro da oposição ao lembrete (o lembrete não depende de consentimento, mas o paciente pode pedir à clínica para não receber SMS) | [`LGPD.md` §9.4](docs/LGPD/LGPD.md) |
 | Eliminação a pedido do titular e retenção de 90 dias no remote do DVC | ADR-009, não implementado. Hoje a eliminação é manual no banco |
 | Coleta do consentimento da transferência internacional | [`LGPD.md` §4.2 e §4.3](docs/LGPD/LGPD.md) |
 | Política de privacidade pública | Rascunho em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), com as condições para publicar |

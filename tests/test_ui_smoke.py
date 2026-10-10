@@ -268,12 +268,17 @@ def test_sem_a_caixa_da_transferencia_nenhum_campo_do_cadastro_aparece(monkeypat
     assert "Data da consulta" in [d.label for d in at.date_input]
 
 
-def test_caixas_do_lembrete_e_do_treino_comecam_desmarcadas(monkeypatch):
+def test_caixa_do_treino_comeca_desmarcada_e_o_lembrete_nao_tem_caixa(monkeypatch):
+    """O lembrete é parte do atendimento contratado com a clínica (art. 7º, V;
+    LGPD.md §3): não tem caixa. A única autorização opcional é a do treino."""
     at = _rodar(monkeypatch, sessao=None, perfil=None)
     _autorizar_transferencia(at)
 
-    assert _caixa(at, consentimento.TERMO_LEMBRETE).value is False
     assert _caixa(at, consentimento.TERMO_TREINO).value is False
+    assert [c.label for c in at.checkbox] == [
+        consentimento.TERMO_TRANSFERENCIA,
+        consentimento.TERMO_TREINO,
+    ]
 
 
 def test_agendar_repassa_o_estado_de_cada_caixa(monkeypatch):
@@ -283,15 +288,14 @@ def test_agendar_repassa_o_estado_de_cada_caixa(monkeypatch):
     )
     at = _rodar(monkeypatch, sessao=None, perfil=None)
     _preencher_cadastro_valido(at)
-    _caixa(at, consentimento.TERMO_LEMBRETE).check()
+    _caixa(at, consentimento.TERMO_TREINO).check()
 
     _botao(at, "Agendar").click().run()
 
     assert not at.exception
     assert chamadas[0]["consentimentos"] == {
         consentimento.FINALIDADE_TRANSFERENCIA: True,
-        consentimento.FINALIDADE_LEMBRETE: True,
-        consentimento.FINALIDADE_TREINO: False,
+        consentimento.FINALIDADE_TREINO: True,
     }
 
 

@@ -38,7 +38,7 @@ O mesmo roteiro aparece na tela "Fila do dia", no quadro "Paciente pediu revisã
 5. **Decidir**:
    - lembrete não enviado, mas que deveria ter sido: avisar o paciente por telefone;
    - lembrete enviado sem necessidade: não há efeito a desfazer; explicar o motivo;
-   - o paciente não quer mais lembretes: registrar a revogação do consentimento. O registro em `eventos_consentimento` ainda não existe ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)); até lá, encaminhar o pedido à SaúdeJá pelo canal da seção 4.
+   - o paciente não quer mais lembretes: é oposição ao lembrete (LGPD, art. 18, § 2º), não revogação de consentimento, porque o lembrete se apoia na execução do contrato com a clínica (LGPD.md, seção 3). O sistema ainda não tem como registrar a oposição e parar os envios (LGPD.md, subseção 9.4, item 29); até lá, encaminhar o pedido à SaúdeJá pelo canal da seção 4.
 6. **Responder ao paciente** em linguagem simples, explicando os fatores da decisão e o que foi feito.
 7. **Pedir apoio à SaúdeJá** quando:
    - a predição não aparece na tela: ela é apagada 90 dias depois de gerada (LGPD.md, seção 5);

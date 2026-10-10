@@ -706,7 +706,7 @@ def purgar_provas_de_consentimento_expiradas(agora: datetime) -> int:
     return len(removidas or [])
 
 
-TIPOS_PEDIDO = ("eliminacao", "revogacao_treino", "revogacao_lembrete", "revisao_decisao")
+TIPOS_PEDIDO = ("eliminacao", "revogacao_treino", "revisao_decisao")
 
 
 def registrar_pedido(id_paciente: str, tipo: str) -> Linha:

@@ -489,8 +489,8 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
 @pytest.mark.integracao
 def test_cadastro_pela_ui_grava_e_revoga_consentimento_so_quando_o_estado_muda(db):
     """Passo 8.6, peça 3: o primeiro agendamento concede o que foi marcado; o
-    segundo, com o lembrete desmarcado, revoga só o lembrete e não repete a
-    transferência nem o treino, que continuam vigentes na mesma versão."""
+    segundo, com o treino desmarcado, revoga só o treino e não repete a
+    transferência, que continua vigente na mesma versão."""
     import consentimento
     import db.repositories as repositories
     from ui import logic
@@ -510,7 +510,7 @@ def test_cadastro_pela_ui_grava_e_revoga_consentimento_so_quando_o_estado_muda(d
     tudo = dict.fromkeys(consentimento.FINALIDADES, True)
     primeiro = logic.cadastrar_paciente_e_agendamento(**campos, consentimentos=tudo)
     logic.cadastrar_paciente_e_agendamento(
-        **campos, consentimentos={**tudo, consentimento.FINALIDADE_LEMBRETE: False}
+        **campos, consentimentos={**tudo, consentimento.FINALIDADE_TREINO: False}
     )
 
     eventos = (
@@ -521,18 +521,18 @@ def test_cadastro_pela_ui_grava_e_revoga_consentimento_so_quando_o_estado_muda(d
         .execute()
         .data
     )
-    # Os três primeiros saem do mesmo insert, com o mesmo `now()`: a ordem
+    # Os dois primeiros saem do mesmo insert, com o mesmo `now()`: a ordem
     # entre eles não é garantida.
     pares = [(e["finalidade"], e["acao"]) for e in eventos]
-    assert set(pares[:3]) == {(f, "concedido") for f in consentimento.FINALIDADES}
-    assert pares[3:] == [(consentimento.FINALIDADE_LEMBRETE, "revogado")]
+    assert set(pares[:2]) == {(f, "concedido") for f in consentimento.FINALIDADES}
+    assert pares[2:] == [(consentimento.FINALIDADE_TREINO, "revogado")]
     assert {e["canal"] for e in eventos} == {"autoagendamento"}
     assert {e["consentido_por"] for e in eventos} == {"responsavel_legal"}
     assert {e["registrado_por"] for e in eventos} == {None}
     assert {e["versao_termo"] for e in eventos} == {consentimento.VERSAO_TERMO}
     lidos = repositories.eventos_consentimento_do_paciente(primeiro["id_paciente"])
-    assert not consentimento.tem_consentimento(lidos, consentimento.FINALIDADE_LEMBRETE)
-    assert consentimento.tem_consentimento(lidos, consentimento.FINALIDADE_TREINO)
+    assert not consentimento.tem_consentimento(lidos, consentimento.FINALIDADE_TREINO)
+    assert consentimento.tem_consentimento(lidos, consentimento.FINALIDADE_TRANSFERENCIA)
 
 
 # --- login do funcionário contra o Supabase Auth local (architecture.md §7) ---
@@ -667,7 +667,7 @@ def _criar_paciente_com_consentimento(repositories, id_externo):
     )
     eventos = repositories.registrar_consentimentos(
         id_paciente=paciente["id"],
-        decisoes=[("lembrete", "concedido"), ("transferencia_internacional", "concedido")],
+        decisoes=[("treino", "concedido"), ("transferencia_internacional", "concedido")],
         versao_termo="teste-int",
         canal="autoagendamento",
         consentido_por="titular",
@@ -686,19 +686,40 @@ def test_eventos_de_consentimento_fazem_round_trip_e_o_vigente_e_o_ultimo(db):
 
     repositories.registrar_consentimentos(
         id_paciente=paciente["id"],
-        decisoes=[("lembrete", "revogado")],
+        decisoes=[("treino", "revogado")],
         versao_termo="teste-int",
         canal="clinica",
         consentido_por="titular",
     )
 
     lidos = repositories.eventos_consentimento_do_paciente(paciente["id"])
-    assert [e["acao"] for e in lidos if e["finalidade"] == "lembrete"] == [
+    assert [e["acao"] for e in lidos if e["finalidade"] == "treino"] == [
         "concedido",
         "revogado",
     ]
-    assert not consentimento.tem_consentimento(lidos, "lembrete")
+    assert not consentimento.tem_consentimento(lidos, "treino")
     assert consentimento.tem_consentimento(lidos, "transferencia_internacional")
+
+
+@pytest.mark.integracao
+def test_lembrete_nao_e_finalidade_nem_tipo_de_pedido_no_banco(db):
+    """O lembrete se apoia na execução do contrato com a clínica (art. 7º, V;
+    LGPD.md §3): o banco recusa evento de consentimento e pedido de revogação
+    do lembrete, para que ninguém volte a registrar um consentimento que não
+    é a base do tratamento."""
+    from postgrest.exceptions import APIError
+
+    import db.repositories as repositories
+
+    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-consent-lembrete")
+    with pytest.raises(APIError, match="finalidade_check"):
+        repositories.registrar_consentimentos(
+            paciente["id"], [("lembrete", "concedido")], "teste-int", "clinica", "titular"
+        )
+    with pytest.raises(APIError, match="tipo_check"):
+        db.table("pedidos_titular").insert(
+            {"id_paciente": paciente["id"], "tipo": "revogacao_lembrete"}
+        ).execute()
 
 
 @pytest.mark.integracao
@@ -917,7 +938,7 @@ def test_datas_do_pedido_sao_do_relogio_do_banco(db):
         .insert(
             {
                 "id_paciente": paciente["id"],
-                "tipo": "revogacao_lembrete",
+                "tipo": "revogacao_treino",
                 "criado_em": antiga,
                 "confirmado_em": antiga,
             }

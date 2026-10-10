@@ -28,14 +28,10 @@ bases_legais:
     base: "tutela da saúde"
     artigo: "Art. 7, VIII"
     dados: ["id_paciente_externo (hash sha256 do CPF)", "sexo", "nome_completo", "data_nascimento"]
-  - finalidade: "Envio de lembrete de confirmação de presença na consulta agendada"
-    base: "consentimento"
-    artigo: "Art. 7, I"
-    dados: ["telefone", "canal e status de envio do lembrete"]
-  - finalidade: "Contato com o paciente sobre o atendimento agendado"
-    base: "legítimo interesse"
-    artigo: "Art. 7, IX"
-    dados: ["telefone"]
+  - finalidade: "Contato com o paciente sobre o atendimento agendado, inclusive o lembrete de confirmação por SMS (só data e hora, sem especialidade)"
+    base: "execução de contrato"
+    artigo: "Art. 7, V"
+    dados: ["telefone", "data_hora_agendada", "canal e status de envio do lembrete"]
   - finalidade: "Atributos operacionais usados na previsão de risco de falta"
     base: "legítimo interesse"
     artigo: "Art. 7, IX"
@@ -58,7 +54,7 @@ transferencia_internacional:
     - "Fora do Brasil — runner hospedado do GitHub Actions (job D-2 diário e re-treino mensal, sem gravação persistente)"
     - "Estados Unidos — Hugging Face Space (aplicação: processa nome, CPF antes do hash, telefone e dados da consulta, sem gravação persistente)"
     - "Local a confirmar — Infobip (telefone e texto do lembrete)"
-  mecanismo: "Art. 33, VIII — consentimento específico e destacado do paciente, com informação prévia do caráter internacional, para o GitHub Actions e o Hugging Face; coleta ainda não implementada (seção 4.2). O art. 33, II, b não é atendido pelos contratos das contas atuais (seção 4.1). O remote do DVC está em Brazil South desde 09/10/2026 (seção 4.3)"
+  mecanismo: "Art. 33, VIII — consentimento específico e destacado do paciente, com informação prévia do caráter internacional, para o GitHub Actions e o Hugging Face; coleta ainda não implementada (seção 4.2). O art. 33, II, b não é atendido pelos contratos das contas atuais (seção 4.1). Infobip: candidato ao art. 33, IX (execução de contrato, só telefone, data e hora), a validar com o contrato pago. O remote do DVC está em Brazil South desde 09/10/2026 (seção 4.3)"
 ---
 
 # PROTEÇÃO DE DADOS PESSOAIS NO SAÚDEJÁ: CLASSIFICADOR DE NO-SHOW
@@ -118,9 +114,11 @@ O schema foi desenhado com minimização de dados desde a origem ([architecture.
 **Critério de classificação.** Idade, sexo e distância, isolados, são dados pessoais comuns. A sensibilidade vem de dois elementos:
 
 - a `especialidade`, porque saber que alguém consulta cardiologia é informação sobre a saúde dessa pessoa;
-- o fato de existir um agendamento médico, registrado em `data_hora_agendada`, `status` e `historico_noshow`.
+- o histórico de comparecimento, registrado em `status` e `historico_noshow`, porque revela quantas vezes a pessoa recebeu ou deixou de receber atendimento de saúde.
 
-Por isso a classificação é feita pelo registro, não pela coluna isolada: o art. 11, § 1º, aplica o regime de dado sensível a todo tratamento que revele dado sensível. A predição e a explicação SHAP herdam essa sensibilidade. Toda coluna nova em `agendamentos` ou `predicoes` deve ser tratada como sensível, salvo justificativa em contrário. O sistema não guarda diagnóstico, prontuário, exame nem medicamento, por decisão de desenho: o modelo não precisa deles para prever falta.
+**Data e hora da consulta são dado pessoal comum** (decisão de 10/10/2026). Isoladas, `data_hora_agendada` diz quando a pessoa tem um compromisso, mas não a área de saúde nem o histórico de atendimento. É o que permite enviar o lembrete com base na execução do contrato (seção 3): o SMS leva só telefone, data e hora. A classificação depende de o lembrete não revelar a especialidade, nem no texto nem no remetente (subseção 9.4, item 28).
+
+Por isso a classificação é feita pelo registro, não pela coluna isolada: o art. 11, § 1º, aplica o regime de dado sensível a todo tratamento que revele dado sensível. O registro de agendamento continua sensível, porque contém a especialidade; a data e a hora só deixam de ser sensíveis quando tratadas separadas dela, como no lembrete. A predição e a explicação SHAP herdam essa sensibilidade. Toda coluna nova em `agendamentos` ou `predicoes` deve ser tratada como sensível, salvo justificativa em contrário. O sistema não guarda diagnóstico, prontuário, exame nem medicamento, por decisão de desenho: o modelo não precisa deles para prever falta.
 
 **Quadro 2 – Inventário de dados pessoais**
 
@@ -131,10 +129,11 @@ Por isso a classificação é feita pelo registro, não pela coluna isolada: o a
 | `telefone` | `pacientes` | Pessoal, identificador direto | Exceção à minimização (subseção 2.1) |
 | `nome_completo` | `pacientes` | Pessoal, identificador direto | Exceção à minimização (subseção 2.1) |
 | `especialidade` | `agendamentos` | Sensível (art. 5º, II) | Revela a área de saúde consultada |
-| `status` (`concluido`, `no_show`, `cancelado`), `historico_noshow`, `data_hora_agendada` | `agendamentos` | Sensível (art. 5º, II; art. 11, § 1º) | Revelam se, quando e quantas vezes a pessoa buscou ou recebeu atendimento de saúde |
+| `status` (`concluido`, `no_show`, `cancelado`), `historico_noshow` | `agendamentos` | Sensível (art. 5º, II; art. 11, § 1º) | Revelam se e quantas vezes a pessoa recebeu ou deixou de receber atendimento de saúde |
+| `data_hora_agendada` | `agendamentos` | Pessoal | Isolada, não revela a área de saúde nem o histórico. É o que o lembrete leva, com o telefone. No registro de agendamento, junto da especialidade, segue o regime de dado sensível (art. 11, § 1º) |
 | `distancia_km`, `dias_entre_agendamento_consulta` | `agendamentos` | Pessoal | — |
 | Probabilidade de no-show e explicação SHAP | `predicoes` | Sensível derivado (art. 11, § 1º; art. 12, § 2º) | Perfil comportamental calculado a partir de entradas sensíveis. A explicação expõe os valores dessas entradas |
-| Canal e status de envio do lembrete | `mensagens_disparadas` | Pessoal | Auditoria da decisão do modelo (seção 5) |
+| Canal e status de envio do lembrete | `mensagens_disparadas` | Pessoal | Auditoria do envio do lembrete e da decisão do modelo (seção 5) |
 | Latência, contadores, nome de classe de exceção | `eventos_app` | Não pessoal | Nenhuma coluna de dado pessoal, por construção ([ADR-006](../adr/adr-006-observabilidade.md)) |
 | Semente do dataset de treino (`data/consultas-historicas.csv`) | Repositório e Azure Blob Storage, via DVC | Não pessoal | 380 consultas sintéticas herdadas, sem titular real. Fixa: nunca recebe linha nova |
 | Linhas de produção do dataset de treino (`data/consultas-treino.csv`) | Azure Blob Storage, via DVC | Sensível pseudonimizado (art. 11, § 1º; arts. 12 e 13) | Desfechos reais registrados pela clínica (`no_show`, `lembrete_enviado`) e atributos da consulta, acrescentados à semente por `src/export_treino.py`. Só existem a partir do primeiro export com desfecho real |
@@ -183,11 +182,12 @@ Os dados sensíveis se apoiam no art. 11 e os dados pessoais comuns, no art. 7º
 | Dado | Art. 7º | Art. 11 |
 |---|---|---|
 | `id_paciente_externo`, `sexo`, `nome_completo`, `data_nascimento` | V (execução de contrato); VIII (tutela da saúde) | Não se aplica |
-| `telefone` | I (consentimento); IX (legítimo interesse) | Não se aplica |
-| Canal e status de envio do lembrete | I (consentimento) | Não se aplica |
+| `telefone` | V (execução de contrato) | Não se aplica |
+| `data_hora_agendada` | V (execução de contrato: agendamento e lembrete) | II, f (tutela da saúde), na predição, em que é tratada junto da especialidade |
+| Canal e status de envio do lembrete | V (execução de contrato) | Não se aplica |
 | `distancia_km`, `dias_entre_agendamento_consulta` | IX (legítimo interesse) | Não se aplica |
 | `especialidade` | Não se aplica | II, f (tutela da saúde) |
-| `status`, `historico_noshow`, `data_hora_agendada` | Não se aplica | II, f (tutela da saúde) |
+| `status`, `historico_noshow` | Não se aplica | II, f (tutela da saúde) |
 | Probabilidade de no-show e explicação SHAP | Não se aplica | II, f (tutela da saúde) |
 | Desfechos reais exportados para o dataset de treino (linha de produção: `no_show`, `lembrete_enviado` e atributos da consulta) | Não se aplica | I (consentimento específico e destacado, para a finalidade de melhoramento do algoritmo) |
 | E-mail de login e hash da senha do funcionário (SaúdeJá controladora) | IX (legítimo interesse) | Não se aplica |
@@ -196,7 +196,7 @@ Fonte: elaboração própria (2026), com base em Brasil (2018).
 
 **Tutela da saúde (art. 11, II, f).** A alínea exige que o tratamento seja feito *exclusivamente* para tutela da saúde, em procedimento realizado por serviço de saúde. A predição existe para que a clínica confirme a presença do paciente no atendimento que ele mesmo agendou. A única decisão que ela toma é enviar ou não um lembrete. Usá-la para cobrança, overbooking, encaixe de outro paciente ou recusa de atendimento seria finalidade econômica da clínica, e exigiria rever a base legal antes da implementação.
 
-**Consentimento descartado para a predição.** Na predição, o consentimento do art. 11, I, poderia ser revogado a qualquer momento, e o sistema teria de manter pacientes que agendam mas não podem ser priorizados, sem ganho de proteção. As anotações herdadas (`docs/herdado/notas-camila.md`) previam "consentimento + execução de contrato". A execução de contrato foi mantida para a identificação do paciente; o consentimento ficou restrito ao lembrete e ao treino. A divergência é intencional.
+**Consentimento descartado para a predição.** Na predição, o consentimento do art. 11, I, poderia ser revogado a qualquer momento, e o sistema teria de manter pacientes que agendam mas não podem ser priorizados, sem ganho de proteção. As anotações herdadas (`docs/herdado/notas-camila.md`) previam "consentimento + execução de contrato". A execução de contrato foi mantida para a identificação do paciente e passou a cobrir o lembrete; o consentimento ficou restrito ao treino e à transferência internacional (seção 4). A divergência é intencional.
 
 **Consentimento no treino (art. 11, I).** Reusar o desfecho real para treinar o modelo é finalidade secundária: não serve ao atendimento daquele paciente, e sim ao melhoramento do algoritmo para atendimentos futuros. Por isso não cabe no "exclusivamente" da alínea f, e se apoia no consentimento do titular ou de seu responsável legal, dado de forma específica e destacada para essa finalidade. A revogação tira o paciente do treino, mas não da predição nem do lembrete, que têm base própria. Obrigações, ainda não cumpridas pelo sistema (subseção 9.2, itens 19 a 21):
 
@@ -208,13 +208,15 @@ c) com a revogação, retirar as linhas do titular do próximo export e apagar a
 
 O consentimento é registrado na tabela `eventos_consentimento`, só de inserção: cada concessão ou revogação é um evento com finalidade, versão do termo, data e funcionário que registrou, e o consentimento vigente é o último evento de cada finalidade. A tabela serve de prova (art. 8º, § 2º) e de trilha de auditoria ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)). A coleta entrará na tela de agendamento numa etapa posterior.
 
-**Consentimento no lembrete (art. 7º, I).** O lembrete é comunicação sobre o atendimento agendado, não marketing. `src/messaging/client.py` tem uma única operação, `enviar_lembrete`, e oferecer serviço pelo mesmo canal exigiria outra base legal. Usar consentimento cria três obrigações que o sistema ainda não cumpre (subseção 9.2, itens 13 e 14):
+**Execução de contrato no lembrete (art. 7º, V).** Decisão de 10/10/2026, que substitui o consentimento (art. 7º, I) previsto antes. O lembrete é comunicação sobre o atendimento que o próprio paciente agendou, não marketing: faz parte da execução do contrato de atendimento entre o paciente e a clínica, do qual o titular é parte. É a prática dos serviços de saúde, que lembram a consulta sem pedir autorização específica para isso, e a política de privacidade e os termos de uso informam o lembrete antes do agendamento (art. 9º). Três condições sustentam a base:
 
-a) provar que o consentimento foi obtido, ônus que é do controlador (art. 8º, § 2º);
+a) **o SMS não leva dado sensível**: só data e hora, sem a especialidade, no texto e no remetente (Quadro 4; subseção 9.4, item 28). A base é do art. 7º porque data e hora, isoladas, são dado pessoal comum (seção 2). A escolha de *quem* recebe o lembrete usa a predição, que continua na tutela da saúde (art. 11, II, f);
 
-b) aceitar a revogação a qualquer momento, por procedimento gratuito e facilitado (art. 8º, § 5º), e parar os lembretes a partir dela;
+b) **o contrato que sustenta a base é o do paciente com a clínica**, não o contrato do SaaS. No contrato do SaaS, a clínica aprova o critério e o texto do lembrete (Quadro 1A), mas ele não é a base do lembrete, porque o paciente não é parte dele;
 
-c) encerrar, com a revogação, o tratamento baseado no consentimento (art. 15, III).
+c) **continuar o agendamento não é consentimento.** Aceitar a política ao agendar informa o paciente, mas não vale como consentimento: autorização genérica é nula (art. 8º, § 4º). Por isso o treino e a transferência internacional, que dependem de consentimento, continuam com caixa própria na tela.
+
+`src/messaging/client.py` tem uma única operação, `enviar_lembrete`, e oferecer serviço pelo mesmo canal exigiria outra base legal. O paciente pode se opor ao lembrete (art. 18, § 2º): pede à clínica para não receber SMS, e a clínica avalia o pedido (seção 6).
 
 **`data_nascimento`.** Fica nos incisos V e VIII, e não no II (obrigação legal): o sistema usa a data só para calcular a idade que alimenta a predição, e nenhuma norma obriga o sistema a tratá-la.
 
@@ -293,7 +295,7 @@ Decisão de 09/10/2026: o remote do DVC vai para Brazil South (migração execut
 | Remote do DVC | Nenhum: não há transferência | Em Brazil South desde 09/10/2026. A conta antiga, no Chile, nunca guardou dado de titular (subseção 4.3) |
 | GitHub Actions e Hugging Face (pacientes) | Consentimento específico e destacado do titular para a transferência, com informação prévia do caráter internacional, distinto das demais finalidades (art. 33, VIII) | Coleta não implementada |
 | Hugging Face (conta do funcionário) | Mesmo inciso, no primeiro acesso | Coleta não implementada. Mecanismo frágil (ver abaixo) |
-| Infobip | A definir com o contrato pago | O teste gratuito não envia lembrete a paciente (subseção 4.1) |
+| Infobip | A definir com o contrato pago. Candidato: art. 33, IX, transferência necessária à execução de contrato (art. 7º, V), porque o SMS leva só telefone, data e hora, sem dado sensível (seção 3) | O teste gratuito não envia lembrete a paciente (subseção 4.1). O inciso IX precisa de validação jurídica e da região de processamento confirmada no contrato |
 
 Fonte: elaboração própria (2026), com base em Brasil (2018).
 
@@ -303,7 +305,7 @@ Fonte: elaboração própria (2026), com base em Brasil (2018).
 
 **Requisitos da coleta:**
 
-a) **ação separada e destacada**: uma caixa própria para a transferência, distinta do consentimento do lembrete e do treino, e nunca pré-marcada;
+a) **ação separada e destacada**: uma caixa própria para a transferência, distinta do consentimento do treino, e nunca pré-marcada;
 
 b) **informação prévia**: países (Estados Unidos e outros onde os provedores operam), provedores, dados e finalidade de cada um, e o fato de que esses provedores não adotaram as cláusulas-padrão da ANPD;
 
@@ -362,7 +364,7 @@ Pelo princípio da necessidade (art. 6º, III) e pelas regras de término do tra
 |---|---|---|---|
 | `eventos_app` | 90 dias (`OBSERVABILIDADE_RETENCAO_DIAS`) | `purgar_eventos_antigos()`, no job diário | Sem dado pessoal. O limite vem do teto do plano gratuito (ADR-006), não da LGPD |
 | `predicoes` | 90 dias (`RETENCAO_DADOS_DERIVADOS_DIAS`) | `purgar_dados_derivados_antigos()`, no job diário | Dado sensível derivado. Rastreabilidade e auditoria do modelo: cobre o canário (até 21 dias, mais o desfecho; ADR-008) e a janela de 30 dias do SLO de explicação, com folga para investigar um modelo promovido. A janela não deve crescer sem justificativa nova |
-| `mensagens_disparadas` | 90 dias (mesma variável) | Idem | Auditoria da decisão do modelo: registra, por agendamento, se o lembrete foi enviado ou não. Falta base para guardar o registro depois da revogação do consentimento (subseção 9.2, item 14) |
+| `mensagens_disparadas` | 90 dias (mesma variável) | Idem | Auditoria da decisão do modelo: registra, por agendamento, se o lembrete foi enviado ou não. Com o lembrete na execução de contrato (seção 3), não há revogação que encerre esse registro antes do prazo (subseção 9.2, item 14, encerrado) |
 | `pacientes`, `agendamentos` | Sem purga por iniciativa da SaúdeJá | — | O registro do atendimento pertence à clínica, e a exclusão é feita a pedido dela (seção 6) |
 | Semente do dataset de treino | Sem prazo | — | Dado sintético, sem titular. Tem uma única versão, sempre vigente, e o workflow de purga nunca a apaga |
 | Linhas de produção do dataset de treino, inclusive os recortes `train_raw.pkl` e `test.pkl` derivados dele | Entram no export até 90 dias depois da consulta. Cada versão do dataset é apagada 90 dias depois de deixar de ser vigente em `main`. Máximo de cerca de 210 dias no remote | Workflow de purga ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)), **não implementado** (subseção 9.2, item 20) | Melhoramento do algoritmo, com consentimento (seção 3), e auditoria do modelo promovido. Um modelo mais antigo continua reversível pelo `model.pkl`, mas não pode mais ser retreinado com os mesmos dados |
@@ -415,8 +417,8 @@ O titular paciente exerce seus direitos pela clínica, que aciona a SaúdeJá. O
 | Correção (III) | Alteração direta em `pacientes` ou `agendamentos` | — |
 | Portabilidade (V) | Export das linhas do titular | Sem ferramenta dedicada |
 | Eliminação (VI) | Pedido em `pedidos_titular`, confirmado pela clínica e executado pelo workflow de purga: `delete` em `pacientes` (o cascade remove agendamentos, predições e mensagens) e exclusão das versões do dataset que contêm o titular. Os eventos de consentimento ficam 365 dias sem vínculo, como prova ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)) | **Não implementado**: hoje é operação manual no banco (seção 9, item 4) |
-| Revogação do consentimento (IX) | Evento `revogado` em `eventos_consentimento`. No treino, o workflow de purga também apaga as versões do dataset que contêm o titular ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)) | **Não implementado** (subseção 9.2, itens 13 e 19) |
-| Oposição (§ 2º) | Vale para os dados tratados por legítimo interesse (Quadro 5). Avaliada caso a caso | Sem procedimento definido |
+| Revogação do consentimento (IX) | Vale para o treino e a transferência internacional, as duas finalidades com consentimento. Evento `revogado` em `eventos_consentimento`. No treino, o workflow de purga também apaga as versões do dataset que contêm o titular; na transferência, a revogação equivale à eliminação (subseção 4.2; [ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)) | **Não implementado** (subseção 9.2, item 19) |
+| Oposição (§ 2º) | Vale para os tratamentos sem consentimento (Quadro 5), como o lembrete (execução de contrato) e os dados de legítimo interesse. No lembrete, o paciente pede à clínica para não receber SMS. Avaliada caso a caso pela clínica | Sem procedimento definido, e sem campo que impeça o envio a quem se opôs |
 | Revisão de decisão automatizada (art. 20) | A clínica, controladora da decisão, recebe o pedido, revisa e responde; a SaúdeJá dá apoio técnico pelo canal do encarregado ([PROCEDIMENTO-REVISAO.md](PROCEDIMENTO-REVISAO.md); roteiro na tela "Fila do dia"). A explicação SHAP de cada predição (SLO, seção 4: 100% de cobertura) é o insumo da revisão, não a revisão. A decisão é só enviar ou não um lembrete, e não nega, condiciona nem encarece o atendimento | Depois de 90 dias, a predição é apagada e só os critérios gerais do modelo podem ser explicados. O risco é baixo pelo tipo de decisão, não por precisão do modelo |
 
 Fonte: elaboração própria (2026).
@@ -504,8 +506,8 @@ Cada item deve constar do slide de risco do pitch.
 
 ### 9.2 Riscos acrescentados pela revisão das bases legais
 
-13. **Consentimento sem prova nem revogação** (seção 3). Não há registro de quando e como o consentimento foi dado, nem campo de revogação consultado pelo job D-2. Hoje o lembrete seria disparado para quem revogou. Decidido, ainda não implementado: tabela `eventos_consentimento` e filtro no job D-2, ligado só quando a coleta entrar na tela de agendamento ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)).
-14. **Retenção de `mensagens_disparadas` após a revogação** (seção 5). A auditoria do modelo é finalidade da operação, não do titular. Ou a retenção de 90 dias ganha base própria, ou a revogação deve apagar ou anonimizar os registros do titular.
+13. **Consentimento do lembrete sem prova nem revogação.** Encerrado em 10/10/2026: o lembrete deixou de depender de consentimento e passou à execução de contrato (seção 3). Não há consentimento a provar nem revogação a respeitar no job D-2. O que resta é a oposição (Quadro 8), sem mecanismo no job (subseção 9.4, item 29).
+14. **Retenção de `mensagens_disparadas` após a revogação.** Encerrado em 10/10/2026 pelo mesmo motivo do item 13: sem consentimento, não há revogação que encerre o registro antes dos 90 dias (seção 5).
 15. **Legítimo interesse sem teste de balanceamento documentado** (art. 10), tanto para os dados de paciente quanto para a conta do funcionário. A ANPD pode exigir relatório de impacto (art. 10, § 3º).
 16. **Transferência internacional sem mecanismo implementado** (seção 4). Verificado em 09/10/2026: nenhuma das contas atuais tem as cláusulas-padrão da ANPD, e só o Supabase tem DPA (subseção 4.1). Decidido: remote do DVC para Brazil South, migrado em 09/10/2026, e consentimento do art. 33, VIII, para GitHub e Hugging Face (subseção 4.2). A coleta do consentimento ainda não foi implementada.
 17. **Pacientes menores de idade** (art. 14). O sistema não distingue menores, e não está definido de quem é o `telefone` cadastrado: do adolescente ou do responsável. No segundo caso, é dado de um terceiro que não está no inventário. Para criança, o consentimento do treino deve ser dado por pelo menos um dos pais ou pelo responsável legal (art. 14, § 1º).
@@ -522,6 +524,11 @@ Cada item deve constar do slide de risco do pitch.
 ### 9.3 Riscos acrescentados pela revisão dos papéis
 
 27. **Elementos essenciais decididos pela SaúdeJá sem aprovação da clínica** (seção 1, Quadro 1A). Não há contrato do SaaS que apresente à clínica as categorias de dados do modelo, o critério do lembrete, o texto do SMS e a retenção de 90 dias. Enquanto ele não existir, a SaúdeJá decide sozinha elementos essenciais de tratamentos que este documento atribui à clínica e pode ser considerada controladora deles, com a base legal, os pedidos de titular e a comunicação de incidentes que isso implica. Nada no repositório impede um PR de mudar uma feature ou a retenção sem essa aprovação.
+
+### 9.4 Riscos acrescentados pela revisão da base do lembrete
+
+28. **Data e hora da consulta classificadas como dado comum** (seções 2 e 3). A base do lembrete na execução de contrato depende de o SMS não revelar dado de saúde. A ANPD não se manifestou sobre o fato de uma consulta agendada, isolado, ser dado de saúde, e uma leitura mais restritiva o trataria como sensível, sem hipótese de execução de contrato no art. 11. Mitigações: o texto do SMS cita só data e hora (`tests/test_skew_features.py::test_sms_nao_revela_a_especialidade`), e o remetente do SMS, a configurar no contrato pago da Infobip, não pode revelar a especialidade (uma clínica com nome de especialidade, como "Cardio Center", revelaria). Precisa de validação jurídica.
+29. **Oposição ao lembrete sem mecanismo** (Quadro 8). O paciente que pedir à clínica para não receber SMS continua recebendo: não há campo em `pacientes` nem filtro no job D-2 que registre a oposição. Hoje a clínica só consegue atender o pedido fora do sistema.
 
 ## 10 INCIDENTES
 
@@ -566,6 +573,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 09/10/2026 | 4, 4.2, 4.3, 5, 5.1, 9.2 | Remote do DVC para Brazil South (decidido) e consentimento do art. 33, VIII, para GitHub e Hugging Face; re-treino incluído no processamento do runner; soft delete de blob de 1 dia; purga das cópias locais do DVC (`scripts/purgar_dvc_local.py`); verificação das cópias e backups contra a retenção |
 | 09/10/2026 | Frontmatter, 4, 4.2, 4.3, 7, 9, 9.1, 9.2 | Remote do DVC migrado para Brazil South (conta nova, LRS, SAS novas, chaves da conta antiga rotacionadas); a conta antiga nunca guardou dado de titular; o armazenamento sai do Quadro 6 |
 | 10/10/2026 | 1, 9.3 | Elementos essenciais propostos pela SaúdeJá e aprovados pela clínica (Quadro 1A, guia da ANPD); retenção dos dados derivados deixa de ser "fixada pela SaúdeJá"; treino compartilhado sem controladoria conjunta; risco 27 |
+| 10/10/2026 | Frontmatter, 2, 3, 4.2, 5, 6, 9.2, 9.4 | Lembrete passa do consentimento (art. 7º, I) à execução do contrato do paciente com a clínica (art. 7º, V); `data_hora_agendada` reclassificada como dado pessoal comum quando tratada sem a especialidade; consentimento restrito ao treino e à transferência internacional; Infobip candidata ao art. 33, IX; oposição ao lembrete pela clínica; itens 13 e 14 encerrados; riscos 28 e 29 |
 
 Fonte: elaboração própria (2026).
 

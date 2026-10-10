@@ -52,7 +52,7 @@ A especialidade e o histórico de consultas revelam informação sobre a sua sa�
 |---|---|---|
 | Identificar você e registrar o agendamento | Nome, código do CPF, data de nascimento, sexo | Execução de contrato e tutela da saúde (art. 7º, V e VIII) |
 | Estimar o risco de falta, para que a clínica confirme a sua presença | Dados da consulta, histórico de comparecimento, idade e sexo | Tutela da saúde, em procedimento realizado por serviço de saúde (art. 11, II, f) |
-| Enviar lembrete por SMS antes da consulta | Telefone, data e hora da consulta. A especialidade não aparece na mensagem | Seu consentimento (art. 7º, I) |
+| Enviar lembrete por SMS antes da consulta | Telefone, data e hora da consulta. A especialidade não aparece na mensagem | Execução do contrato de atendimento com a clínica (art. 7º, V) |
 | Aprimorar o modelo de previsão com os desfechos reais das consultas | Desfecho, dados da consulta, idade e sexo, **sem** nome, telefone ou CPF | Seu consentimento específico e destacado (art. 11, I) |
 | Controlar o acesso dos funcionários ao sistema | E-mail e senha do funcionário | Legítimo interesse do SaúdeJá (art. 7º, IX) |
 
@@ -62,7 +62,9 @@ O que **não** fazemos com os seus dados:
 - não enviamos mensagens de marketing: o único SMS é o lembrete da consulta que você agendou;
 - a estimativa de risco **não** é usada para recusar, cobrar, encarecer, remarcar ou substituir o seu atendimento.
 
-Você pode recusar ou revogar a qualquer momento o consentimento do lembrete e o do aprimoramento do modelo. A recusa não afeta o seu atendimento.
+O lembrete faz parte do atendimento que você agendou com a clínica e não depende de autorização sua. Se não quiser recebê-lo, peça à clínica (art. 18, § 2º, da LGPD).
+
+Você pode recusar ou revogar a qualquer momento o consentimento do aprimoramento do modelo. A recusa não afeta o seu atendimento.
 
 ## 4 PREVISÃO DE FALTA E DECISÃO AUTOMATIZADA
 
@@ -180,7 +182,7 @@ Avisaremos na tela de agendamento quando esta política mudar. Se a mudança alt
 
 <!--
 CONDIÇÕES PARA PUBLICAR (remover este bloco ao publicar):
-1. Coleta e registro do consentimento do lembrete e do aprimoramento do modelo na tela de agendamento (ADR-009). Sem isso, as linhas "Seu consentimento" da seção 3 não são verdadeiras.
+1. Coleta e registro do consentimento do aprimoramento do modelo na tela de agendamento (ADR-009). Sem isso, a linha "Seu consentimento" da seção 3 não é verdadeira.
 2. Workflow de purga do ADR-009 implementado. Sem isso, os prazos do conjunto de treino na seção 7 não são cumpridos.
 3. Remote do DVC migrado para Brazil South (LGPD.md, subseção 4.3); consentimento da transferência coletado antes do formulário de cadastro (LGPD.md, subseção 4.2); local de processamento da Infobip confirmado (seção 5).
 4. Encarregado com nome e e-mail reais (seção 9).

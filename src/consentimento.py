@@ -6,15 +6,20 @@ O consentimento é registrado em `eventos_consentimento`, só de inserção
 revogação é um evento, e o consentimento vigente é o último evento de cada
 finalidade. Este módulo calcula o vigente a partir dos eventos já lidos, para
 que a mesma regra sirva à consulta de um paciente (`repositories.
-eventos_consentimento_do_paciente`) e ao lote do job D-2, que traz os eventos
-embutidos no select da fila.
+eventos_consentimento_do_paciente`) e ao lote do export de treino.
+
+Duas finalidades dependem de consentimento: o treino com desfechos reais
+(art. 11, I) e a transferência internacional (art. 33, VIII). O lembrete por
+SMS **não**: só leva telefone, data e hora, e se apoia na execução do contrato
+do paciente com a clínica (art. 7º, V; LGPD.md, seção 3), sem caixa na tela e
+sem filtro no job D-2.
 
 Ausência de evento é ausência de consentimento: o consentimento é manifestação
 afirmativa do titular (LGPD, art. 5º, XII), e o ônus de prová-lo é do
 controlador (art. 8º, § 2º).
 
-O consentimento **não é feature do modelo**: entra como filtro do lembrete e
-do export de treino, nunca como coluna do dataset.
+O consentimento **não é feature do modelo**: entra como filtro do export de
+treino, nunca como coluna do dataset.
 """
 import re
 from collections.abc import Iterable, Mapping
@@ -23,10 +28,9 @@ from typing import Any
 
 from features import calcular_idade
 
-FINALIDADE_LEMBRETE = "lembrete"
 FINALIDADE_TREINO = "treino"
 FINALIDADE_TRANSFERENCIA = "transferencia_internacional"
-FINALIDADES = (FINALIDADE_LEMBRETE, FINALIDADE_TREINO, FINALIDADE_TRANSFERENCIA)
+FINALIDADES = (FINALIDADE_TREINO, FINALIDADE_TRANSFERENCIA)
 
 ACAO_CONCEDIDO = "concedido"
 ACAO_REVOGADO = "revogado"
@@ -82,10 +86,6 @@ TERMO_TRANSFERENCIA = (
     "Eu, paciente ou responsável legal, autorizo o processamento dos dados deste "
     "cadastro fora do Brasil, pelo Hugging Face e pelo GitHub, como descrito acima."
 )
-TERMO_LEMBRETE = (
-    "Eu, paciente ou responsável legal, autorizo o envio de lembrete da consulta "
-    "por SMS para o telefone informado, só com a data e a hora, sem a especialidade."
-)
 TERMO_TREINO = (
     "Eu, paciente ou responsável legal, autorizo o uso do resultado das consultas "
     "do paciente (se compareceu ou faltou) e dos dados da consulta, sem nome, "
@@ -93,7 +93,7 @@ TERMO_TREINO = (
     "consultas. Esse aprimoramento é feito pelo SaúdeJá e beneficia também "
     "outras clínicas que usam o sistema."
 )
-TEXTOS_DO_TERMO = (INFORMACAO_TRANSFERENCIA, TERMO_TRANSFERENCIA, TERMO_LEMBRETE, TERMO_TREINO)
+TEXTOS_DO_TERMO = (INFORMACAO_TRANSFERENCIA, TERMO_TRANSFERENCIA, TERMO_TREINO)
 
 # Prazo em que a prova sobrevive à eliminação do paciente (ADR-009). O mesmo
 # valor está fixo no trigger da migration, que recusa apagar antes dele.
@@ -180,7 +180,7 @@ def decisoes_de_consentimento(
     """
     desconhecidas = set(marcadas) - set(FINALIDADES)
     if desconhecidas:
-        # Uma chave errada ("lembretes") viraria caixa desmarcada e revogaria
+        # Uma chave errada ("treinos") viraria caixa desmarcada e revogaria
         # em silêncio o consentimento vigente.
         raise ValueError(f"finalidade desconhecida: {sorted(desconhecidas)!r}")
 

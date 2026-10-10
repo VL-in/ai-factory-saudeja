@@ -367,7 +367,7 @@ def test_cadastro_sem_transferencia_e_recusado_antes_de_tocar_o_banco(monkeypatc
             **_campos_validos(),
             sexo="F",
             distancia_km=5.5,
-            consentimentos={"transferencia_internacional": False, "lembrete": True},
+            consentimentos={"transferencia_internacional": False, "treino": True},
         )
 
     assert erro.value.problemas == [logic.MENSAGEM_SEM_TRANSFERENCIA]
@@ -382,7 +382,7 @@ def test_cadastro_grava_os_eventos_entre_o_paciente_e_o_agendamento(monkeypatch)
         **_campos_validos(),
         sexo="F",
         distancia_km=5.5,
-        consentimentos={"transferencia_internacional": True, "lembrete": True, "treino": False},
+        consentimentos={"transferencia_internacional": True, "treino": True},
     )
 
     assert [nome for nome, _ in chamadas] == [
@@ -395,7 +395,7 @@ def test_cadastro_grava_os_eventos_entre_o_paciente_e_o_agendamento(monkeypatch)
     registro = dict(chamadas)["registrar_consentimentos"]
     assert registro == {
         "id_paciente": "p1",
-        "decisoes": [("lembrete", "concedido"), ("transferencia_internacional", "concedido")],
+        "decisoes": [("treino", "concedido"), ("transferencia_internacional", "concedido")],
         "versao_termo": logic.consentimento.VERSAO_TERMO,
         "canal": "autoagendamento",
         "consentido_por": "titular",

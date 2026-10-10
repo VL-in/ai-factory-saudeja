@@ -715,8 +715,10 @@ def _formulario_paciente() -> tuple[dict, bool]:
             "- **Data de nascimento, sexo, especialidade e distância**, junto "
             "com o seu histórico de comparecimento nesta clínica, ajudam a "
             "equipe a decidir quais consultas confirmar com antecedência.\n"
-            "- **Lembrete por SMS**: só com a sua autorização, e só com a data e "
-            "a hora da consulta.\n"
+            "- **Lembrete por SMS**: faz parte do atendimento. A clínica pode "
+            "enviar um lembrete para o telefone informado, só com a data e a hora "
+            "da consulta, sem a especialidade. Se não quiser receber, avise a "
+            "clínica.\n"
             "- **Aprimoramento do sistema**: só com a sua autorização, o SaúdeJá "
             "usa o resultado das consultas (comparecimento ou falta), sem nome, "
             "telefone nem CPF.\n"
@@ -724,8 +726,8 @@ def _formulario_paciente() -> tuple[dict, bool]:
             "processados nos Estados Unidos pelo Hugging Face e pelo GitHub, como "
             "descrito na autorização abaixo.\n"
             "- Nome, telefone e CPF não entram em registros técnicos.\n\n"
-            "Para retirar uma autorização, pedir a eliminação dos seus dados ou "
-            "tirar dúvidas, fale com a clínica."
+            "Para retirar a autorização de aprimoramento, pedir a eliminação dos "
+            "seus dados ou tirar dúvidas, fale com a clínica."
         )
 
     # Fora do st.form e antes de qualquer campo (LGPD.md, subseção 4.2, alínea
@@ -809,19 +811,20 @@ def _formulario_paciente() -> tuple[dict, bool]:
             f"Antecedência do agendamento: **{logic.dias_ate_consulta(data_consulta)} dia(s)**."
         )
 
-        # Uma caixa por finalidade, nunca pré-marcada (art. 8º, § 4º: autorização
-        # genérica é nula). A tela não sabe quem é o paciente antes do envio,
-        # então não tem como mostrar o que ele já autorizou -- e mostrar
-        # revelaria a quem digitasse um CPF alheio. Por isso a caixa desmarcada
-        # é a decisão de agora: revoga o que estava vigente, e a legenda avisa.
-        st.markdown("**Autorizações opcionais**")
+        # Caixa própria, nunca pré-marcada (art. 8º, § 4º: autorização genérica
+        # é nula). O lembrete não tem caixa: é parte do atendimento contratado
+        # com a clínica (art. 7º, V; LGPD.md, seção 3). A tela não sabe quem é o
+        # paciente antes do envio, então não tem como mostrar o que ele já
+        # autorizou -- e mostrar revelaria a quem digitasse um CPF alheio. Por
+        # isso a caixa desmarcada é a decisão de agora: revoga o que estava
+        # vigente, e a legenda avisa.
+        st.markdown("**Autorização opcional**")
         st.caption(
-            "Recusar não impede o agendamento. As caixas começam sempre "
-            "desmarcadas: a cada agendamento, marque as que quiser manter. "
+            "Recusar não impede o agendamento. A caixa começa sempre desmarcada: "
+            "a cada agendamento, marque-a se quiser manter a autorização. "
             "Agendamento de criança (menos de 12 anos): quem decide é um dos pais "
             "ou o responsável legal, e o telefone deve ser o dele."
         )
-        autorizou_lembrete = st.checkbox(consentimento.TERMO_LEMBRETE, value=False)
         autorizou_treino = st.checkbox(consentimento.TERMO_TREINO, value=False)
 
         enviado = st.form_submit_button("Agendar", type="primary")
@@ -838,7 +841,6 @@ def _formulario_paciente() -> tuple[dict, bool]:
         "nome_completo": nome_completo,
         "consentimentos": {
             consentimento.FINALIDADE_TRANSFERENCIA: autorizou_transferencia,
-            consentimento.FINALIDADE_LEMBRETE: autorizou_lembrete,
             consentimento.FINALIDADE_TREINO: autorizou_treino,
         },
     }
