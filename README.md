@@ -73,7 +73,7 @@ Quatro stages no [`dvc.yaml`](dvc.yaml), cada um em container próprio a partir 
 | `train` | `src/train.py` | SMOTE-NC só no fold de treino ([ADR-003](docs/adr/adr-003-SMOTE-NC.md)) e LightGBM. Registra a run no MLflow |
 | `validate` | `src/validate.py` | Métricas no fold de teste isolado, logadas na mesma run do MLflow |
 
-O dataset e o `data/model.pkl` são versionados pelo DVC num container privado do Azure Blob Storage, na região Chile Central (ver [Dados pessoais e LGPD](#dados-pessoais-e-lgpd)). O histórico de métricas fica no MLflow; o do modelo em produção, em [`data/champion_metrics.json`](data/champion_metrics.json).
+O dataset e o `data/model.pkl` são versionados pelo DVC num container privado do Azure Blob Storage, na região Brazil South (ver [Dados pessoais e LGPD](#dados-pessoais-e-lgpd)). O histórico de métricas fica no MLflow; o do modelo em produção, em [`data/champion_metrics.json`](data/champion_metrics.json).
 
 ### CI/CD e ciclo de vida do modelo
 
@@ -114,10 +114,10 @@ Pedidos de paciente chegam pela clínica. A SaúdeJá não apaga cadastro nem ag
 | Supabase (banco e login) | Todos os dados de paciente e as contas de funcionário | Brasil (São Paulo) |
 | Hugging Face Space (aplicação) | Tudo o que a tela recebe ou exibe, inclusive nome, telefone e o CPF antes de virar hash | Estados Unidos |
 | Runner do GitHub Actions (job D-2 e re-treino) | Dados da consulta e telefone; no re-treino, o dataset pseudonimizado. Nunca nome nem CPF | Fora do Brasil |
-| Azure Blob Storage (remote do DVC) | Dataset de treino pseudonimizado, sem nome, telefone nem CPF, e o `model.pkl` | Chile; migração para Brazil South decidida |
+| Azure Blob Storage (remote do DVC) | Dataset de treino pseudonimizado, sem nome, telefone nem CPF, e o `model.pkl` | Brasil (Brazil South), desde 09/10/2026 |
 | Infobip (SMS) | Telefone, data e hora da consulta | A confirmar |
 
-Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase tem acordo de tratamento de dados (DPA). Decisão: o remote do DVC vai para Brazil South, e o processamento no GitHub Actions e no Hugging Face se apoia no **consentimento específico do paciente para a transferência** (art. 33, VIII), coletado antes do formulário de cadastro. Nem a migração nem a coleta foram feitas ([`LGPD.md` §4.1 a §4.3](docs/LGPD/LGPD.md#4-transferência-internacional-de-dados)).
+Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase tem acordo de tratamento de dados (DPA). O remote do DVC foi migrado para Brazil South em 09/10/2026, e o processamento no GitHub Actions e no Hugging Face se apoia no **consentimento específico do paciente para a transferência** (art. 33, VIII), coletado antes do formulário de cadastro. A coleta ainda não foi implementada ([`LGPD.md` §4.1 a §4.3](docs/LGPD/LGPD.md#4-transferência-internacional-de-dados)).
 
 ### Proteções implementadas
 
@@ -140,7 +140,7 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 |---|---|
 | Coleta e prova do consentimento (lembrete e treino), com filtro no job D-2 e no export | [ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), não implementado |
 | Eliminação a pedido do titular e retenção de 90 dias no remote do DVC | ADR-009, não implementado. Hoje a eliminação é manual no banco |
-| Migração do remote do DVC para Brazil South e coleta do consentimento da transferência | [`LGPD.md` §4.2 e §4.3](docs/LGPD/LGPD.md) |
+| Coleta do consentimento da transferência internacional | [`LGPD.md` §4.2 e §4.3](docs/LGPD/LGPD.md) |
 | Política de privacidade pública | Rascunho em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), com as condições para publicar |
 | Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
 | Encarregado de dados real (o `dpo@saudeja.com.br` é fictício) | [`LGPD.md` §11](docs/LGPD/LGPD.md) |
@@ -173,11 +173,12 @@ Copy-Item .env.example .env
 
 ### 2. Baixar dataset e modelo (DVC)
 
-A URL do remote não é versionada. Configure-a localmente e informe a credencial pelo ambiente:
+A URL do remote não é versionada. Configure-a localmente uma vez e use a **SAS de leitura** como credencial, nunca a chave da conta (ver [`.env.example`](.env.example)). O `dvc` lê a credencial do ambiente da sessão, não do `.env`:
 
 ```powershell
 dvc remote add --local -f azure $env:DVC_REMOTE_URL
-$env:AZURE_STORAGE_CONNECTION_STRING = "<connection string>"
+Get-Content .env | Where-Object { $_ -match '^AZURE_STORAGE_CONNECTION_STRING=' } |
+  ForEach-Object { $env:AZURE_STORAGE_CONNECTION_STRING = $_.Split('=', 2)[1] }
 dvc pull
 ```
 
@@ -186,7 +187,8 @@ dvc pull
 | `azure is supported, but requires 'dvc-azure'` | `requirements/dvc.txt` não instalado no venv |
 | remote `azure` não existe | faltou o `dvc remote add --local` |
 | `requires either account_name or connection_string` | `AZURE_STORAGE_CONNECTION_STRING` não definida na sessão |
-| `AuthorizationFailure` | o firewall da storage account não libera seu IP (*Networking → Firewalls and virtual networks → Add your client IP address*) |
+| `AuthenticationFailed`, `sp is mandatory` | a variável recebeu a "URL do SAS" do portal; use o formato `BlobEndpoint=https://<conta>.blob.core.windows.net/;SharedAccessSignature=sp=...` |
+| `AuthenticationFailed`, `Signature did not match` | a SAS foi gerada em outra conta, ou a chave que a assinou foi rotacionada |
 
 O dataset de treino tem desfechos reais de pacientes. A cópia local segue a retenção do remote ([`LGPD.md` §5.1](docs/LGPD/LGPD.md)): rode a purga local depois de cada `git pull` e pelo menos uma vez por semana. Ela reduz o cache ao que o workspace usa e apaga do workspace a versão que o remote já apagou.
 

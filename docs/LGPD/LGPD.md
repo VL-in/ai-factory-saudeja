@@ -55,11 +55,10 @@ bases_legais:
 transferencia_internacional:
   transfere: true
   destinos:
-    - "Chile — Azure Blob Storage, região Chile Central (linhas de produção do dataset de treino, pseudonimizadas, e model.pkl); migração para Brazil South decidida, ainda não executada"
     - "Fora do Brasil — runner hospedado do GitHub Actions (job D-2 diário e re-treino mensal, sem gravação persistente)"
     - "Estados Unidos — Hugging Face Space (aplicação: processa nome, CPF antes do hash, telefone e dados da consulta, sem gravação persistente)"
     - "Local a confirmar — Infobip (telefone e texto do lembrete)"
-  mecanismo: "Art. 33, VIII — consentimento específico e destacado do paciente, com informação prévia do caráter internacional, para o GitHub Actions e o Hugging Face; coleta ainda não implementada (seção 4.2). O art. 33, II, b não é atendido pelos contratos das contas atuais (seção 4.1)"
+  mecanismo: "Art. 33, VIII — consentimento específico e destacado do paciente, com informação prévia do caráter internacional, para o GitHub Actions e o Hugging Face; coleta ainda não implementada (seção 4.2). O art. 33, II, b não é atendido pelos contratos das contas atuais (seção 4.1). O remote do DVC está em Brazil South desde 09/10/2026 (seção 4.3)"
 ---
 
 # PROTEÇÃO DE DADOS PESSOAIS NO SAÚDEJÁ: CLASSIFICADOR DE NO-SHOW
@@ -208,20 +207,19 @@ c) encerrar, com a revogação, o tratamento baseado no consentimento (art. 15, 
 
 ## 4 TRANSFERÊNCIA INTERNACIONAL DE DADOS
 
-O banco de produção (Supabase) fica em São Paulo (`sa-east-1`): pacientes, agendamentos, predições, mensagens e eventos ficam armazenados no Brasil. Quatro tratamentos acontecem fora do país.
+O banco de produção (Supabase) fica em São Paulo (`sa-east-1`), e o remote do DVC (Azure Blob Storage), em Brazil South desde 09/10/2026 (subseção 4.3): todo dado pessoal persistente do sistema fica armazenado no Brasil. Três tratamentos acontecem fora do país.
 
 **Quadro 6 – Tratamento de dados fora do Brasil**
 
 | Destino | Dados | Natureza |
 |---|---|---|
-| Azure Blob Storage, região Chile Central (remote do DVC) | Linhas de produção do dataset de treino (`data/consultas-treino.csv`, com os desfechos reais registrados pela clínica), os recortes `train_raw.pkl` e `test.pkl` que o `preprocess` deriva dele e `model.pkl`. A semente sintética também fica lá, mas não é dado pessoal | Armazenamento persistente; versões retidas por 90 dias depois de substituídas (seção 5). Migração para Brazil South decidida em 09/10/2026, ainda não executada (alternativa a, abaixo) |
 | Runner hospedado do GitHub Actions | Job D-2 (diário, desde 30/09/2026): data de nascimento, sexo, especialidade, distância, antecedência, histórico de faltas e telefone. Re-treino (mensal): as linhas de produção do dataset, com hash do CPF e desfecho. Nunca nome nem CPF. O canário e o alerta de observabilidade leem só contagens | Processamento. O que é gravado no runner é descartado ao fim da execução. Continua fora do Brasil depois da migração do remote |
 | Hugging Face Space (Estados Unidos) | Tudo o que a interface recebe ou exibe: nome, CPF antes da conversão em hash, telefone, data de nascimento, sexo, dados da consulta, predição e explicação | Processamento, sem gravação persistente. É o destino com mais dados, porque é onde o paciente digita o cadastro |
 | Infobip (local a confirmar) | Telefone e texto do lembrete, com data e hora da consulta | Envio do SMS. A Infobip guarda o log com o texto por 3 meses por padrão |
 
 Fonte: elaboração própria (2026), a partir do [ADR-005](../adr/adr-005-integracoes-implicitas.md).
 
-Para o pitch, a formulação correta é: **os dados armazenados no banco de produção não saem do Brasil, mas o artefato de treino e o processamento diário saem.**
+Para o pitch, a formulação correta é: **os dados são armazenados no Brasil, mas são processados fora dele: a aplicação no Hugging Face, e o job diário e o re-treino no GitHub Actions.**
 
 **Enquadramento.** O mecanismo pretendido era o art. 33, II, b (cláusulas-padrão contratuais), por meio do acordo de processamento de dados (DPA) de cada provedor. Desde 23/08/2025, cláusula contratual só ampara transferência internacional se adotar, integralmente e sem alterações, o texto das cláusulas-padrão aprovado pela Autoridade Nacional de Proteção de Dados (ANPD), num instrumento assinado por exportador e importador, ou se tiver cláusula específica aprovada por ela (Brasil, 2024). **Nenhuma das contas atuais cumpre isso** (subseção 4.1), e o mecanismo está em aberto (subseção 9.2, item 16).
 
@@ -231,7 +229,7 @@ A mitigação tem limite: as linhas de produção pseudonimizadas continuam send
 
 **Alternativas.** Cada destino pode sair do exterior por um caminho diferente:
 
-a) **remote do DVC** (decidida em 09/10/2026): a região é da conta de armazenamento, não do container, e não muda depois de criada. A migração exige uma conta nova em Brazil South, com container novo, e a cópia dos blobs que ainda estão dentro da retenção. Nenhum código depende da região ([ADR-005](../adr/adr-005-integracoes-implicitas.md)), e o armazenamento custa praticamente o mesmo. Os passos estão na subseção 4.3;
+a) **remote do DVC**: **executada em 09/10/2026** (subseção 4.3). A região é da conta de armazenamento, não do container, e não muda depois de criada: a migração exigiu uma conta nova. Nenhum código dependia da região ([ADR-005](../adr/adr-005-integracoes-implicitas.md)), e o armazenamento custa praticamente o mesmo;
 
 b) **job D-2**: executar a imagem do job como Azure Container Apps Job em Brazil South, disparado pelo agendador do próprio Azure ou por um `az containerapp job start` vindo do GitHub Actions. No segundo caso, o runner só dá a ordem, e nenhum dado de paciente passa por ele. Alguns minutos por dia cabem na cota gratuita mensal do Container Apps (180.000 vCPU-s e 360.000 GiB-s por assinatura). Runner auto-hospedado no Brasil foi descartado: com o repositório público, um PR de fork pode executar código nele;
 
@@ -269,13 +267,13 @@ No protótipo, com a semente sintética e a SaúdeJá fictícia, nenhum titular 
 
 ### 4.2 Mecanismo adotado
 
-Decisão de 09/10/2026: o remote do DVC vai para Brazil South; o job D-2, o re-treino e a aplicação continuam no GitHub Actions e no Hugging Face, fora do Brasil.
+Decisão de 09/10/2026: o remote do DVC vai para Brazil South (migração executada no mesmo dia, subseção 4.3); o job D-2, o re-treino e a aplicação continuam no GitHub Actions e no Hugging Face, fora do Brasil.
 
 **Quadro 6B – Mecanismo por destino**
 
 | Destino | Mecanismo | Situação |
 |---|---|---|
-| Remote do DVC | Nenhum: deixa de haver transferência | Migração não executada. Até lá, o remote no Chile fica sem mecanismo válido. Enquanto só existir a semente sintética, nenhum titular é afetado |
+| Remote do DVC | Nenhum: não há transferência | Em Brazil South desde 09/10/2026. A conta antiga, no Chile, nunca guardou dado de titular (subseção 4.3) |
 | GitHub Actions e Hugging Face (pacientes) | Consentimento específico e destacado do titular para a transferência, com informação prévia do caráter internacional, distinto das demais finalidades (art. 33, VIII) | Coleta não implementada |
 | Hugging Face (conta do funcionário) | Mesmo inciso, no primeiro acesso | Coleta não implementada. Mecanismo frágil (ver abaixo) |
 | Infobip | A definir com o contrato pago | O teste gratuito não envia lembrete a paciente (subseção 4.1) |
@@ -308,15 +306,34 @@ e) **em nome da clínica**: a clínica é a controladora, e o termo cita a Saúd
 
 ### 4.3 Migração do remote do DVC para Brazil South
 
-Os identificadores da conta, do container e da URL ficam só no `.env` e nos secrets, nunca neste documento.
+Executada em 09/10/2026. Os identificadores da conta, do container e da URL ficam só no `.env` e nos secrets, nunca neste documento.
 
-1. **Verificar se a região é permitida.** Assinaturas Azure for Students têm uma política que limita as regiões de implantação. No portal, em *Policy* > *Assignments* > *Allowed resource deployment regions*, conferir se Brazil South está na lista. Se não estiver, a política não pode ser alterada pela assinatura, e a migração depende de outra assinatura.
-2. **Criar a conta nova** em Brazil South, com o mesmo tipo de redundância e a mesma proteção de dados da atual: soft delete de blob de 1 dia e versionamento de blob desligado (seção 5.1).
-3. **Copiar só o que está dentro da retenção** (versão vigente de cada artefato e versões substituídas há menos de 90 dias), com `azcopy copy` de conta para conta. Copiar o container inteiro levaria para o Brasil versões que já deveriam ter sido apagadas.
-4. **Gerar as SAS novas** (leitura, escrita do re-treino e, quando o ADR-009 for implementado, exclusão) e atualizar `DVC_REMOTE_URL`, os secrets dos environments e o `.dvc/config.local` de quem desenvolve.
-5. **Validar** com `dvc pull` num checkout de `main` e com um disparo manual do job D-2 em dev.
-6. **Apagar a conta antiga.** Uma conta apagada ainda pode ser recuperada por até 14 dias, se nenhuma outra com o mesmo nome for criada. Esse prazo deve ser declarado no Quadro 7 até vencer.
-7. **Atualizar** o Quadro 6, o frontmatter e o [ADR-005](../adr/adr-005-integracoes-implicitas.md).
+**Quadro 6C – Configuração da conta de armazenamento do remote**
+
+| Configuração | Valor | Motivo |
+|---|---|---|
+| Região | Brazil South | Elimina a transferência internacional do armazenamento |
+| Redundância | LRS | GRS e RA-GRS copiariam cada blob para a região pareada, South Central US, nos Estados Unidos |
+| Serviço e tipo | Blob Storage, `StorageV2`, sem namespace hierárquico | O DVC endereça por hash e não usa pastas |
+| Camada de acesso | Hot | O remote é lido todo dia, e a camada Cool cobra exclusão antecipada de blobs com menos de 30 dias |
+| Acesso de rede | Público, de todas as redes | Os runners do GitHub mudam de IP a cada execução; uma lista de IPs exigiria credencial capaz de alterar a rede da conta. A proteção fica na credencial (subseção 9.1, item 12) |
+| Segurança | Só HTTPS, TLS mínimo 1.2, sem acesso anônimo a blob, sem replicação entre tenants | Proteção em trânsito e contra exposição pública |
+| Proteção de dados | Soft delete de blob de 1 dia, versionamento de blob e change feed desligados | Seção 5.1. A confirmar com `az storage account blob-service-properties show` |
+
+Fonte: elaboração própria (2026).
+
+**Passos executados:**
+
+1. **Conta nova** em Brazil South, com o container e o prefixo de mesmo nome dos anteriores. Por isso `DVC_REMOTE_URL` e o `.dvc/config.local` não mudaram: a conta é lida só da credencial (`BlobEndpoint` da connection string).
+2. **Cópia integral** do prefixo do remote, com `azcopy copy` de conta para conta e SAS temporárias. A cópia não precisou filtrar por retenção: o dataset de treino só teve uma versão no histórico do git, idêntica à semente sintética, então o remote antigo nunca guardou linha de titular.
+3. **SAS novas, assinadas com chaves diferentes**: leitura (key1, `rl`) no secret de repositório e no `.env` de quem desenvolve; escrita do re-treino (key2, `rlcw`) no environment `production`. Nenhuma tem permissão de exclusão.
+4. **Chaves da conta antiga rotacionadas**, o que invalidou todas as SAS emitidas por ela. O CI em `dev` passou depois da rotação, baixando o modelo da conta nova.
+
+**Pendente:**
+
+5. Acompanhar as execuções agendadas do job D-2 e do canário em produção, que usam a mesma SAS de leitura. O job D-2 não tem disparo de teste em dev: ele roda só no environment `production` e processa a fila real.
+6. Testar a SAS de escrita com um upload avulso, antes do re-treino de 01/11/2026.
+7. Apagar a conta antiga. Depois de apagada, ela ainda pode ser recuperada por até 14 dias, se nenhuma outra com o mesmo nome for criada. Como ela nunca guardou dado de titular, esse prazo não afeta a retenção.
 
 ## 5 RETENÇÃO E TÉRMINO DO TRATAMENTO
 
@@ -403,6 +420,7 @@ O quadro lista apenas medidas implementadas e verificadas (art. 46).
 | RLS em todas as tabelas, sem policies | Migrations | Só a chave secreta do backend lê dados; vazar a URL do projeto não dá acesso |
 | Login da equipe | `src/ui/logic.py::autenticar_funcionario`, [architecture.md](../architecture.md#7-security-considerations), seção 7 | Telas só depois de e-mail e senha. Cadastro fechado, sessão de 30 min, mensagem de erro que não revela se o e-mail existe (`test_ui_smoke.py`, `test_db.py`) |
 | Segredos fora do git | `.env.example` | Documenta variáveis, nunca valores, incluindo a URL do remote do DVC |
+| Credencial mínima do remote do DVC | Secrets do GitHub e `.env` local | SAS de container, nunca account key: leitura (`rl`) em todo lugar, escrita sem exclusão (`rlcw`) só no re-treino (`test_coerencia_repo.py::test_workflows_usam_sas_do_azure_e_so_o_retreino_escreve`) |
 | TLS em trânsito | HTTPS do Space; `supabase-py` | — |
 | Criptografia em repouso | Supabase e Azure Blob Storage | Herdada do provedor (seção 9, item 7) |
 | Log sem dado pessoal | `src/logging_config.py` | Seção 8 |
@@ -446,7 +464,7 @@ d) **log da Infobip**: guarda o telefone e o texto do lembrete por 3 meses (seç
 
 Cada item deve constar do slide de risco do pitch.
 
-1. **Transferência internacional das linhas de produção do dataset** (seção 4). Mitigada pelo conteúdo, não eliminada. A migração do remote para Brazil South foi decidida (subseção 4.3), mas o re-treino continua processando essas linhas no runner do GitHub, fora do Brasil.
+1. **Transferência internacional das linhas de produção do dataset** (seção 4). O armazenamento saiu do exterior: o remote do DVC está em Brazil South desde 09/10/2026 (subseção 4.3). O processamento continua fora: o re-treino lê essas linhas no runner do GitHub. Mitigada pelo conteúdo, não eliminada.
 2. **Reidentificação direta em caso de vazamento** ([ADR-007](../adr/adr-007-nome-do-paciente.md)). O banco expõe nome, telefone, especialidade e desfecho. O pitch não pode afirmar "não temos nome de paciente". A formulação correta é: "temos nome, restrito à tela da equipe, com sete saídas fechadas e testadas" (Quadro 4).
 3. **Tela da recepção visível na sala de espera.** A fila do dia mostra nomes. A mitigação é um aviso na tela, não um mecanismo: a posição do monitor é decisão da clínica. A opção de abreviar o nome foi recusada por custo de operação (ADR-007).
 4. **Eliminação de titular manual.** O `on delete cascade` funciona, mas não há interface nem script. É aceitável em protótipo, não em operação real. Resolvido por desenho no [ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md), ainda não implementado.
@@ -465,14 +483,14 @@ Cada item deve constar do slide de risco do pitch.
 
 10. **Log público do job D-2.** O repositório e o log do GitHub Actions são públicos, e o job processa telefone. O filtro de redação (seção 8) passa a ser a última barreira. O job registra só contadores e `id_agendamento`, e o CI varre o log da imagem de deploy. Fica sem mitigação um bug de terceiro que registre o corpo de uma requisição antes de o filtro ser instalado.
 11. **Processamento por mais um operador fora do Brasil**: o runner do GitHub (seção 4).
-12. **Credencial do remote do DVC no CI.** CI, deploy e job D-2 usam SAS só de leitura do container. A escrita fica só no re-treino, com SAS que cria arquivos mas não sobrescreve nem apaga. A account key não chega a nenhum workflow, e PR de fork não recebe secrets.
+12. **Credencial do remote do DVC.** CI, deploy, job D-2, canário e a máquina de quem desenvolve usam SAS só de leitura do container, assinada com a key1. A escrita fica só no re-treino, com SAS assinada com a key2, que cria e grava arquivos mas não apaga. A account key não chega a nenhum workflow nem ao `.env` local, e PR de fork não recebe secrets. Um vazamento da SAS de escrita se resolve rotacionando a key2, sem derrubar a leitura.
 
 ### 9.2 Riscos acrescentados pela revisão das bases legais
 
 13. **Consentimento sem prova nem revogação** (seção 3). Não há registro de quando e como o consentimento foi dado, nem campo de revogação consultado pelo job D-2. Hoje o lembrete seria disparado para quem revogou. Decidido, ainda não implementado: tabela `eventos_consentimento` e filtro no job D-2, ligado só quando a coleta entrar na tela de agendamento ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)).
 14. **Retenção de `mensagens_disparadas` após a revogação** (seção 5). A auditoria do modelo é finalidade da operação, não do titular. Ou a retenção de 90 dias ganha base própria, ou a revogação deve apagar ou anonimizar os registros do titular.
 15. **Legítimo interesse sem teste de balanceamento documentado** (art. 10), tanto para os dados de paciente quanto para a conta do funcionário. A ANPD pode exigir relatório de impacto (art. 10, § 3º).
-16. **Transferência internacional sem mecanismo implementado** (seção 4). Verificado em 09/10/2026: nenhuma das contas atuais tem as cláusulas-padrão da ANPD, e só o Supabase tem DPA (subseção 4.1). Decidido: remote do DVC para Brazil South e consentimento do art. 33, VIII, para GitHub e Hugging Face (subseção 4.2). Nem a migração nem a coleta do consentimento foram feitas.
+16. **Transferência internacional sem mecanismo implementado** (seção 4). Verificado em 09/10/2026: nenhuma das contas atuais tem as cláusulas-padrão da ANPD, e só o Supabase tem DPA (subseção 4.1). Decidido: remote do DVC para Brazil South, migrado em 09/10/2026, e consentimento do art. 33, VIII, para GitHub e Hugging Face (subseção 4.2). A coleta do consentimento ainda não foi implementada.
 17. **Pacientes menores de idade** (art. 14). O sistema não distingue menores, e não está definido de quem é o `telefone` cadastrado: do adolescente ou do responsável. No segundo caso, é dado de um terceiro que não está no inventário. Para criança, o consentimento do treino deve ser dado por pelo menos um dos pais ou pelo responsável legal (art. 14, § 1º).
 18. **Registros do Supabase Auth.** Podem guardar IP e user agent do funcionário. A confirmar e, se confirmado, incluir no Quadro 2.
 19. **Consentimento do treino sem mecanismo** (seção 3). `src/export_treino.py` exporta todo desfecho registrado, sem filtro de consentimento, e não há campo para registrar consentimento ou revogação. Decidido, ainda não implementado: a mesma tabela de eventos e um filtro no export, ligado junto com a coleta ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)).
@@ -525,6 +543,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 09/10/2026 | Todas | Frontmatter lgpd.md; SaúdeJá controladora da conta do funcionário; classificação pelo registro de agendamento; bases legais por dado; consentimento no lembrete; art. 33, II, b; subseção 9.2; formatação ABNT |
 | 09/10/2026 | 2.1, 4, 4.1, 5, 6, 8.1, 9.2 | DPA por conta e mecanismo de transferência em aberto; Space e Infobip no Quadro 6; custo de levar job e aplicação para o Brasil; SMS sem especialidade; eventos de consentimento retidos 365 dias após a eliminação; backup e logs de provedores na retenção; procedimento de revisão do art. 20; guarda contra filtro por dado pessoal nas consultas ao Supabase; requisitos para consulta por LLM |
 | 09/10/2026 | 4, 4.2, 4.3, 5, 5.1, 9.2 | Remote do DVC para Brazil South (decidido) e consentimento do art. 33, VIII, para GitHub e Hugging Face; re-treino incluído no processamento do runner; soft delete de blob de 1 dia; purga das cópias locais do DVC (`scripts/purgar_dvc_local.py`); verificação das cópias e backups contra a retenção |
+| 09/10/2026 | Frontmatter, 4, 4.2, 4.3, 7, 9, 9.1, 9.2 | Remote do DVC migrado para Brazil South (conta nova, LRS, SAS novas, chaves da conta antiga rotacionadas); a conta antiga nunca guardou dado de titular; o armazenamento sai do Quadro 6 |
 
 Fonte: elaboração própria (2026).
 
