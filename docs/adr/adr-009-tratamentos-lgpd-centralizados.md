@@ -23,18 +23,20 @@ Os tratamentos LGPD que exigem exclusão ficam centralizados num **workflow pró
 
 - **Disparo**: agendado (diário) e `workflow_dispatch` **sem nenhum input** que identifique o titular. O workflow processa o que estiver pendente no banco.
 - **Credencial**: environment novo, `lgpd`, restrito ao branch `main`. Código de PR nunca chega a ele. Guarda uma SAS do container com leitura, listagem e **exclusão**, sem escrita, e com data de validade, o que força a rotação.
-- **Pedidos do titular**: tabela `pedidos_titular` no Supabase, com tipo (`eliminacao`, `revogacao_treino`, `revogacao_lembrete`), situação (`pendente`, `confirmado_pela_clinica`, `executado`, `recusado`) e datas.
+- **Pedidos do titular**: tabela `pedidos_titular` no Supabase, com tipo (`eliminacao`, `revogacao_treino`, `revogacao_lembrete`, `revisao_decisao`), situação (`pendente`, `confirmado_pela_clinica`, `executado`, `recusado`) e datas.
   - Só pedidos confirmados pela clínica são executados. A SaúdeJá pode receber o pedido do paciente, mas o encaminha à controladora.
   - Depois da execução, o pedido perde o vínculo com o paciente e guarda só tipo, situação e datas, como prova de atendimento sem dado pessoal.
-- **Consentimento**: tabela `eventos_consentimento`, **só de inserção**, com paciente, finalidade (`lembrete`, `treino`), ação (`concedido`, `revogado`), versão do termo, canal, data e funcionário que registrou. O consentimento vigente é o último evento de cada finalidade. A coleta entra na tela de agendamento numa etapa posterior. Os filtros de consentimento no export e no job D-2 só são ligados junto com essa coleta: ligados antes, nenhum paciente teria consentimento registrado, os lembretes parariam e o treino ficaria sem linhas de produção.
+- **Consentimento**: tabela `eventos_consentimento`, **só de inserção**, com paciente, finalidade (`lembrete`, `treino`, `transferencia_internacional`), ação (`concedido`, `revogado`), versão do termo, canal, data e funcionário que registrou. O consentimento vigente é o último evento de cada finalidade. Cada evento guarda também o `id_paciente_externo` (hash do CPF), e a chave para `pacientes` é `on delete set null`, não `cascade`: na eliminação, os eventos perdem o vínculo com o cadastro, recebem a data da eliminação e ficam **365 dias** como prova de que o consentimento existia e de quando foi revogado (art. 8º, § 2º). Depois disso, a purga diária os apaga. A coleta entra na tela de agendamento numa etapa posterior. Os filtros de consentimento no export e no job D-2 só são ligados junto com essa coleta: ligados antes, nenhum paciente teria consentimento registrado, os lembretes parariam e o treino ficaria sem linhas de produção.
 - **Três fluxos no mesmo workflow**:
 
   | Fluxo | Gatilho | Supabase | Remote do DVC |
   |---|---|---|---|
   | Expiração | Agenda diária | — | Apaga versões que deixaram de ser vigentes há mais de 90 dias |
   | Revogação do consentimento do treino | Pedido confirmado | Evento `revogado` | Apaga as versões do dataset que contêm o titular |
-  | Eliminação | Pedido confirmado | `delete` em `pacientes` (o cascade apaga agendamentos, predições, mensagens e eventos de consentimento) | Apaga as versões do dataset que contêm o titular |
+  | Eliminação | Pedido confirmado | `delete` em `pacientes` (o cascade apaga agendamentos, predições e mensagens; os eventos de consentimento ficam sem vínculo por 365 dias) | Apaga as versões do dataset que contêm o titular |
 
+- **"Versões do dataset" inclui os recortes derivados**: `data/interim/train_raw.pkl` e `data/interim/test.pkl`, gravados pelo `preprocess` e enviados ao remote pelo `dvc push` do re-treino, têm as mesmas linhas do dataset e seguem o destino dele na expiração, na revogação e na eliminação.
+- **Soft delete de blob de 1 dia**: um blob apagado pela purga fica recuperável por 1 dia. É a rede de segurança contra um hash vigente apagado por engano, e o prazo entra na retenção declarada no LGPD.md.
 - **Retenção no DVC: 90 dias.**
   - Toda versão de artefato (dataset, `model.pkl`, artefatos do canário) é apagada 90 dias depois de deixar de ser referenciada pelo HEAD de `main`.
   - A versão vigente nunca expira; só é apagada por eliminação ou revogação.
@@ -58,6 +60,7 @@ Cons:
 - **A retenção efetiva de uma linha de produção passa de 90 dias.** A linha pode entrar no export até 90 dias depois da consulta, ficar na versão vigente durante o ciclo mensal e ainda permanecer 90 dias depois de a versão ser substituída: cerca de 210 dias no total. O LGPD.md declara esse máximo.
 - **Commits antigos ficam com ponteiros para blobs que não existem.** É esperado e precisa estar documentado, para não ser confundido com falha do remote.
 - **A eliminação depende de a clínica confirmar o pedido.** Se ela demorar, o prazo de 15 dias pode estourar sem que a SaúdeJá consiga agir.
+- **A eliminação não é total por 365 dias.** Os eventos de consentimento guardam o hash do CPF, a finalidade e as datas, e o hash é reversível. Isso é o mínimo para que a prova sirva: sem identificador, não há como ligar o evento ao titular numa reclamação. O prazo é menor que os prazos de prescrição (5 anos para a ação punitiva da administração federal, Lei nº 9.873/1999, e para a reparação de dano no Código de Defesa do Consumidor, art. 27). Cobre a janela em que uma reclamação sobre um lembrete é mais provável, mas não todas. A conservação se apoia no art. 16, I, combinado com o ônus da prova do art. 8º, § 2º, e precisa de validação jurídica. No lembrete, em que a clínica é controladora, o prazo precisa constar do contrato com ela.
 - Mais estado para manter coerente: o cálculo dos hashes precisa conhecer todos os arquivos `.dvc`, inclusive as cópias que o canário guarda em `data/canario/`. Um arquivo esquecido apagaria um modelo vigente; por isso a recusa de hashes do HEAD é a guarda principal e precisa de teste próprio.
 
 ## Alternativas consideradas

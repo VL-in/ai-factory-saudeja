@@ -55,10 +55,11 @@ bases_legais:
 transferencia_internacional:
   transfere: true
   destinos:
-    - "Chile — Azure Blob Storage, região Chile Central (linhas de produção do dataset de treino, pseudonimizadas, e model.pkl)"
-    - "Fora do Brasil — runner hospedado do GitHub Actions (processamento do job D-2, sem gravação persistente)"
-    - "Fora do Brasil — Hugging Face Space (aplicação)"
-  mecanismo: "Art. 33, II, b — cláusulas-padrão contratuais (adoção do texto da Resolução CD/ANPD nº 19/2024 pelos provedores a confirmar)"
+    - "Chile — Azure Blob Storage, região Chile Central (linhas de produção do dataset de treino, pseudonimizadas, e model.pkl); migração para Brazil South decidida, ainda não executada"
+    - "Fora do Brasil — runner hospedado do GitHub Actions (job D-2 diário e re-treino mensal, sem gravação persistente)"
+    - "Estados Unidos — Hugging Face Space (aplicação: processa nome, CPF antes do hash, telefone e dados da consulta, sem gravação persistente)"
+    - "Local a confirmar — Infobip (telefone e texto do lembrete)"
+  mecanismo: "Art. 33, VIII — consentimento específico e destacado do paciente, com informação prévia do caráter internacional, para o GitHub Actions e o Hugging Face; coleta ainda não implementada (seção 4.2). O art. 33, II, b não é atendido pelos contratos das contas atuais (seção 4.1)"
 ---
 
 # PROTEÇÃO DE DADOS PESSOAIS NO SAÚDEJÁ: CLASSIFICADOR DE NO-SHOW
@@ -150,7 +151,7 @@ Quem vê o nome é funcionário da clínica controladora: já tem relação com 
 | `eventos_app` | Lista fechada de campos permitidos em `detalhe` ([ADR-006](../adr/adr-006-observabilidade.md)) |
 | Dataset de treino (sai do Brasil, seção 4) | `COLUNAS_SAIDA` de `src/export_treino.py` |
 | API `/predict` | Campo inexistente em `src/api/schemas.py` |
-| SMS via Infobip | A consulta do job D-2 não traz a coluna |
+| SMS via Infobip | A consulta do job D-2 não traz a coluna. O texto do lembrete também não cita a especialidade, que é dado sensível: só data e hora (`tests/test_skew_features.py::test_sms_nao_revela_a_especialidade`) |
 | LLM via TrueFoundry (integração opcional, ainda não ligada) | `explain.contexto_sem_pii`, aplicada pela classe-base de `ExplicadorLLM` |
 
 Fonte: elaboração própria (2026), a partir do [ADR-007](../adr/adr-007-nome-do-paciente.md).
@@ -207,27 +208,115 @@ c) encerrar, com a revogação, o tratamento baseado no consentimento (art. 15, 
 
 ## 4 TRANSFERÊNCIA INTERNACIONAL DE DADOS
 
-O banco de produção (Supabase) fica em São Paulo (`sa-east-1`): pacientes, agendamentos, predições, mensagens e eventos ficam armazenados no Brasil. Três tratamentos acontecem fora do país.
+O banco de produção (Supabase) fica em São Paulo (`sa-east-1`): pacientes, agendamentos, predições, mensagens e eventos ficam armazenados no Brasil. Quatro tratamentos acontecem fora do país.
 
 **Quadro 6 – Tratamento de dados fora do Brasil**
 
 | Destino | Dados | Natureza |
 |---|---|---|
-| Azure Blob Storage, região Chile Central (remote do DVC) | Linhas de produção do dataset de treino (`data/consultas-treino.csv`, com os desfechos reais registrados pela clínica) e `model.pkl`. A semente sintética também fica lá, mas não é dado pessoal | Armazenamento persistente; versões retidas por 90 dias depois de substituídas (seção 5) |
-| Runner hospedado do GitHub Actions (job D-2, desde 30/09/2026) | Data de nascimento, sexo, especialidade, distância, antecedência, histórico de faltas e telefone. Nunca nome nem CPF | Processamento diário. Só o `model.pkl` é gravado, e é descartado ao fim da execução |
-| Hugging Face Space | Dados da aplicação | Processamento |
+| Azure Blob Storage, região Chile Central (remote do DVC) | Linhas de produção do dataset de treino (`data/consultas-treino.csv`, com os desfechos reais registrados pela clínica), os recortes `train_raw.pkl` e `test.pkl` que o `preprocess` deriva dele e `model.pkl`. A semente sintética também fica lá, mas não é dado pessoal | Armazenamento persistente; versões retidas por 90 dias depois de substituídas (seção 5). Migração para Brazil South decidida em 09/10/2026, ainda não executada (alternativa a, abaixo) |
+| Runner hospedado do GitHub Actions | Job D-2 (diário, desde 30/09/2026): data de nascimento, sexo, especialidade, distância, antecedência, histórico de faltas e telefone. Re-treino (mensal): as linhas de produção do dataset, com hash do CPF e desfecho. Nunca nome nem CPF. O canário e o alerta de observabilidade leem só contagens | Processamento. O que é gravado no runner é descartado ao fim da execução. Continua fora do Brasil depois da migração do remote |
+| Hugging Face Space (Estados Unidos) | Tudo o que a interface recebe ou exibe: nome, CPF antes da conversão em hash, telefone, data de nascimento, sexo, dados da consulta, predição e explicação | Processamento, sem gravação persistente. É o destino com mais dados, porque é onde o paciente digita o cadastro |
+| Infobip (local a confirmar) | Telefone e texto do lembrete, com data e hora da consulta | Envio do SMS. A Infobip guarda o log com o texto por 3 meses por padrão |
 
 Fonte: elaboração própria (2026), a partir do [ADR-005](../adr/adr-005-integracoes-implicitas.md).
 
 Para o pitch, a formulação correta é: **os dados armazenados no banco de produção não saem do Brasil, mas o artefato de treino e o processamento diário saem.**
 
-**Enquadramento.** A transferência se apoia no art. 33, II, b (cláusulas-padrão contratuais), por meio do acordo de processamento de dados (DPA) de cada provedor, e é necessária ao re-treino mensal acordado com Produto. Desde 23/08/2025, cláusula contratual só ampara transferência internacional se adotar o texto das cláusulas-padrão aprovado pela Autoridade Nacional de Proteção de Dados (ANPD) ou se tiver cláusula específica aprovada por ela (Brasil, 2024). Falta confirmar se os DPAs de Azure, GitHub e Hugging Face cumprem isso (subseção 9.2, item 16).
+**Enquadramento.** O mecanismo pretendido era o art. 33, II, b (cláusulas-padrão contratuais), por meio do acordo de processamento de dados (DPA) de cada provedor. Desde 23/08/2025, cláusula contratual só ampara transferência internacional se adotar, integralmente e sem alterações, o texto das cláusulas-padrão aprovado pela Autoridade Nacional de Proteção de Dados (ANPD), num instrumento assinado por exportador e importador, ou se tiver cláusula específica aprovada por ela (Brasil, 2024). **Nenhuma das contas atuais cumpre isso** (subseção 4.1), e o mecanismo está em aberto (subseção 9.2, item 16).
 
 **Mitigação pelo conteúdo.** O export (`src/export_treino.py`) nunca inclui telefone, nome ou CPF. Isso é verificado por `tests/test_coerencia_repo.py::test_export_treino_sem_coluna_proibida_de_pii`. O identificador do paciente é o hash do CPF. Restam idade derivada, sexo, especialidade, distância, antecedência e desfecho.
 
 A mitigação tem limite: as linhas de produção pseudonimizadas continuam sendo dado pessoal, porque o art. 12 só equipara a anônimo o dado cuja anonimização é irreversível. Especialidade, desfecho e histórico de faltas continuam sendo dados sensíveis. A pseudonimização reduz a gravidade de um incidente, mas não tira a transferência do escopo do art. 33.
 
-**Alternativa.** Criar um container em Brazil South, apontar `DVC_REMOTE_URL` e `.dvc/config.local` para ele e executar `dvc push`. Nenhum código depende da região ([ADR-005](../adr/adr-005-integracoes-implicitas.md)).
+**Alternativas.** Cada destino pode sair do exterior por um caminho diferente:
+
+a) **remote do DVC** (decidida em 09/10/2026): a região é da conta de armazenamento, não do container, e não muda depois de criada. A migração exige uma conta nova em Brazil South, com container novo, e a cópia dos blobs que ainda estão dentro da retenção. Nenhum código depende da região ([ADR-005](../adr/adr-005-integracoes-implicitas.md)), e o armazenamento custa praticamente o mesmo. Os passos estão na subseção 4.3;
+
+b) **job D-2**: executar a imagem do job como Azure Container Apps Job em Brazil South, disparado pelo agendador do próprio Azure ou por um `az containerapp job start` vindo do GitHub Actions. No segundo caso, o runner só dá a ordem, e nenhum dado de paciente passa por ele. Alguns minutos por dia cabem na cota gratuita mensal do Container Apps (180.000 vCPU-s e 360.000 GiB-s por assinatura). Runner auto-hospedado no Brasil foi descartado: com o repositório público, um PR de fork pode executar código nele;
+
+c) **aplicação**: hospedar a mesma imagem do Space em Brazil South. No Azure App Service B1 Linux, a tabela pública de preços indicava US$ 0,02 por hora em 09/10/2026, cerca de US$ 15 por mês, sem hibernação. No Container Apps com uma réplica sempre ativa de 0,5 vCPU e 1 GiB, o custo fica entre US$ 10 e US$ 35 por mês, conforme o tempo em uso ativo. Escalar até zero custa quase nada, mas cada primeira visita espera a imagem subir.
+
+Somadas, as três mudanças custam de US$ 15 a US$ 35 por mês a mais, contra o orçamento de US$ 100 por mês do [BRIEFING](../BRIEFING.md), menos os US$ 9 do Hugging Face Pro se o Space for desligado. O crédito do Azure for Students (US$ 100 por 12 meses) não sustenta essa hospedagem por um ano inteiro, e a oferta é limitada a uso educacional (subseção 4.1). Os valores são estimativas da tabela de preços e não incluem o registro da imagem nem o log do Azure Monitor, que deve ficar desligado ou com retenção curta, pelo mesmo motivo da seção 8.
+
+### 4.1 Acordos de tratamento de dados (DPA) das contas atuais
+
+Cada provedor trata dados em nome da SaúdeJá e é seu suboperador (art. 39). O DPA é o contrato que define as obrigações dele. Para amparar transferência internacional, o DPA precisa ainda trazer o texto das cláusulas-padrão da ANPD. A verificação abaixo foi feita em 09/10/2026, sobre os textos públicos de cada provedor.
+
+**Quadro 6A – DPA por conta**
+
+| Conta | Há DPA? | Como se obtém | Cláusulas-padrão da ANPD | Observação |
+|---|---|---|---|---|
+| Azure for Students | Em princípio, sim: a assinatura é regida pelo Microsoft Customer Agreement, que incorpora o Data Protection Addendum (DPA) da Microsoft pelos Product Terms | Automático, sem assinatura nem negociação. A confirmar no portal, em *Cost Management + Billing*, qual contrato está ligado à assinatura | **Não.** A versão em inglês de 22/05/2026 só traz as cláusulas da União Europeia, do Reino Unido e da Suíça | A oferta se destina a educação e pesquisa não comercial, com US$ 100 de crédito por 12 meses. Esgotado o crédito, a assinatura é desativada, e com ela o remote do DVC, o que quebra o re-treino e o rollback de modelo. Uma operação real exige assinatura paga |
+| GitHub Free | **Não.** O DPA do GitHub faz parte do GitHub Customer Agreement, que cobre organizações em planos pagos (Team, Enterprise). A conta gratuita é regida só pelos Termos de Serviço e pela Declaração de Privacidade | Mover o repositório para uma organização no plano Team | **Não** (versão de outubro de 2025) | O runner do job D-2 processa telefone e dados da consulta sem nenhum contrato de operador |
+| Hugging Face Pro | **Não.** O DPA só é oferecido no plano Enterprise | Plano Enterprise | Não | O Pro é assinatura individual, sem cláusula de tratamento de dados. Os servidores ficam nos Estados Unidos |
+| Supabase Free (São Paulo) | **Sim.** O DPA complementa os Termos de Serviço e vale com o aceite deles | Automático. Cópia assinada pelo painel, em *Legal documents*, via PandaDoc | **Não** (versão de junho de 2026). Os dados ficam no Brasil, então isso só pesaria se houvesse acesso remoto a partir do exterior | O plano gratuito não tem backup (seção 5) |
+| Infobip (teste gratuito) | O DPA faz parte do contrato comercial. No teste gratuito, não há contrato negociado | Contrato pago | A confirmar | O teste dura 60 dias e só envia para 1 número verificado, com remetente de teste. **Não consegue enviar lembrete a paciente**: a operação real exige conta paga, e com ela o DPA |
+
+Fonte: elaboração própria (2026), com base em Microsoft (2026a, 2026b), GitHub (2025), Supabase (2026) e Infobip (2026a, 2026b).
+
+**Conclusão.** Com as contas atuais, só o Supabase tem DPA, e nenhum provedor oferece as cláusulas-padrão da ANPD. Em contas gratuitas ou individuais não há como negociar um aditivo. Restam três caminhos, combináveis por destino:
+
+a) **tirar o destino do exterior** (alternativas a a c, acima). Resolve a transferência, mas não a falta de DPA: a hospedagem no Brasil ainda precisa de contrato de operador;
+
+b) **consentimento específico e destacado para a transferência** (art. 33, VIII), com informação prévia do caráter internacional. Combina com o treino, que já depende de consentimento (seção 3). Não serve para a aplicação nem para o job D-2: um paciente que recusasse não poderia ser atendido pelo sistema;
+
+c) **cláusulas-padrão da ANPD assinadas com o provedor** (art. 33, II, b). Só é realista com contrato corporativo.
+
+O art. 33, IX, não resolve: ele cobre as hipóteses do art. 7º, II, V e VI, e não as bases do art. 11 em que se apoiam os dados de saúde.
+
+No protótipo, com a semente sintética e a SaúdeJá fictícia, nenhum titular real é afetado. Antes de operar com pacientes reais, o mecanismo de cada destino precisa estar definido aqui e na [política de privacidade](POLITICA-DE-PRIVACIDADE.md), seção 6.
+
+### 4.2 Mecanismo adotado
+
+Decisão de 09/10/2026: o remote do DVC vai para Brazil South; o job D-2, o re-treino e a aplicação continuam no GitHub Actions e no Hugging Face, fora do Brasil.
+
+**Quadro 6B – Mecanismo por destino**
+
+| Destino | Mecanismo | Situação |
+|---|---|---|
+| Remote do DVC | Nenhum: deixa de haver transferência | Migração não executada. Até lá, o remote no Chile fica sem mecanismo válido. Enquanto só existir a semente sintética, nenhum titular é afetado |
+| GitHub Actions e Hugging Face (pacientes) | Consentimento específico e destacado do titular para a transferência, com informação prévia do caráter internacional, distinto das demais finalidades (art. 33, VIII) | Coleta não implementada |
+| Hugging Face (conta do funcionário) | Mesmo inciso, no primeiro acesso | Coleta não implementada. Mecanismo frágil (ver abaixo) |
+| Infobip | A definir com o contrato pago | O teste gratuito não envia lembrete a paciente (subseção 4.1) |
+
+Fonte: elaboração própria (2026), com base em Brasil (2018).
+
+**Por que consentimento.** As cláusulas-padrão (art. 33, II, b) dependem de contrato que as contas atuais não oferecem (subseção 4.1). O art. 33, IX, só cobre transferências necessárias às hipóteses do art. 7º, II, V e VI. A identificação do paciente se apoia no inciso V, mas a predição e o treino tratam dado de saúde, cuja base está no art. 11, que o inciso IX não alcança. Também não há decisão de adequação da ANPD para os Estados Unidos (art. 33, I). Resta o consentimento.
+
+**Política de privacidade e consentimento têm papéis diferentes.** A política não é base legal: ela cumpre o dever de transparência (art. 9º) e traz a informação prévia que o inciso VIII exige. O mecanismo é o consentimento, coletado como ação própria do titular. Os dois são necessários.
+
+**Requisitos da coleta:**
+
+a) **ação separada e destacada**: uma caixa própria para a transferência, distinta do consentimento do lembrete e do treino, e nunca pré-marcada;
+
+b) **informação prévia**: países (Estados Unidos e outros onde os provedores operam), provedores, dados e finalidade de cada um, e o fato de que esses provedores não adotaram as cláusulas-padrão da ANPD;
+
+c) **antes de o dado sair do país**: o formulário de cadastro roda no próprio Space. A caixa de consentimento fica fora do formulário, e os campos só aparecem depois dela. Os campos de um `st.form` só são enviados ao servidor no envio do formulário;
+
+d) **registro como prova**: evento em `eventos_consentimento`, com a finalidade `transferencia_internacional` ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md));
+
+e) **em nome da clínica**: a clínica é a controladora, e o termo cita a SaúdeJá e os provedores. A clínica autoriza a SaúdeJá, no contrato, a usar esses suboperadores (art. 39).
+
+**Consequências para quem recusa ou revoga.** O sistema inteiro passa pelo Space e pelo runner. O paciente que recusa é atendido fora do sistema, pelo agendamento da própria clínica, e nenhum dado dele é cadastrado. A LGPD admite condicionar o serviço ao tratamento, desde que o titular seja informado com destaque (art. 9º, § 3º), mas a recusa não pode impedir o atendimento médico: só o uso do sistema. A revogação equivale a um pedido de eliminação, porque o sistema não consegue tratar o paciente sem transferir os dados.
+
+**Limites:**
+
+- o consentimento é revogável a qualquer momento, e a operação depende de cada titular manter o seu;
+- na conta do funcionário, o consentimento é frágil: ele é pedido ao empregado de uma clínica que adotou o sistema, e um empregado nem sempre tem liberdade real para recusar. Fica como risco residual (subseção 9.2, item 26);
+- consentimento não substitui contrato de operador: GitHub e Hugging Face continuam sem DPA (subseção 4.1).
+
+### 4.3 Migração do remote do DVC para Brazil South
+
+Os identificadores da conta, do container e da URL ficam só no `.env` e nos secrets, nunca neste documento.
+
+1. **Verificar se a região é permitida.** Assinaturas Azure for Students têm uma política que limita as regiões de implantação. No portal, em *Policy* > *Assignments* > *Allowed resource deployment regions*, conferir se Brazil South está na lista. Se não estiver, a política não pode ser alterada pela assinatura, e a migração depende de outra assinatura.
+2. **Criar a conta nova** em Brazil South, com o mesmo tipo de redundância e a mesma proteção de dados da atual: soft delete de blob de 1 dia e versionamento de blob desligado (seção 5.1).
+3. **Copiar só o que está dentro da retenção** (versão vigente de cada artefato e versões substituídas há menos de 90 dias), com `azcopy copy` de conta para conta. Copiar o container inteiro levaria para o Brasil versões que já deveriam ter sido apagadas.
+4. **Gerar as SAS novas** (leitura, escrita do re-treino e, quando o ADR-009 for implementado, exclusão) e atualizar `DVC_REMOTE_URL`, os secrets dos environments e o `.dvc/config.local` de quem desenvolve.
+5. **Validar** com `dvc pull` num checkout de `main` e com um disparo manual do job D-2 em dev.
+6. **Apagar a conta antiga.** Uma conta apagada ainda pode ser recuperada por até 14 dias, se nenhuma outra com o mesmo nome for criada. Esse prazo deve ser declarado no Quadro 7 até vencer.
+7. **Atualizar** o Quadro 6, o frontmatter e o [ADR-005](../adr/adr-005-integracoes-implicitas.md).
 
 ## 5 RETENÇÃO E TÉRMINO DO TRATAMENTO
 
@@ -242,14 +331,43 @@ Pelo princípio da necessidade (art. 6º, III) e pelas regras de término do tra
 | `mensagens_disparadas` | 90 dias (mesma variável) | Idem | Auditoria da decisão do modelo: registra, por agendamento, se o lembrete foi enviado ou não. Falta base para guardar o registro depois da revogação do consentimento (subseção 9.2, item 14) |
 | `pacientes`, `agendamentos` | Sem purga por iniciativa da SaúdeJá | — | O registro do atendimento pertence à clínica, e a exclusão é feita a pedido dela (seção 6) |
 | Semente do dataset de treino | Sem prazo | — | Dado sintético, sem titular. Tem uma única versão, sempre vigente, e o workflow de purga nunca a apaga |
-| Linhas de produção do dataset de treino | Entram no export até 90 dias depois da consulta. Cada versão do dataset é apagada 90 dias depois de deixar de ser vigente em `main`. Máximo de cerca de 210 dias no remote | Workflow de purga ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)), **não implementado** (subseção 9.2, item 20) | Melhoramento do algoritmo, com consentimento (seção 3), e auditoria do modelo promovido. Um modelo mais antigo continua reversível pelo `model.pkl`, mas não pode mais ser retreinado com os mesmos dados |
+| Linhas de produção do dataset de treino, inclusive os recortes `train_raw.pkl` e `test.pkl` derivados dele | Entram no export até 90 dias depois da consulta. Cada versão do dataset é apagada 90 dias depois de deixar de ser vigente em `main`. Máximo de cerca de 210 dias no remote | Workflow de purga ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)), **não implementado** (subseção 9.2, item 20) | Melhoramento do algoritmo, com consentimento (seção 3), e auditoria do modelo promovido. Um modelo mais antigo continua reversível pelo `model.pkl`, mas não pode mais ser retreinado com os mesmos dados |
 | `model.pkl` e artefatos do canário | A versão vigente não expira. As demais são apagadas 90 dias depois de deixarem de ser vigentes | Workflow de purga ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)), **não implementado** | Rollback do modelo ([SLO](../SLO.md), seção 5): o campeão anterior deixa de ser vigente na promoção e fica disponível por 90 dias. Não contém linha de titular |
 | `auth.users` | Enquanto durar o vínculo do funcionário com a clínica | Manual, pelo administrador, a pedido da clínica no desligamento | A conta de um ex-funcionário daria acesso indevido a nomes de pacientes |
 | Sessões e auditoria de login do Supabase Auth | Definida pelo provedor | Provedor | Podem conter IP e user agent (subseção 9.2, item 18) |
+| `eventos_consentimento` | Enquanto o paciente existir. Depois da eliminação, 365 dias sem vínculo com o cadastro | Workflow de purga ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)), **não implementado** | Prova de que o consentimento existia e de quando foi revogado (art. 8º, § 2º; art. 16, I). Guarda o hash do CPF, sem o qual a prova não se liga ao titular. O prazo é menor que o de prescrição (5 anos) e precisa de validação jurídica e de previsão no contrato com a clínica |
+| Backup do banco | Não há | — | O plano gratuito do Supabase não tem backup. Para a LGPD, o que é apagado some de vez; para a disponibilidade, é um risco (subseção 9.2, item 23). No plano Pro, haveria 7 dias de backup diário, e um dado apagado continuaria no backup por esse prazo |
+| Versões no remote do DVC apagadas pela purga | 1 dia (soft delete de blob) | Provedor | O soft delete de blob está ligado com prazo de 1 dia: um blob apagado pela purga continua recuperável por mais 1 dia e depois é removido pelo Azure. Protege contra uma exclusão por engano, como a do `model.pkl` vigente (ADR-009). O versionamento de blob precisa continuar desligado: ligado, cada exclusão guardaria uma versão anterior sem prazo |
+| Cópias locais do DVC (cache e workspace de quem desenvolve) | Cache: só o que o workspace usa. Workspace: até a próxima execução da purga local depois de a versão sair do remote. Versão local nunca publicada: 90 dias | `scripts/purgar_dvc_local.py`, executado por quem desenvolve depois de cada `git pull` e pelo menos uma vez por semana | Medida organizacional, não automática: depende de quem desenvolve executar o script. O atraso máximo declarado é de 7 dias além do remote (subseção 9.2, item 25) |
+| Artefato `gate-report` do re-treino (GitHub Actions) | 90 dias (padrão do GitHub para repositório público) | Provedor | Métricas e contagens do gate. Os bloqueios citam até cinco `id_consulta`, que são uuids internos, sem dado do paciente |
+| Cópia do banco de produção (`supabase db dump`) | Não é feita | — | A documentação do Supabase recomenda dumps periódicos no plano gratuito, mas um dump guardaria o banco inteiro fora de qualquer purga. Se for necessário num incidente, é apagado ao fim da recuperação |
+| Log de envio da Infobip | 3 meses por padrão | Provedor | Contém o telefone e o texto do lembrete. A redução do prazo é gratuita e deve ser pedida ao contratar a conta paga |
+| Log de API do Supabase | Definida pelo plano | Provedor | Registra a URL de cada consulta. Não contém dado pessoal em claro (seção 8) |
 
 Fonte: elaboração própria (2026).
 
 As purgas rodam no job diário que já existe, sem agendador novo, pelo mesmo critério do ADR-006. Uma falha de purga não derruba o job, e a janela de 90 dias absorve uma execução perdida. Apagar `predicoes` remove também a explicação SHAP, o que não afeta o [SLO](../SLO.md) (seção 4, medido em janelas de 24 h, 7 d e 30 d), a fila do dia nem o re-treino: o re-treino lê o desfecho de `agendamentos.status` e o lembrete de `agendamentos.lembrete_enviado`, que não são purgados.
+
+### 5.1 Cópias e backups
+
+Um dado só é eliminado quando todas as suas cópias são apagadas. O quadro compara cada cópia com a retenção do dado principal.
+
+**Quadro 7A – Retenção das cópias**
+
+| Cópia | Dado principal | Atraso da cópia | Cumpre? |
+|---|---|---|---|
+| Soft delete de blob no remote do DVC | Versões do dataset e dos recortes no remote | 1 dia | Sim, com o atraso declarado. Depende do workflow de purga do ADR-009: até ele existir, nenhuma versão é apagada, e o problema está no dado principal, não na cópia (subseção 9.2, item 20) |
+| Cache local do DVC | Idem | Nenhum: o cache local guarda menos que o remote | Sim, se a purga local for executada |
+| Workspace local (`data/consultas-treino.csv`, `data/interim/*.pkl`) | Idem | Até 7 dias | Sim, com o atraso declarado, se a purga local for executada na frequência combinada |
+| Backup do Supabase | `pacientes`, `agendamentos`, `predicoes`, `mensagens_disparadas`, `eventos_app` | Não há backup | Sim. A exclusão no banco é definitiva |
+| Runner do GitHub e Hugging Face Space | Tudo o que processam | Nenhum: o disco é descartado ao fim da execução ou no restart | Sim |
+| Log de envio da Infobip | `mensagens_disparadas` (90 dias) | Até 3 meses depois do envio, e até 3 meses depois de uma eliminação | Na expiração, sim: 3 meses equivalem aos 90 dias. Na eliminação, não: o log do titular fica no provedor até vencer, salvo pedido de exclusão à Infobip |
+| Log de API do Supabase e log do GitHub Actions | — | Prazo do provedor | Não guardam dado pessoal em claro (seção 8) |
+| MLflow local (`mlruns/`, `data/mlflow.db`) e imagens Docker | — | — | Fora do escopo: o MLflow registra parâmetros, métricas e o `model.pkl`, e nenhuma imagem copia o dataset (`.dockerignore`) |
+
+Fonte: elaboração própria (2026).
+
+**Conclusão.** Com o soft delete de 1 dia e a purga local, as cópias passam a seguir a retenção do dado principal, com atrasos declarados de 1 dia (remote) e até 7 dias (máquinas de quem desenvolve). Restam três lacunas: o workflow de purga do remote ainda não existe (ADR-009), a purga local depende de disciplina de quem desenvolve, e o log da Infobip sobrevive à eliminação do titular.
 
 ## 6 DIREITOS DO TITULAR
 
@@ -262,10 +380,10 @@ O titular paciente exerce seus direitos pela clínica, que aciona a SaúdeJá. O
 | Confirmação e acesso (I, II) | Consulta pelo `id_paciente_externo`, recalculado a partir do CPF | Busca por nome não identifica o titular com segurança (homônimos, grafia) |
 | Correção (III) | Alteração direta em `pacientes` ou `agendamentos` | — |
 | Portabilidade (V) | Export das linhas do titular | Sem ferramenta dedicada |
-| Eliminação (VI) | Pedido em `pedidos_titular`, confirmado pela clínica e executado pelo workflow de purga: `delete` em `pacientes` (o cascade remove agendamentos, predições, mensagens e eventos de consentimento) e exclusão das versões do dataset que contêm o titular ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)) | **Não implementado**: hoje é operação manual no banco (seção 9, item 4) |
+| Eliminação (VI) | Pedido em `pedidos_titular`, confirmado pela clínica e executado pelo workflow de purga: `delete` em `pacientes` (o cascade remove agendamentos, predições e mensagens) e exclusão das versões do dataset que contêm o titular. Os eventos de consentimento ficam 365 dias sem vínculo, como prova ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)) | **Não implementado**: hoje é operação manual no banco (seção 9, item 4) |
 | Revogação do consentimento (IX) | Evento `revogado` em `eventos_consentimento`. No treino, o workflow de purga também apaga as versões do dataset que contêm o titular ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)) | **Não implementado** (subseção 9.2, itens 13 e 19) |
 | Oposição (§ 2º) | Vale para os dados tratados por legítimo interesse (Quadro 5). Avaliada caso a caso | Sem procedimento definido |
-| Revisão de decisão automatizada (art. 20) | Toda predição tem explicação SHAP (SLO, seção 4: 100% de cobertura). A decisão é só enviar ou não um lembrete, e não nega, condiciona nem encarece o atendimento | O risco é baixo pelo tipo de decisão, não por precisão do modelo |
+| Revisão de decisão automatizada (art. 20) | A clínica, controladora da decisão, recebe o pedido, revisa e responde; a SaúdeJá dá apoio técnico pelo canal do encarregado ([PROCEDIMENTO-REVISAO.md](PROCEDIMENTO-REVISAO.md); roteiro na tela "Fila do dia"). A explicação SHAP de cada predição (SLO, seção 4: 100% de cobertura) é o insumo da revisão, não a revisão. A decisão é só enviar ou não um lembrete, e não nega, condiciona nem encarece o atendimento | Depois de 90 dias, a predição é apagada e só os critérios gerais do modelo podem ser explicados. O risco é baixo pelo tipo de decisão, não por precisão do modelo |
 
 Fonte: elaboração própria (2026).
 
@@ -305,11 +423,30 @@ c) **varredura de log** (`scripts/auditoria_lgpd.py`), usada no smoke test do de
 
 Quando a redação falha, a linha é substituída por um marcador, em vez de sair sem redação. A regra numérica erra para o lado de redigir a mais: o IP de cliente também é dado pessoal. Os scripts do pipeline de treino (`preprocess`, `train`, `validate`) ficam fora do escopo, porque processam só o dataset pseudonimizado e a saída deles é lida no terminal e no MLflow.
 
+### 8.1 Logs dos provedores
+
+O filtro de redação só alcança o que passa pelo processo Python. Os provedores guardam o próprio log, do lado deles:
+
+a) **log de API do Supabase**: registra a URL de cada requisição ao PostgREST, e o valor de um filtro de consulta viaja nessa URL (`?coluna=eq.valor`). O corpo de um POST (insert, upsert, `rpc`) não entra. Hoje as consultas filtram só por uuid interno, status e data, e nenhuma por dado pessoal. A guarda `tests/test_coerencia_repo.py::test_nenhuma_consulta_ao_supabase_filtra_por_dado_pessoal` falha se alguma consulta em `src/` filtrar por `id_paciente_externo`, `telefone`, `nome_completo`, `data_nascimento`, CPF ou e-mail. Uma busca por dado pessoal tem de ir no corpo de uma chamada `rpc()` a uma função do Postgres. O IP registrado é o do servidor da aplicação ou do runner, não o do paciente;
+
+b) **log do Postgres**: no Supabase, o padrão é `log_statement = 'ddl'`, que registra só mudanças de schema, além dos erros. Um erro de restrição pode citar o valor da chave violada; a única chave única com dado pessoal é `id_paciente_externo` (hash), gravada por upsert, que não gera esse erro. Ligar `pgaudit` ou `log_statement = 'all'` passaria a registrar os valores das consultas, e não deve ser feito nas tabelas de paciente;
+
+c) **log do Supabase Auth**: guarda o e-mail e o IP do funcionário em cada login. É inerente à autenticação (subseção 9.2, item 18);
+
+d) **log da Infobip**: guarda o telefone e o texto do lembrete por 3 meses (seção 5). O texto não cita a especialidade (Quadro 4).
+
+**Requisitos para uma futura consulta ao banco feita por LLM** (seção 12, item c). Valem os mesmos princípios, aplicados na estrutura:
+
+- a ferramenta usa um papel próprio do Postgres, só de leitura, com acesso a views sem colunas de dado pessoal, nunca a chave secreta do backend nem SQL livre;
+- busca de paciente específico só por `rpc()`, com o valor no corpo;
+- o resultado passa por `explain.contexto_sem_pii` antes de chegar ao prompt, como já acontece na explicação em texto;
+- o registro de uso vai para `eventos_app`, com a lista fechada de campos do [ADR-006](../adr/adr-006-observabilidade.md), sem a pergunta nem a resposta.
+
 ## 9 RISCOS RESIDUAIS E PENDÊNCIAS
 
 Cada item deve constar do slide de risco do pitch.
 
-1. **Transferência internacional das linhas de produção do dataset** (seção 4). Mitigada pelo conteúdo, não eliminada, e reversível a baixo custo.
+1. **Transferência internacional das linhas de produção do dataset** (seção 4). Mitigada pelo conteúdo, não eliminada. A migração do remote para Brazil South foi decidida (subseção 4.3), mas o re-treino continua processando essas linhas no runner do GitHub, fora do Brasil.
 2. **Reidentificação direta em caso de vazamento** ([ADR-007](../adr/adr-007-nome-do-paciente.md)). O banco expõe nome, telefone, especialidade e desfecho. O pitch não pode afirmar "não temos nome de paciente". A formulação correta é: "temos nome, restrito à tela da equipe, com sete saídas fechadas e testadas" (Quadro 4).
 3. **Tela da recepção visível na sala de espera.** A fila do dia mostra nomes. A mitigação é um aviso na tela, não um mecanismo: a posição do monitor é decisão da clínica. A opção de abreviar o nome foi recusada por custo de operação (ADR-007).
 4. **Eliminação de titular manual.** O `on delete cascade` funciona, mas não há interface nem script. É aceitável em protótipo, não em operação real. Resolvido por desenho no [ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md), ainda não implementado.
@@ -335,12 +472,17 @@ Cada item deve constar do slide de risco do pitch.
 13. **Consentimento sem prova nem revogação** (seção 3). Não há registro de quando e como o consentimento foi dado, nem campo de revogação consultado pelo job D-2. Hoje o lembrete seria disparado para quem revogou. Decidido, ainda não implementado: tabela `eventos_consentimento` e filtro no job D-2, ligado só quando a coleta entrar na tela de agendamento ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)).
 14. **Retenção de `mensagens_disparadas` após a revogação** (seção 5). A auditoria do modelo é finalidade da operação, não do titular. Ou a retenção de 90 dias ganha base própria, ou a revogação deve apagar ou anonimizar os registros do titular.
 15. **Legítimo interesse sem teste de balanceamento documentado** (art. 10), tanto para os dados de paciente quanto para a conta do funcionário. A ANPD pode exigir relatório de impacto (art. 10, § 3º).
-16. **DPAs sem verificação das cláusulas-padrão da ANPD** (seção 4).
+16. **Transferência internacional sem mecanismo implementado** (seção 4). Verificado em 09/10/2026: nenhuma das contas atuais tem as cláusulas-padrão da ANPD, e só o Supabase tem DPA (subseção 4.1). Decidido: remote do DVC para Brazil South e consentimento do art. 33, VIII, para GitHub e Hugging Face (subseção 4.2). Nem a migração nem a coleta do consentimento foram feitas.
 17. **Pacientes menores de idade** (art. 14). O sistema não distingue menores, e não está definido de quem é o `telefone` cadastrado: do adolescente ou do responsável. No segundo caso, é dado de um terceiro que não está no inventário. Para criança, o consentimento do treino deve ser dado por pelo menos um dos pais ou pelo responsável legal (art. 14, § 1º).
 18. **Registros do Supabase Auth.** Podem guardar IP e user agent do funcionário. A confirmar e, se confirmado, incluir no Quadro 2.
 19. **Consentimento do treino sem mecanismo** (seção 3). `src/export_treino.py` exporta todo desfecho registrado, sem filtro de consentimento, e não há campo para registrar consentimento ou revogação. Decidido, ainda não implementado: a mesma tabela de eventos e um filtro no export, ligado junto com a coleta ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)).
 20. **Retenção de 90 dias do DVC não implementada** (seção 5). O export não limita a janela de consultas, e as versões antigas não são apagadas do remote. A SAS de escrita do re-treino continua sem permissão de exclusão (item 12); a exclusão fica com um workflow próprio, com SAS separada, restrito a `main` ([ADR-009](../adr/adr-009-tratamentos-lgpd-centralizados.md)).
 21. **Modelo compartilhado entre clínicas** (seção 1). Enquanto não houver `id_clinica` no schema nem decisão sobre um modelo por clínica, o treino deve ser tratado como finalidade da SaúdeJá, que é controladora desse tratamento. O termo de consentimento coletado pela clínica precisa citar a SaúdeJá e essa finalidade.
+22. **Contas incompatíveis com operação real** (subseção 4.1). O Azure for Students se destina a uso educacional e é desativado quando o crédito acaba; o teste gratuito da Infobip não envia SMS a paciente; GitHub Free e Hugging Face Pro não têm DPA. Adequado ao protótipo, não a pacientes reais.
+23. **Banco sem backup** (seção 5). O plano gratuito do Supabase não tem backup: um incidente que apague dados não tem recuperação.
+24. **Política de privacidade não publicada.** Há um rascunho em [POLITICA-DE-PRIVACIDADE.md](POLITICA-DE-PRIVACIDADE.md), com as condições para publicação. O campo `politica.url` do frontmatter aponta para este documento, que não serve de compromisso externo, e o aviso exibido na tela de agendamento ainda não menciona o treino do modelo, a transferência internacional nem o canal do encarregado.
+25. **Purga local depende de quem desenvolve** (subseção 5.1). `scripts/purgar_dvc_local.py` aplica a retenção nas cópias locais do DVC, mas só quando é executado. Nada no repositório detecta uma máquina que nunca o executa. Mitigação: restringir o acesso de leitura ao remote a quem precisa e revogar a credencial de quem sai do projeto.
+26. **Consentimento como mecanismo de transferência** (subseção 4.2). É revogável a qualquer momento, e a revogação tira o paciente do sistema. Na conta do funcionário, a liberdade de recusar é questionável. O mecanismo resolve a base legal da transferência, mas não a falta de contrato de operador com GitHub e Hugging Face.
 
 ## 10 INCIDENTES
 
@@ -381,6 +523,8 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 09/10/2026 | 1, 3, 4, 5, 6, 9 | Camada de controladora da SaúdeJá no treino de modelo compartilhado; consentimento em tabela de eventos; retenção de 90 dias no DVC; workflow de purga (ADR-009) |
 | 09/10/2026 | 1, 2, 3, 4, 5, 6, 9 | Semente sintética separada das linhas de produção do dataset; consentimento (art. 11, I) para o treino com desfechos reais; retenção de 90 dias das linhas de produção |
 | 09/10/2026 | Todas | Frontmatter lgpd.md; SaúdeJá controladora da conta do funcionário; classificação pelo registro de agendamento; bases legais por dado; consentimento no lembrete; art. 33, II, b; subseção 9.2; formatação ABNT |
+| 09/10/2026 | 2.1, 4, 4.1, 5, 6, 8.1, 9.2 | DPA por conta e mecanismo de transferência em aberto; Space e Infobip no Quadro 6; custo de levar job e aplicação para o Brasil; SMS sem especialidade; eventos de consentimento retidos 365 dias após a eliminação; backup e logs de provedores na retenção; procedimento de revisão do art. 20; guarda contra filtro por dado pessoal nas consultas ao Supabase; requisitos para consulta por LLM |
+| 09/10/2026 | 4, 4.2, 4.3, 5, 5.1, 9.2 | Remote do DVC para Brazil South (decidido) e consentimento do art. 33, VIII, para GitHub e Hugging Face; re-treino incluído no processamento do runner; soft delete de blob de 1 dia; purga das cópias locais do DVC (`scripts/purgar_dvc_local.py`); verificação das cópias e backups contra a retenção |
 
 Fonte: elaboração própria (2026).
 
@@ -390,4 +534,16 @@ BRASIL. Autoridade Nacional de Proteção de Dados. **Resolução CD/ANPD nº 19
 
 BRASIL. **Lei nº 13.709, de 14 de agosto de 2018**. Lei Geral de Proteção de Dados Pessoais (LGPD). Brasília, DF: Presidência da República, [2019]. Disponível em: https://www.planalto.gov.br/ccivil_03/_ato2015-2018/2018/lei/l13709.htm. Acesso em: 9 out. 2026.
 
+GITHUB. **GitHub Data Protection Agreement**. [*S. l.*]: GitHub, out. 2025. Disponível em: https://github.com/customer-terms/github-data-protection-agreement. Acesso em: 9 out. 2026.
+
+INFOBIP. **Free trial**. [*S. l.*]: Infobip, 2026a. Disponível em: https://www.infobip.com/docs/essentials/getting-started/free-trial. Acesso em: 9 out. 2026.
+
+INFOBIP. **Data retention notice**. [*S. l.*]: Infobip, 2026b. Disponível em: https://www.infobip.com/policies/data-retention-notice. Acesso em: 9 out. 2026.
+
 LGPD.MD. **Especificação lgpd.md**: versão 1.0. [*S. l.*]: lgpd.md, 2025. Disponível em: https://lgpd.md/spec. Acesso em: 9 out. 2026.
+
+MICROSOFT. **Microsoft Products and Services Data Protection Addendum**. [*S. l.*]: Microsoft, 22 maio 2026a. Disponível em: https://www.microsoft.com/licensing/docs/view/Microsoft-Products-and-Services-Data-Protection-Addendum-DPA. Acesso em: 9 out. 2026.
+
+MICROSOFT. **Azure for Students**: offer details. [*S. l.*]: Microsoft, 2026b. Disponível em: https://azure.microsoft.com/en-us/pricing/offers/ms-azr-0170p. Acesso em: 9 out. 2026.
+
+SUPABASE. **Data Processing Addendum**. [*S. l.*]: Supabase, jun. 2026. Disponível em: https://supabase.com/legal/dpa. Acesso em: 9 out. 2026.
