@@ -617,7 +617,6 @@ def _criar_paciente_com_consentimento(repositories, id_externo):
     )
     eventos = repositories.registrar_consentimentos(
         id_paciente=paciente["id"],
-        id_paciente_externo=id_externo,
         decisoes=[("lembrete", "concedido"), ("transferencia_internacional", "concedido")],
         versao_termo="teste-int",
         canal="autoagendamento",
@@ -637,7 +636,6 @@ def test_eventos_de_consentimento_fazem_round_trip_e_o_vigente_e_o_ultimo(db):
 
     repositories.registrar_consentimentos(
         id_paciente=paciente["id"],
-        id_paciente_externo="hash-consent-1",
         decisoes=[("lembrete", "revogado")],
         versao_termo="teste-int",
         canal="clinica",
@@ -669,6 +667,93 @@ def test_eventos_de_consentimento_recusam_update_e_delete(db):
 
     acoes = [e["acao"] for e in repositories.eventos_consentimento_do_paciente(paciente["id"])]
     assert acoes == ["concedido", "concedido"]
+
+
+def _evento_cru(id_paciente, **extra):
+    """Linha de evento inserida direto na tabela, sem o repositório: é como um
+    bug no código chegaria ao banco, e o trigger é a guarda."""
+    return {
+        "id_paciente": id_paciente,
+        "finalidade": "treino",
+        "acao": "concedido",
+        "versao_termo": "teste-int",
+        "canal": "autoagendamento",
+        "consentido_por": "titular",
+        **extra,
+    }
+
+
+@pytest.mark.integracao
+def test_insercao_grava_o_hash_do_paciente_e_o_relogio_do_banco(db):
+    """O hash e a data enviados pelo cliente são ignorados: a prova não pode
+    pertencer a outro titular nem ter a data escolhida por quem grava -- o
+    vigente é decidido por `registrado_em`."""
+    from datetime import timezone
+
+    import db.repositories as repositories
+
+    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-4")
+    assert all(e["id_paciente_externo"] == "hash-consent-4" for e in eventos)
+
+    linha = (
+        db.table("eventos_consentimento")
+        .insert(
+            _evento_cru(
+                paciente["id"],
+                id_paciente_externo="hash-de-outra-pessoa",
+                registrado_em="1999-01-01T00:00:00+00:00",
+            )
+        )
+        .execute()
+        .data[0]
+    )
+    assert linha["id_paciente_externo"] == "hash-consent-4"
+    registrado_em = repositories.ler_timestamptz(linha["registrado_em"])
+    assert abs(registrado_em - datetime.now(timezone.utc)) < timedelta(minutes=5)
+
+
+@pytest.mark.integracao
+def test_insercao_recusa_evento_sem_paciente_ou_ja_eliminado(db):
+    """Sem paciente, o evento nunca seria apagável (a purga depende de
+    `eliminado_em`); com `eliminado_em` retroativo, seria apagável na hora."""
+    import db.repositories as repositories
+
+    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-consent-5")
+
+    with pytest.raises(Exception, match="evento sem paciente"):
+        db.table("eventos_consentimento").insert(_evento_cru(None)).execute()
+    with pytest.raises(Exception, match="gravado pelo trigger"):
+        db.table("eventos_consentimento").insert(
+            _evento_cru(paciente["id"], eliminado_em="2000-01-01T00:00:00+00:00")
+        ).execute()
+    with pytest.raises(Exception, match="paciente inexistente"):
+        db.table("eventos_consentimento").insert(
+            _evento_cru("00000000-0000-0000-0000-000000000000")
+        ).execute()
+
+
+@pytest.mark.integracao
+def test_desvincular_a_prova_com_o_paciente_cadastrado_e_recusado(db):
+    """O `set null` só é aceito vindo da eliminação: o mesmo update feito pelo
+    código desvincularia a prova e iniciaria a contagem dos 365 dias com o
+    paciente ainda cadastrado."""
+    import db.repositories as repositories
+
+    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-6")
+
+    with pytest.raises(Exception, match="so' de insercao"):
+        db.table("eventos_consentimento").update({"id_paciente": None}).eq(
+            "id", eventos[0]["id"]
+        ).execute()
+
+    linha = (
+        db.table("eventos_consentimento")
+        .select("id_paciente, eliminado_em")
+        .eq("id", eventos[0]["id"])
+        .execute()
+        .data[0]
+    )
+    assert linha == {"id_paciente": paciente["id"], "eliminado_em": None}
 
 
 @pytest.mark.integracao
@@ -738,11 +823,111 @@ def test_pedido_executado_com_vinculo_e_recusado_pelo_banco(db):
 
     paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-2")
     pedido = repositories.registrar_pedido(paciente["id"], "eliminacao")
+    assert repositories.confirmar_pedido(pedido["id"])
 
     with pytest.raises(Exception, match="pedidos_titular_executado_sem_vinculo"):
         db.table("pedidos_titular").update({"situacao": "executado"}).eq(
             "id", pedido["id"]
         ).execute()
+    db.table("pedidos_titular").delete().eq("id", pedido["id"]).execute()
+
+
+@pytest.mark.integracao
+def test_eliminacao_anula_o_vinculo_do_pedido_sem_executa_lo(db):
+    """O `set null` também age nos pedidos. Um pedido confirmado cujo paciente
+    já foi eliminado fica sem vínculo e ainda na fila do workflow de purga, que
+    precisa tratá-lo como atendido (peça 6)."""
+    import db.repositories as repositories
+
+    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-3")
+    pedido = repositories.registrar_pedido(paciente["id"], "revogacao_treino")
+    assert repositories.confirmar_pedido(pedido["id"])
+
+    db.table("pacientes").delete().eq("id", paciente["id"]).execute()
+
+    linha = db.table("pedidos_titular").select("*").eq("id", pedido["id"]).execute().data[0]
+    assert linha["id_paciente"] is None
+    assert linha["situacao"] == "confirmado_pela_clinica"
+    assert repositories.marcar_pedido_executado(pedido["id"])
+    db.table("pedidos_titular").delete().eq("id", pedido["id"]).execute()
+
+
+@pytest.mark.integracao
+def test_datas_do_pedido_sao_do_relogio_do_banco(db):
+    """O prazo de 15 dias é medido pelas datas do pedido: a data enviada pelo
+    cliente é ignorada, na criação e em cada mudança de situação."""
+    from datetime import timezone
+
+    import db.repositories as repositories
+
+    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-4")
+    antiga = "1999-01-01T00:00:00+00:00"
+    pedido = (
+        db.table("pedidos_titular")
+        .insert(
+            {
+                "id_paciente": paciente["id"],
+                "tipo": "revogacao_lembrete",
+                "criado_em": antiga,
+                "confirmado_em": antiga,
+            }
+        )
+        .execute()
+        .data[0]
+    )
+    assert pedido["confirmado_em"] is None
+
+    confirmado = (
+        db.table("pedidos_titular")
+        .update(
+            {"situacao": "confirmado_pela_clinica", "confirmado_em": antiga, "criado_em": antiga}
+        )
+        .eq("id", pedido["id"])
+        .execute()
+        .data[0]
+    )
+    agora = datetime.now(timezone.utc)
+    for coluna in ("criado_em", "confirmado_em"):
+        instante = repositories.ler_timestamptz(confirmado[coluna])
+        assert abs(instante - agora) < timedelta(minutes=5), coluna
+    db.table("pedidos_titular").delete().eq("id", pedido["id"]).execute()
+
+
+@pytest.mark.integracao
+def test_pedido_so_anda_pelas_transicoes_previstas(db):
+    import db.repositories as repositories
+
+    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-5")
+    outro, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-6")
+
+    with pytest.raises(Exception, match="nasce pendente"):
+        db.table("pedidos_titular").insert(
+            {"id_paciente": paciente["id"], "tipo": "eliminacao", "situacao": "executado"}
+        ).execute()
+    with pytest.raises(Exception, match="pedido sem paciente"):
+        db.table("pedidos_titular").insert({"id_paciente": None, "tipo": "eliminacao"}).execute()
+
+    pedido = repositories.registrar_pedido(paciente["id"], "revogacao_treino")
+
+    def atualizar(campos):
+        db.table("pedidos_titular").update(campos).eq("id", pedido["id"]).execute()
+
+    with pytest.raises(Exception, match="pendente -> executado"):
+        atualizar({"situacao": "executado", "id_paciente": None})
+    with pytest.raises(Exception, match="tipo do pedido"):
+        atualizar({"tipo": "eliminacao"})
+    with pytest.raises(Exception, match="so' pode ser anulado"):
+        atualizar({"id_paciente": outro["id"]})
+
+    # Recusado: data do banco e vínculo mantido (a clínica prova a quem
+    # respondeu a recusa); dali o pedido não sai.
+    assert repositories.recusar_pedido(pedido["id"])
+    linha = db.table("pedidos_titular").select("*").eq("id", pedido["id"]).execute().data[0]
+    assert linha["situacao"] == "recusado"
+    assert linha["recusado_em"] is not None
+    assert linha["id_paciente"] == paciente["id"]
+    with pytest.raises(Exception, match="recusado -> confirmado_pela_clinica"):
+        atualizar({"situacao": "confirmado_pela_clinica"})
     db.table("pedidos_titular").delete().eq("id", pedido["id"]).execute()
 
 

@@ -631,14 +631,14 @@ def registrar_canario_revertido(model_version: str, motivo: str) -> None:
 #
 # Toda consulta filtra por uuid interno (`id_paciente`, `id` do pedido), nunca
 # por `id_paciente_externo`: o valor de um filtro viaja na URL e fica no log de
-# API do Supabase (LGPD.md §8.1). O hash do CPF só é gravado, no corpo do insert.
+# API do Supabase (LGPD.md §8.1). O hash do CPF nem é enviado: o trigger o copia
+# de `pacientes` na inserção do evento.
 # --------------------------------------------------------------------------
 _COLUNAS_EVENTO_CONSENTIMENTO = "finalidade, acao, versao_termo, registrado_em"
 
 
 def registrar_consentimentos(
     id_paciente: str,
-    id_paciente_externo: str,
     decisoes: list[tuple[str, str]],
     versao_termo: str,
     canal: str,
@@ -648,15 +648,18 @@ def registrar_consentimentos(
     """Grava um evento por par (finalidade, ação) de `decisoes`, num insert só.
 
     Quem decide *quais* eventos gravar é a tela (só quando o estado muda); aqui
-    só se persiste. `registrado_por` fica nulo no autoagendamento. A tabela é
-    só de inserção no banco: não existe função para corrigir um evento, porque
-    corrigir apagaria a prova -- um engano se desfaz com um evento novo."""
+    só se persiste. `registrado_por` fica nulo no autoagendamento. O trigger da
+    migration grava `id_paciente_externo` (copiado de `pacientes`) e
+    `registrado_em` (relógio do banco), então nenhum dos dois é enviado: a
+    prova não pode pertencer a outro titular nem ter a data escolhida pelo
+    cliente. A tabela é só de inserção no banco: não existe função para
+    corrigir um evento, porque corrigir apagaria a prova -- um engano se desfaz
+    com um evento novo."""
     if not decisoes:
         return []
     linhas = [
         {
             "id_paciente": id_paciente,
-            "id_paciente_externo": id_paciente_externo,
             "finalidade": finalidade,
             "acao": acao,
             "versao_termo": versao_termo,
@@ -737,17 +740,16 @@ def _mudar_situacao_do_pedido(id_pedido: str, de: str, para: dict[str, Any]) -> 
 
 
 def confirmar_pedido(id_pedido: str) -> bool:
+    """`confirmado_em` é gravada pelo trigger, com o relógio do banco: o prazo
+    de 15 dias não pode depender do relógio de quem confirma."""
     return _mudar_situacao_do_pedido(
-        id_pedido,
-        de="pendente",
-        para={
-            "situacao": "confirmado_pela_clinica",
-            "confirmado_em": datetime.now().astimezone().isoformat(),
-        },
+        id_pedido, de="pendente", para={"situacao": "confirmado_pela_clinica"}
     )
 
 
 def recusar_pedido(id_pedido: str) -> bool:
+    """Recusado mantém o vínculo com o paciente: a clínica precisa provar a
+    quem respondeu a recusa (art. 18, § 4º). `recusado_em` vem do trigger."""
     return _mudar_situacao_do_pedido(id_pedido, de="pendente", para={"situacao": "recusado"})
 
 
@@ -768,13 +770,10 @@ def pedidos_confirmados() -> list[Linha]:
 def marcar_pedido_executado(id_pedido: str) -> bool:
     """Executado e sem vínculo no mesmo update: o check da migration recusa um
     pedido executado que ainda aponte para o paciente. Na eliminação o vínculo
-    já foi anulado pelo `set null`; na revogação é este update que o anula."""
+    já foi anulado pelo `set null`; na revogação é este update que o anula.
+    `executado_em` vem do trigger."""
     return _mudar_situacao_do_pedido(
         id_pedido,
         de="confirmado_pela_clinica",
-        para={
-            "situacao": "executado",
-            "id_paciente": None,
-            "executado_em": datetime.now().astimezone().isoformat(),
-        },
+        para={"situacao": "executado", "id_paciente": None},
     )
