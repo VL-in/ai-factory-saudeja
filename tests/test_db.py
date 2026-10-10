@@ -463,6 +463,7 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
         data_consulta=data_consulta,
         hora_consulta=HORA_DA_CONSULTA,
         nome_completo="Daniela Reis",
+        consentimentos={"transferencia_internacional": True},
     )
 
     item = next(
@@ -483,6 +484,55 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
     assert agendamento["dias_entre_agendamento_consulta"] == (
         data_consulta - hoje_na_clinica()
     ).days
+
+
+@pytest.mark.integracao
+def test_cadastro_pela_ui_grava_e_revoga_consentimento_so_quando_o_estado_muda(db):
+    """Passo 8.6, peça 3: o primeiro agendamento concede o que foi marcado; o
+    segundo, com o lembrete desmarcado, revoga só o lembrete e não repete a
+    transferência nem o treino, que continuam vigentes na mesma versão."""
+    import consentimento
+    import db.repositories as repositories
+    from ui import logic
+
+    data_consulta = agenda_clinica.proximo_dia_valido(hoje_na_clinica() + timedelta(days=30))
+    campos = {
+        "cpf": "111.444.777-35",
+        "telefone": TELEFONE_PADRAO,
+        "data_nascimento": date(2016, 4, 20),  # criança: consente o responsável
+        "sexo": "F",
+        "especialidade": "cardiologia",
+        "distancia_km": 4.0,
+        "data_consulta": data_consulta,
+        "hora_consulta": HORA_DA_CONSULTA,
+        "nome_completo": "Paciente Criança",
+    }
+    tudo = dict.fromkeys(consentimento.FINALIDADES, True)
+    primeiro = logic.cadastrar_paciente_e_agendamento(**campos, consentimentos=tudo)
+    logic.cadastrar_paciente_e_agendamento(
+        **campos, consentimentos={**tudo, consentimento.FINALIDADE_LEMBRETE: False}
+    )
+
+    eventos = (
+        db.table("eventos_consentimento")
+        .select("finalidade, acao, canal, consentido_por, registrado_por, versao_termo")
+        .eq("id_paciente", primeiro["id_paciente"])
+        .order("registrado_em")
+        .execute()
+        .data
+    )
+    # Os três primeiros saem do mesmo insert, com o mesmo `now()`: a ordem
+    # entre eles não é garantida.
+    pares = [(e["finalidade"], e["acao"]) for e in eventos]
+    assert set(pares[:3]) == {(f, "concedido") for f in consentimento.FINALIDADES}
+    assert pares[3:] == [(consentimento.FINALIDADE_LEMBRETE, "revogado")]
+    assert {e["canal"] for e in eventos} == {"autoagendamento"}
+    assert {e["consentido_por"] for e in eventos} == {"responsavel_legal"}
+    assert {e["registrado_por"] for e in eventos} == {None}
+    assert {e["versao_termo"] for e in eventos} == {consentimento.VERSAO_TERMO}
+    lidos = repositories.eventos_consentimento_do_paciente(primeiro["id_paciente"])
+    assert not consentimento.tem_consentimento(lidos, consentimento.FINALIDADE_LEMBRETE)
+    assert consentimento.tem_consentimento(lidos, consentimento.FINALIDADE_TREINO)
 
 
 # --- login do funcionário contra o Supabase Auth local (architecture.md §7) ---

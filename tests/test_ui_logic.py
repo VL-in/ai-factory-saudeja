@@ -23,6 +23,9 @@ from api.schemas import PacienteConsultaIn
 from ui import logic
 
 MODEL_PATH = "data/model.pkl"
+# O mínimo para o cadastro existir (Passo 8.6, peça 3): sem a transferência
+# internacional, a tela não mostra o formulário e a lógica recusa.
+SO_TRANSFERENCIA = {"transferencia_internacional": True}
 
 
 @pytest.fixture(scope="module")
@@ -304,6 +307,7 @@ def test_cadastro_recusa_nome_invalido_antes_de_tocar_o_banco(monkeypatch):
             data_consulta=date(2026, 9, 30),
             hora_consulta=time(10, 0),
             nome_completo=" ",
+            consentimentos=SO_TRANSFERENCIA,
         )
 
 
@@ -314,29 +318,105 @@ def test_cadastro_repassa_o_nome_ao_repositorio(monkeypatch):
         capturado.update(kwargs)
         return {"id": "p1"}
 
+    _banco_falso(monkeypatch)
     monkeypatch.setattr(logic.repositories, "inserir_paciente", _inserir_paciente)
-    monkeypatch.setattr(logic.repositories, "contar_no_shows_anteriores", lambda _id: 0)
-    monkeypatch.setattr(logic.repositories, "inserir_agendamento", lambda **kw: {"id": "a1"})
     # Data fixa da consulta exige "hoje" fixo: o
     # cadastro recusa consulta no passado.
     monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
 
-    logic.cadastrar_paciente_e_agendamento(
-        cpf="529.982.247-25",
-        telefone="(11) 98765-4321",
-        data_nascimento=date(1990, 1, 1),
-        sexo="F",
-        especialidade="cardiologia",
-        distancia_km=5.5,
-        data_consulta=date(2026, 9, 30),
-        hora_consulta=time(10, 0),
-        nome_completo="Ana Souza",
-    )
+    _cadastrar(date(2026, 9, 30))
 
     assert capturado["nome_completo"] == "Ana Souza"
     # O CPF continua não sendo persistido: o que vai é o hash dele.
     assert "cpf" not in capturado
     assert capturado["id_paciente_externo"] == logic._id_paciente_externo_de_cpf("52998224725")
+
+
+# --- consentimento na tela de agendamento (Passo 8.6, peça 3) -------------------
+
+
+def _banco_falso(monkeypatch, eventos_anteriores=()):
+    """Troca as funções de `repositories` que o cadastro chama e devolve a
+    lista de chamadas, na ordem: é a ordem que prova que o agendamento só
+    nasce depois de o consentimento estar gravado."""
+    chamadas = []
+
+    def _registrar(nome, retorno):
+        def _funcao(*args, **kwargs):
+            chamadas.append((nome, kwargs or args))
+            return retorno
+
+        monkeypatch.setattr(logic.repositories, nome, _funcao)
+
+    _registrar("inserir_paciente", {"id": "p1"})
+    _registrar("eventos_consentimento_do_paciente", list(eventos_anteriores))
+    _registrar("registrar_consentimentos", [])
+    _registrar("contar_no_shows_anteriores", 0)
+    _registrar("inserir_agendamento", {"id": "a1"})
+    return chamadas
+
+
+def test_cadastro_sem_transferencia_e_recusado_antes_de_tocar_o_banco(monkeypatch):
+    """A tela esconde o formulário sem a caixa da transferência; a lógica é a
+    segunda barreira, para quem chamar por outro caminho."""
+    chamadas = _banco_falso(monkeypatch)
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
+
+    with pytest.raises(logic.ErroValidacaoCadastro) as erro:
+        logic.cadastrar_paciente_e_agendamento(
+            **_campos_validos(),
+            sexo="F",
+            distancia_km=5.5,
+            consentimentos={"transferencia_internacional": False, "lembrete": True},
+        )
+
+    assert erro.value.problemas == [logic.MENSAGEM_SEM_TRANSFERENCIA]
+    assert chamadas == []
+
+
+def test_cadastro_grava_os_eventos_entre_o_paciente_e_o_agendamento(monkeypatch):
+    chamadas = _banco_falso(monkeypatch)
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
+
+    logic.cadastrar_paciente_e_agendamento(
+        **_campos_validos(),
+        sexo="F",
+        distancia_km=5.5,
+        consentimentos={"transferencia_internacional": True, "lembrete": True, "treino": False},
+    )
+
+    assert [nome for nome, _ in chamadas] == [
+        "inserir_paciente",
+        "eventos_consentimento_do_paciente",
+        "registrar_consentimentos",
+        "contar_no_shows_anteriores",
+        "inserir_agendamento",
+    ]
+    registro = dict(chamadas)["registrar_consentimentos"]
+    assert registro == {
+        "id_paciente": "p1",
+        "decisoes": [("lembrete", "concedido"), ("transferencia_internacional", "concedido")],
+        "versao_termo": logic.consentimento.VERSAO_TERMO,
+        "canal": "autoagendamento",
+        "consentido_por": "titular",
+    }
+    # Autoagendamento: ninguém da equipe registrou, então `registrado_por`
+    # fica no default nulo do repositório.
+    assert "registrado_por" not in registro
+
+
+def test_cadastro_de_crianca_registra_o_consentimento_pelo_responsavel(monkeypatch):
+    chamadas = _banco_falso(monkeypatch)
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
+
+    logic.cadastrar_paciente_e_agendamento(
+        **_campos_validos(data_nascimento=date(2020, 5, 1)),
+        sexo="F",
+        distancia_km=5.5,
+        consentimentos=SO_TRANSFERENCIA,
+    )
+
+    assert dict(chamadas)["registrar_consentimentos"]["consentido_por"] == "responsavel_legal"
 
 
 class _ErroDeSchema(Exception):
@@ -736,6 +816,7 @@ def _cadastrar(data_consulta):
         data_consulta=data_consulta,
         hora_consulta=time(10, 0),
         nome_completo="Ana Souza",
+        consentimentos=SO_TRANSFERENCIA,
     )
 
 
@@ -893,6 +974,7 @@ def test_cadastro_com_varios_erros_nao_toca_o_banco_e_lista_todos(hoje_fixo, mon
             data_consulta=date(2026, 9, 30),
             hora_consulta=time(10, 0),
             nome_completo="Ana Souza",
+            consentimentos=SO_TRANSFERENCIA,
         )
 
     assert erro.value.problemas == [

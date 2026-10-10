@@ -38,6 +38,7 @@ import httpx  # noqa: E402
 from supabase_auth.errors import AuthApiError  # noqa: E402
 
 import agenda_clinica  # noqa: E402
+import consentimento  # noqa: E402
 import db.client as db_client  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import inference  # noqa: E402
@@ -680,6 +681,13 @@ def validar_cadastro(
     return problemas
 
 
+MENSAGEM_SEM_TRANSFERENCIA = (
+    "Para agendar por esta tela, é preciso autorizar o processamento dos dados "
+    "fora do Brasil. Sem essa autorização, agende com a clínica, por telefone ou "
+    "no balcão."
+)
+
+
 def cadastrar_paciente_e_agendamento(
     cpf: str,
     telefone: str,
@@ -690,6 +698,8 @@ def cadastrar_paciente_e_agendamento(
     data_consulta: date,
     hora_consulta: time | None,
     nome_completo: str | None = None,
+    *,
+    consentimentos: dict[str, bool],
 ) -> dict:
     """Cadastro do paciente (visão Paciente) --
     upsert do paciente seguido do agendamento.
@@ -715,7 +725,16 @@ def cadastrar_paciente_e_agendamento(
     `data_hora_agendada` vai com o fuso da clínica explícito: a coluna é
     `timestamptz`, então gravar um datetime naive deixaria o Postgres
     interpretá-lo no fuso do servidor (UTC no container) e a consulta
-    apareceria 3h deslocada na fila do dia."""
+    apareceria 3h deslocada na fila do dia.
+
+    `consentimentos` (ADR-009, Passo 8.6) é o estado das caixas da tela, por
+    finalidade, e é obrigatório: quem chama tem de decidir, não herdar um
+    default. Sem a transferência internacional não há cadastro: a tela já
+    esconde o formulário nesse caso, e a recusa aqui é a segunda barreira. Os
+    eventos são gravados **entre** o paciente e o agendamento: o trigger exige
+    o paciente, e um agendamento só existe depois de a prova estar gravada. Se
+    a gravação dos eventos falhar, o paciente fica sem agendamento e o novo
+    envio refaz tudo (o upsert e a comparação com o vigente são idempotentes)."""
     problemas = validar_cadastro(
         nome_completo=nome_completo,
         cpf=cpf,
@@ -725,6 +744,8 @@ def cadastrar_paciente_e_agendamento(
         data_consulta=data_consulta,
         hora_consulta=hora_consulta,
     )
+    if not consentimentos.get(consentimento.FINALIDADE_TRANSFERENCIA):
+        problemas.insert(0, MENSAGEM_SEM_TRANSFERENCIA)
     # As duas checagens de None nunca valem sem `problemas` (validar_cadastro
     # já as reporta): estão aqui só para o mypy estreitar o tipo abaixo.
     if problemas or data_nascimento is None or hora_consulta is None:
@@ -737,6 +758,16 @@ def cadastrar_paciente_e_agendamento(
             sexo=sexo,
             telefone=normalizar_telefone(telefone),
             nome_completo=nome_completo,
+        )
+        vigentes = consentimento.consentimentos_vigentes(
+            repositories.eventos_consentimento_do_paciente(paciente["id"])
+        )
+        repositories.registrar_consentimentos(
+            id_paciente=paciente["id"],
+            decisoes=consentimento.decisoes_de_consentimento(vigentes, consentimentos),
+            versao_termo=consentimento.VERSAO_TERMO,
+            canal=consentimento.CANAL_AUTOAGENDAMENTO,
+            consentido_por=consentimento.consentido_por(data_nascimento, hoje_na_clinica()),
         )
         historico_noshow = repositories.contar_no_shows_anteriores(paciente["id"])
         return repositories.inserir_agendamento(

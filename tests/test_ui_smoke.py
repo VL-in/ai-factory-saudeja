@@ -13,6 +13,7 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+import consentimento
 from ui import logic
 
 CAMINHO_APP = "src/ui/app.py"
@@ -30,6 +31,16 @@ def _sessao(ultimo_uso=None):
 
 def _botao(at, rotulo):
     return next(b for b in at.button if b.label == rotulo)
+
+
+def _caixa(at, rotulo):
+    return next(c for c in at.checkbox if c.label == rotulo)
+
+
+def _autorizar_transferencia(at):
+    """A caixa da transferência internacional fica antes de qualquer campo do
+    cadastro, e só depois dela marcada o formulário é desenhado (Passo 8.6)."""
+    _caixa(at, consentimento.TERMO_TRANSFERENCIA).check().run()
 
 
 def _rodar(
@@ -84,7 +95,7 @@ def test_entrada_padrao_e_a_visao_do_paciente(monkeypatch):
 
     assert not at.exception
     assert at.sidebar.radio[0].value == "Paciente"
-    assert "Nome completo" in [campo.label for campo in at.text_input]
+    assert _caixa(at, consentimento.TERMO_TRANSFERENCIA).value is False
     assert [t.value for t in at.title] == ["SaúdeJá"]
 
 
@@ -145,7 +156,6 @@ def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
     at.sidebar.radio[0].set_value("Paciente").run()
 
     assert not at.exception
-    assert at.text_input  # campos de nome completo/CPF, não mais placeholder
 
     _preencher_cadastro_valido(at)
     _botao(at, "Agendar").click().run()
@@ -155,6 +165,7 @@ def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
 
 
 def _preencher_cadastro_valido(at):
+    _autorizar_transferencia(at)
     at.text_input[0].set_value("Paciente de Teste")  # nome completo
     at.text_input[1].set_value("111.444.777-35")  # CPF válido
     at.text_input[2].set_value("(11) 98765-4321")  # telefone válido
@@ -165,6 +176,7 @@ def _preencher_cadastro_valido(at):
 
 def test_cadastro_em_branco_lista_todos_os_problemas_sem_tocar_o_banco(monkeypatch):
     at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _autorizar_transferencia(at)
 
     _botao(at, "Agendar").click().run()
 
@@ -178,6 +190,7 @@ def test_cadastro_em_branco_lista_todos_os_problemas_sem_tocar_o_banco(monkeypat
 def test_data_de_nascimento_comeca_vazia(monkeypatch):
     """Um 01/01/1990 pré-preenchido e esquecido virava idade errada no modelo."""
     at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _autorizar_transferencia(at)
 
     nascimento = next(d for d in at.date_input if d.label == "Data de nascimento")
     assert nascimento.value is None
@@ -207,17 +220,79 @@ def test_agendamento_confirmado_troca_o_formulario_pela_confirmacao(monkeypatch)
 
     assert not at.exception
     assert not at.success
+    # O consentimento é de quem agenda: o próximo agendamento no mesmo
+    # navegador pode ser de outra pessoa, e a caixa volta desmarcada.
+    assert _caixa(at, consentimento.TERMO_TRANSFERENCIA).value is False
+    assert not [b for b in at.button if b.label == "Agendar"]
+
+    _autorizar_transferencia(at)
+
     assert [b for b in at.button if b.label == "Agendar"]
     assert at.text_input[0].value == ""
 
 
 def test_aviso_de_privacidade_do_paciente_sem_jargao_tecnico(monkeypatch):
     at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _autorizar_transferencia(at)  # para conferir também os textos do formulário
 
-    textos = " ".join(c.value for c in at.caption) + " ".join(m.value for m in at.markdown)
+    textos = " ".join(
+        [*(c.value for c in at.caption), *(m.value for m in at.markdown)]
+        + [c.label for c in at.checkbox]
+    )
     for jargao in ("hash", "ADR", "Infobip", "LLM", "dataset", "features do modelo", ".md"):
         assert jargao not in textos
     assert [e.label for e in at.expander] == ["Como usamos seus dados"]
+
+
+# --- consentimento na tela de agendamento (Passo 8.6, peça 3) -------------------
+
+
+def test_sem_a_caixa_da_transferencia_nenhum_campo_do_cadastro_aparece(monkeypatch):
+    """Esta tela roda fora do Brasil: sem o consentimento do art. 33, VIII,
+    nenhum campo pode ser desenhado, nem a data da consulta, que fica fora do
+    form (LGPD.md, subseção 4.2, alínea c)."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+
+    assert not at.exception
+    assert not at.text_input
+    assert not at.date_input
+    assert not at.selectbox
+    assert not [b for b in at.button if b.label == "Agendar"]
+    assert any("agende com a clínica" in i.value for i in at.info)
+    textos = " ".join(m.value for m in at.markdown)
+    assert "Estados Unidos" in textos and "ANPD" in textos
+
+    _autorizar_transferencia(at)
+
+    assert "Nome completo" in [campo.label for campo in at.text_input]
+    assert "Data da consulta" in [d.label for d in at.date_input]
+
+
+def test_caixas_do_lembrete_e_do_treino_comecam_desmarcadas(monkeypatch):
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _autorizar_transferencia(at)
+
+    assert _caixa(at, consentimento.TERMO_LEMBRETE).value is False
+    assert _caixa(at, consentimento.TERMO_TREINO).value is False
+
+
+def test_agendar_repassa_o_estado_de_cada_caixa(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(
+        logic, "cadastrar_paciente_e_agendamento", lambda **kw: chamadas.append(kw) or {}
+    )
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _preencher_cadastro_valido(at)
+    _caixa(at, consentimento.TERMO_LEMBRETE).check()
+
+    _botao(at, "Agendar").click().run()
+
+    assert not at.exception
+    assert chamadas[0]["consentimentos"] == {
+        consentimento.FINALIDADE_TRANSFERENCIA: True,
+        consentimento.FINALIDADE_LEMBRETE: True,
+        consentimento.FINALIDADE_TREINO: False,
+    }
 
 
 def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypatch):
@@ -325,6 +400,7 @@ def test_visao_paciente_nao_exige_login(monkeypatch):
     dos dados da clínica."""
     at = _rodar(monkeypatch, sessao=None)
     at.sidebar.radio[0].set_value("Paciente").run()
+    _autorizar_transferencia(at)
 
     assert not at.exception
     assert "Nome completo" in [campo.label for campo in at.text_input]

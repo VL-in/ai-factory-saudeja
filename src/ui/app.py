@@ -31,6 +31,7 @@ if str(SRC_DIR) not in sys.path:
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
+import consentimento  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
 from ui import logic  # noqa: E402
 
@@ -67,6 +68,7 @@ CHAVE_FUNCIONARIO = "funcionario"
 CHAVE_AVISO_LOGIN = "aviso_login"
 CHAVE_AGENDAMENTO_CONFIRMADO = "agendamento_confirmado"
 CHAVE_AVISO_DESFECHO = "aviso_desfecho"
+CHAVE_CONSENTIMENTO_TRANSFERENCIA = "consentimento_transferencia"
 
 # Tudo que pertence a quem está logado sai junto com a sessão: sem isso, a
 # última predição (com a explicação dela) ficaria na aba "Explicabilidade" para
@@ -632,6 +634,10 @@ def _aba_time_tecnico():
 
 def _novo_agendamento():
     st.session_state.pop(CHAVE_AGENDAMENTO_CONFIRMADO, None)
+    # O consentimento é de quem agenda, e o próximo agendamento no mesmo
+    # navegador pode ser de outra pessoa (o tablet da recepção, a mãe que
+    # agenda para os dois filhos): a caixa volta desmarcada.
+    st.session_state.pop(CHAVE_CONSENTIMENTO_TRANSFERENCIA, None)
 
 
 def _mostrar_confirmacao(mensagem: str):
@@ -688,15 +694,17 @@ def _visao_paciente():
 
 
 def _formulario_paciente() -> tuple[dict, bool]:
-    """Desenha o aviso de privacidade e o formulário; devolve os campos já
-    no formato de logic.cadastrar_paciente_e_agendamento e se houve envio."""
+    """Desenha o aviso de privacidade, a autorização da transferência
+    internacional e o formulário; devolve os campos já no formato de
+    logic.cadastrar_paciente_e_agendamento e se houve envio. Sem a
+    autorização, nenhum campo é desenhado e não há envio."""
     # Transparência em linguagem simples (LGPD art. 9º). O detalhe técnico
     # do mesmo compromisso -- CPF só como hash (docs/architecture.md §4.1),
     # nome para a fila do dia (ADR-007), telefone para o lembrete, nada disso
-    # em log, dataset de treino, API pública ou LLM -- está em docs/LGPD.md.
+    # em log, dataset de treino, API pública ou LLM -- está em docs/LGPD/LGPD.md.
     st.caption(
-        "Seus dados são usados só para o seu atendimento nesta clínica. "
-        "O CPF não é armazenado."
+        "Seus dados são usados para o seu atendimento nesta clínica e, só com a "
+        "sua autorização, para aprimorar o sistema. O CPF não é armazenado."
     )
     with st.expander("Como usamos seus dados"):
         st.markdown(
@@ -707,10 +715,36 @@ def _formulario_paciente() -> tuple[dict, bool]:
             "- **Data de nascimento, sexo, especialidade e distância**, junto "
             "com o seu histórico de comparecimento nesta clínica, ajudam a "
             "equipe a decidir quais consultas confirmar com antecedência.\n"
-            "- Nome, telefone e CPF não entram em registros técnicos nem nos "
-            "dados usados para aprimorar o sistema.\n\n"
-            "Dúvidas sobre os seus dados: fale com a clínica."
+            "- **Lembrete por SMS**: só com a sua autorização, e só com a data e "
+            "a hora da consulta.\n"
+            "- **Aprimoramento do sistema**: só com a sua autorização, o SaúdeJá "
+            "usa o resultado das consultas (comparecimento ou falta), sem nome, "
+            "telefone nem CPF.\n"
+            "- **Fora do Brasil**: os dados ficam guardados no Brasil, mas são "
+            "processados nos Estados Unidos pelo Hugging Face e pelo GitHub, como "
+            "descrito na autorização abaixo.\n"
+            "- Nome, telefone e CPF não entram em registros técnicos.\n\n"
+            "Para retirar uma autorização, pedir a eliminação dos seus dados ou "
+            "tirar dúvidas, fale com a clínica."
         )
+
+    # Fora do st.form e antes de qualquer campo (LGPD.md, subseção 4.2, alínea
+    # c): esta tela roda no Space, nos Estados Unidos, e um campo só chega ao
+    # servidor quando o form é enviado. Com os campos escondidos até a caixa
+    # ser marcada, nenhum dado do cadastro sai do Brasil antes do
+    # consentimento do art. 33, VIII. A data da consulta também fica depois:
+    # é o primeiro campo do cadastro, mesmo estando fora do form.
+    with st.container(border=True):
+        st.markdown(consentimento.INFORMACAO_TRANSFERENCIA)
+        autorizou_transferencia = st.checkbox(
+            consentimento.TERMO_TRANSFERENCIA, key=CHAVE_CONSENTIMENTO_TRANSFERENCIA
+        )
+    if not autorizou_transferencia:
+        st.info(
+            "Marque a autorização acima para preencher o cadastro. Se preferir não "
+            "autorizar, agende com a clínica, por telefone ou no balcão."
+        )
+        return {}, False
 
     especialidades = logic.listar_especialidades()
 
@@ -775,6 +809,21 @@ def _formulario_paciente() -> tuple[dict, bool]:
             f"Antecedência do agendamento: **{logic.dias_ate_consulta(data_consulta)} dia(s)**."
         )
 
+        # Uma caixa por finalidade, nunca pré-marcada (art. 8º, § 4º: autorização
+        # genérica é nula). A tela não sabe quem é o paciente antes do envio,
+        # então não tem como mostrar o que ele já autorizou -- e mostrar
+        # revelaria a quem digitasse um CPF alheio. Por isso a caixa desmarcada
+        # é a decisão de agora: revoga o que estava vigente, e a legenda avisa.
+        st.markdown("**Autorizações opcionais**")
+        st.caption(
+            "Recusar não impede o agendamento. As caixas começam sempre "
+            "desmarcadas: a cada agendamento, marque as que quiser manter. "
+            "Agendamento de criança (menos de 12 anos): quem decide é um dos pais "
+            "ou o responsável legal, e o telefone deve ser o dele."
+        )
+        autorizou_lembrete = st.checkbox(consentimento.TERMO_LEMBRETE, value=False)
+        autorizou_treino = st.checkbox(consentimento.TERMO_TREINO, value=False)
+
         enviado = st.form_submit_button("Agendar", type="primary")
 
     campos = {
@@ -787,6 +836,11 @@ def _formulario_paciente() -> tuple[dict, bool]:
         "data_consulta": data_consulta,
         "hora_consulta": hora_consulta,
         "nome_completo": nome_completo,
+        "consentimentos": {
+            consentimento.FINALIDADE_TRANSFERENCIA: autorizou_transferencia,
+            consentimento.FINALIDADE_LEMBRETE: autorizou_lembrete,
+            consentimento.FINALIDADE_TREINO: autorizou_treino,
+        },
     }
     return campos, enviado
 
