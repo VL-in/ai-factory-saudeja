@@ -3,15 +3,15 @@
 # Declaração estruturada no formato lgpd.md (spec 1.0). O corpo abaixo é a análise
 # completa; estes campos a resumem e precisam ser mantidos em sincronia com ela.
 spec: "1.0"
-atualizado: "2026-10-09"
+atualizado: "2026-10-10"
 expira: "2027-04-09"
 status: "em-adequação"
 controlador:
   nome: "SaúdeJá Tecnologia em Saúde S.A."
   contato: "dpo@saudeja.com.br"
 encarregado:
-  nome: "Encarregado de Dados (DPO) da SaúdeJá — nome a definir"
-  contato: "dpo@saudeja.com.br"
+  nome: "Encarregado de Dados (DPO) da SaúdeJá — Vanessa Lin"
+  contato: "v.lin@gmail.com"
 direitos:
   canal: "dpo@saudeja.com.br"
   prazo: 15
@@ -82,7 +82,22 @@ A semente do dataset de treino é sintética (`data/AVISO-DADOS-SINTETICOS.md`);
 
 Fonte: elaboração própria (2026).
 
-**Camadas da SaúdeJá nos dados de paciente.** Na predição, no lembrete e na fila do dia, a SaúdeJá é operadora: trata os dados em nome da clínica, para o atendimento daquela clínica. No treino, o papel depende de quem o modelo atende. O schema não tem `id_clinica`, mas o [ADR-008](../adr/adr-008-canario-do-modelo.md) parte do volume somado das clínicas. Se os dados da clínica A treinam o modelo que atende a clínica B, a finalidade do treino é da SaúdeJá, que passa a ser controladora desse tratamento. Nesse caso, o termo de consentimento coletado pela clínica precisa citar a SaúdeJá. Se cada clínica tiver o próprio modelo, o treino volta a ser tratamento em nome da clínica, e a SaúdeJá continua operadora.
+**Camadas da SaúdeJá nos dados de paciente.** Na predição, no lembrete e na fila do dia, a SaúdeJá é operadora: trata os dados em nome da clínica, para o atendimento daquela clínica. No treino, o papel depende de quem o modelo atende. O schema não tem `id_clinica`, mas o [ADR-008](../adr/adr-008-canario-do-modelo.md) parte do volume somado das clínicas. Se os dados da clínica A treinam o modelo que atende a clínica B, a finalidade do treino é da SaúdeJá, que passa a ser controladora desse tratamento. Não é controladoria conjunta com a clínica: as finalidades são distintas (o atendimento, para a clínica; o melhoramento do modelo que atende outras clínicas, para a SaúdeJá), e a ANPD afasta a controladoria conjunta quando os objetivos diferem, ainda que sobre o mesmo conjunto de dados (Brasil, 2022). Nesse caso, o termo de consentimento coletado pela clínica precisa citar a SaúdeJá. Se cada clínica tiver o próprio modelo, o treino volta a ser tratamento em nome da clínica, e a SaúdeJá continua operadora.
+
+**Elementos essenciais propostos pela SaúdeJá.** Pelo art. 5º, VI, controlador é a pessoa "a quem competem as decisões referentes ao tratamento de dados pessoais". O guia da ANPD identifica o controlador pelo poder de decidir os elementos essenciais do tratamento: finalidade, base legal, categorias de titulares e de dados e período de armazenamento. O operador decide só os elementos não essenciais, como as medidas técnicas. O papel decorre dos fatos, e não do nome que o contrato dá às partes (Brasil, 2022). Na predição, no lembrete e na fila do dia, a SaúdeJá definiu vários elementos essenciais ao desenhar o produto (Quadro 1A). A clínica continua controladora desses tratamentos desde que o contrato do SaaS apresente essas decisões e a clínica as aprove. Sem essa aprovação, a SaúdeJá decidiria sozinha elementos essenciais e seria controladora também desses tratamentos (subseção 9.3, item 27). As escolhas técnicas, como Supabase, LightGBM e sessão de 30 min, são elementos não essenciais e não mudam o papel.
+
+**Quadro 1A – Elementos essenciais propostos pela SaúdeJá nos tratamentos da clínica**
+
+| Elemento essencial | Proposta da SaúdeJá | Onde está registrada |
+|---|---|---|
+| Base legal de cada dado | Quadro 5 | Seção 3 |
+| Categorias de dados da predição | Idade (da data de nascimento), sexo, especialidade, histórico de faltas, distância e antecedência do agendamento. Com `features.temporais`, também dia da semana e horário | `src/contrato_features.py` e `params.yaml` |
+| Critério da decisão automatizada (art. 20) | Lembrete para quem o modelo prevê falta, com probabilidade igual ou maior que o corte. A clínica aprova o critério; o valor do corte é ajuste técnico dentro dele, controlado pelo gate do re-treino | `decision.threshold` em `params.yaml` |
+| Conteúdo do lembrete | SMS só com data e hora, sem especialidade | Quadro 4 |
+| Período de armazenamento dos dados derivados | 90 dias para `predicoes` e `mensagens_disparadas` | `RETENCAO_DADOS_DERIVADOS_DIAS` (seção 5) |
+| Suboperadores e destinos fora do Brasil | GitHub, Hugging Face e Infobip | Quadro 6; autorização da clínica no contrato (subseção 4.2, alínea e) |
+
+Fonte: elaboração própria (2026).
 
 Consequências:
 
@@ -90,9 +105,11 @@ a) a base legal dos dados de paciente é da clínica (seção 3). A SaúdeJá n�
 
 b) pedidos de titular paciente chegam pela clínica (seção 6);
 
-c) os registros do atendimento (`pacientes`, `agendamentos`) só são apagados a pedido da clínica. Os dados derivados (`predicoes`, `mensagens_disparadas`) são gerados em nome da clínica, com janela de retenção fixada pela SaúdeJá no contrato de operação (seção 5);
+c) os registros do atendimento (`pacientes`, `agendamentos`) só são apagados a pedido da clínica. Os dados derivados (`predicoes`, `mensagens_disparadas`) são gerados em nome da clínica, com janela de retenção proposta pela SaúdeJá e aprovada pela clínica no contrato de operação (seção 5);
 
-d) nos dados de conta do funcionário, cabem à SaúdeJá a base legal, a retenção, o atendimento ao titular e a comunicação de incidente (seções 3, 5, 6 e 10).
+d) nos dados de conta do funcionário, cabem à SaúdeJá a base legal, a retenção, o atendimento ao titular e a comunicação de incidente (seções 3, 5, 6 e 10);
+
+e) os elementos do Quadro 1A só mudam com nova aprovação da clínica. Uma feature nova, outra janela de retenção ou outro texto do lembrete passam pelo contrato antes de entrar em produção.
 
 ## 2 INVENTÁRIO E CLASSIFICAÇÃO DOS DADOS
 
@@ -502,6 +519,10 @@ Cada item deve constar do slide de risco do pitch.
 25. **Purga local depende de quem desenvolve** (subseção 5.1). `scripts/purgar_dvc_local.py` aplica a retenção nas cópias locais do DVC, mas só quando é executado. Nada no repositório detecta uma máquina que nunca o executa. Mitigação: restringir o acesso de leitura ao remote a quem precisa e revogar a credencial de quem sai do projeto.
 26. **Consentimento como mecanismo de transferência** (subseção 4.2). É revogável a qualquer momento, e a revogação tira o paciente do sistema. Na conta do funcionário, a liberdade de recusar é questionável. O mecanismo resolve a base legal da transferência, mas não a falta de contrato de operador com GitHub e Hugging Face.
 
+### 9.3 Riscos acrescentados pela revisão dos papéis
+
+27. **Elementos essenciais decididos pela SaúdeJá sem aprovação da clínica** (seção 1, Quadro 1A). Não há contrato do SaaS que apresente à clínica as categorias de dados do modelo, o critério do lembrete, o texto do SMS e a retenção de 90 dias. Enquanto ele não existir, a SaúdeJá decide sozinha elementos essenciais de tratamentos que este documento atribui à clínica e pode ser considerada controladora deles, com a base legal, os pedidos de titular e a comunicação de incidentes que isso implica. Nada no repositório impede um PR de mudar uma feature ou a retenção sem essa aprovação.
+
 ## 10 INCIDENTES
 
 Uma exposição de dado pessoal é comunicada à clínica e ao encarregado em até 72 h da ciência ([SLA](../SLA.md), seção 6; art. 48). Nos dados de paciente, a SaúdeJá, como operadora, informa o controlador o que foi exposto, quantos titulares foram afetados, quando e o que foi feito; a comunicação à ANPD e aos titulares cabe à clínica. Nos dados de conta do funcionário, a SaúdeJá é controladora e faz ela mesma essa comunicação.
@@ -544,10 +565,13 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 09/10/2026 | 2.1, 4, 4.1, 5, 6, 8.1, 9.2 | DPA por conta e mecanismo de transferência em aberto; Space e Infobip no Quadro 6; custo de levar job e aplicação para o Brasil; SMS sem especialidade; eventos de consentimento retidos 365 dias após a eliminação; backup e logs de provedores na retenção; procedimento de revisão do art. 20; guarda contra filtro por dado pessoal nas consultas ao Supabase; requisitos para consulta por LLM |
 | 09/10/2026 | 4, 4.2, 4.3, 5, 5.1, 9.2 | Remote do DVC para Brazil South (decidido) e consentimento do art. 33, VIII, para GitHub e Hugging Face; re-treino incluído no processamento do runner; soft delete de blob de 1 dia; purga das cópias locais do DVC (`scripts/purgar_dvc_local.py`); verificação das cópias e backups contra a retenção |
 | 09/10/2026 | Frontmatter, 4, 4.2, 4.3, 7, 9, 9.1, 9.2 | Remote do DVC migrado para Brazil South (conta nova, LRS, SAS novas, chaves da conta antiga rotacionadas); a conta antiga nunca guardou dado de titular; o armazenamento sai do Quadro 6 |
+| 10/10/2026 | 1, 9.3 | Elementos essenciais propostos pela SaúdeJá e aprovados pela clínica (Quadro 1A, guia da ANPD); retenção dos dados derivados deixa de ser "fixada pela SaúdeJá"; treino compartilhado sem controladoria conjunta; risco 27 |
 
 Fonte: elaboração própria (2026).
 
 <h2 align="center">REFERÊNCIAS</h2>
+
+BRASIL. Autoridade Nacional de Proteção de Dados. **Guia orientativo para definições dos agentes de tratamento de dados pessoais e do encarregado**: versão 2.0. Brasília, DF: ANPD, abr. 2022. Disponível em: https://www.gov.br/anpd/pt-br/documentos-e-publicacoes/Segunda_Versao_do_Guia_de_Agentes_de_Tratamento_retificada.pdf. Acesso em: 10 out. 2026.
 
 BRASIL. Autoridade Nacional de Proteção de Dados. **Resolução CD/ANPD nº 19, de 23 de agosto de 2024**. Aprova o Regulamento de Transferência Internacional de Dados e o conteúdo das cláusulas-padrão contratuais. Diário Oficial da União: seção 1, Brasília, DF, 23 ago. 2024. Disponível em: https://www.gov.br/anpd/pt-br/acesso-a-informacao/institucional/atos-normativos/regulamentacoes_anpd/resolucao-cd-anpd-no-19-de-23-de-agosto-de-2024. Acesso em: 9 out. 2026.
 

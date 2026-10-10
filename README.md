@@ -107,6 +107,8 @@ A SaúdeJá é fictícia e a semente do dataset é sintética, mas o sistema é 
 
 Pedidos de paciente chegam pela clínica. A SaúdeJá não apaga cadastro nem agendamento por iniciativa própria.
 
+A clínica só é controladora se aprovar o que a SaúdeJá propõe no contrato do SaaS: os dados que o modelo usa, o critério do lembrete, o texto do SMS e a retenção de 90 dias. Pela ANPD, é controlador quem decide esses elementos essenciais, qualquer que seja o nome que o contrato dá às partes ([`LGPD.md` §1](docs/LGPD/LGPD.md#1-papéis-no-tratamento-de-dados)).
+
 ### Onde os dados ficam
 
 | Destino | Dados | Região |
@@ -143,6 +145,7 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 | Coleta do consentimento da transferência internacional | [`LGPD.md` §4.2 e §4.3](docs/LGPD/LGPD.md) |
 | Política de privacidade pública | Rascunho em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), com as condições para publicar |
 | Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
+| Contrato do SaaS em que a clínica aprova os elementos essenciais propostos pela SaúdeJá | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
 | Encarregado de dados real (o `dpo@saudeja.com.br` é fictício) | [`LGPD.md` §11](docs/LGPD/LGPD.md) |
 
 Metas de serviço relacionadas: [`docs/SLO.md`](docs/SLO.md) (§6, zero dado pessoal em log) e [`docs/SLA.md`](docs/SLA.md) (§6, comunicação de incidente).
