@@ -1,7 +1,7 @@
 # ADR-009: Workflow único para os tratamentos LGPD, com credencial própria de exclusão e consentimento em tabela de eventos
 
 ## Status
-Aceito — 2026-10-09. Ainda não implementado. Complementa a política de retenção do [LGPD.md](../LGPD/LGPD.md) (seção 5) e não altera o [ADR-008](adr-008-canario-do-modelo.md). Emendado em 2026-10-10: o lembrete deixa de depender de consentimento (ver "Emenda de 2026-10-10", no fim).
+Aceito — 2026-10-09. Implementado em 2026-10-10, com as mudanças do [ADR-010](adr-010-base-de-treino-separada.md). Complementa a política de retenção do [LGPD.md](../LGPD/LGPD.md) (seção 5) e não altera o [ADR-008](adr-008-canario-do-modelo.md). Emendado em 2026-10-10: o lembrete deixa de depender de consentimento (ver "Emenda de 2026-10-10", no fim). **Parcialmente superado pelo [ADR-010](adr-010-base-de-treino-separada.md)** (ver "Emenda de 2026-10-10 (2)", no fim).
 
 ## Contexto
 A revisão das bases legais do [LGPD.md](../LGPD/LGPD.md) (09/10/2026) criou obrigações que o sistema ainda não cumpre:
@@ -84,3 +84,16 @@ Consequências para esta decisão:
 - quem não quer receber SMS se opõe pela clínica (art. 18, § 2º). O sistema ainda não registra a oposição (LGPD.md, subseção 9.4, item 29).
 
 Continuar o agendamento não vale como consentimento (art. 8º, § 4º): o treino e a transferência internacional seguem com caixa própria na tela. A classificação de data e hora como dado comum é o risco desta emenda (LGPD.md, subseção 9.4, item 28) e precisa de validação jurídica.
+
+## Emenda de 2026-10-10 (2): base de treino separada (ADR-010)
+
+O [ADR-010](adr-010-base-de-treino-separada.md) muda três pontos desta decisão. O resto continua valendo.
+
+- **O agendamento não depende de consentimento.** A caixa da transferência internacional deixa de ser uma trava antes do formulário e passa a ser uma caixa de **ciência** da Política de privacidade e dos Termos de uso, que informa mas não é consentimento. O único consentimento é o do treino.
+- **O consentimento e os dados de treino ficam no schema `treino`**, controlado pela SaúdeJá:
+  - `eventos_consentimento` sai do banco da clínica e passa a ser chaveada por um pseudônimo HMAC do CPF, sem FK para `pacientes`. A prova de 365 dias começa quando o titular é eliminado da base de treino, não quando o cadastro da clínica é apagado;
+  - os pedidos sobre o treino (`revogacao`, `eliminacao`) também saem do banco da clínica e não passam pela confirmação dela;
+  - `pedidos_titular` da clínica fica com `eliminacao` e `revisao_decisao`.
+- **A eliminação no banco da clínica não depende do DVC**, porque o export lê só o schema `treino`. A ordem "DVC antes do `delete`" passa a valer na base de treino, onde o pedido carrega o pseudônimo até ser executado.
+
+O filtro de consentimento do export foi substituído pela própria base de treino, que só recebe a linha de quem consentiu. O banco recusa a linha sem consentimento vigente.

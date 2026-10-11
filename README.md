@@ -102,10 +102,12 @@ A SaúdeJá é fictícia e a semente do dataset é sintética, mas o sistema é 
 | Tratamento | Controladora | Operadora |
 |---|---|---|
 | Cadastro, agendamento, predição, lembrete e fila do dia | Clínica-cliente | SaúdeJá |
-| Treino de modelo compartilhado entre clínicas | SaúdeJá | — |
+| Base de treino e re-treino do modelo compartilhado entre clínicas | SaúdeJá | — |
 | Contas de login dos funcionários | SaúdeJá | — |
 
-Pedidos de paciente chegam pela clínica. A SaúdeJá não apaga cadastro nem agendamento por iniciativa própria.
+Pedidos de paciente chegam pela clínica, na aba "Pedidos do titular". Os pedidos sobre os dados de treino também podem ir direto à SaúdeJá. A SaúdeJá não apaga cadastro nem agendamento por iniciativa própria.
+
+**O agendamento não depende de consentimento** ([ADR-010](docs/adr/adr-010-base-de-treino-separada.md)). Antes do cadastro, o paciente marca que está ciente da Política de privacidade e dos Termos de uso, abertos por link. A única autorização opcional é a do uso dos desfechos no treino: quem autoriza vai também para a base de treino; quem recusa é agendado e lembrado do mesmo jeito.
 
 A clínica só é controladora se aprovar o que a SaúdeJá propõe no contrato do SaaS: os dados que o modelo usa, o critério do lembrete, o texto do SMS e a retenção de 90 dias. Pela ANPD, é controlador quem decide esses elementos essenciais, qualquer que seja o nome que o contrato dá às partes ([`LGPD.md` §1](docs/LGPD/LGPD.md#1-papéis-no-tratamento-de-dados)).
 
@@ -113,13 +115,13 @@ A clínica só é controladora se aprovar o que a SaúdeJá propõe no contrato 
 
 | Destino | Dados | Região |
 |---|---|---|
-| Supabase (banco e login) | Todos os dados de paciente e as contas de funcionário | Brasil (São Paulo) |
+| Supabase (banco e login) | Todos os dados de paciente e as contas de funcionário. A base de treino fica num schema separado, sem nome, telefone, CPF nem data de nascimento, com pseudônimo HMAC | Brasil (São Paulo) |
 | Hugging Face Space (aplicação) | Tudo o que a tela recebe ou exibe, inclusive nome, telefone e o CPF antes de virar hash | Estados Unidos |
-| Runner do GitHub Actions (job D-2 e re-treino) | Dados da consulta e telefone; no re-treino, o dataset pseudonimizado. Nunca nome nem CPF | Fora do Brasil |
+| Runner do GitHub Actions (job D-2, re-treino e purga) | Dados da consulta e telefone; no re-treino, só a base de treino, de quem autorizou. Nunca nome nem CPF | Fora do Brasil |
 | Azure Blob Storage (remote do DVC) | Dataset de treino pseudonimizado, sem nome, telefone nem CPF, e o `model.pkl` | Brasil (Brazil South), desde 09/10/2026 |
 | Infobip (SMS) | Telefone, data e hora da consulta | A confirmar |
 
-Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase tem acordo de tratamento de dados (DPA). O remote do DVC foi migrado para Brazil South em 09/10/2026, e o processamento no GitHub Actions e no Hugging Face se apoia no **consentimento específico do paciente para a transferência** (art. 33, VIII), coletado antes do formulário de cadastro. A coleta ainda não foi implementada ([`LGPD.md` §4.1 a §4.3](docs/LGPD/LGPD.md#4-transferência-internacional-de-dados)).
+Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase tem acordo de tratamento de dados (DPA). O remote do DVC foi migrado para Brazil South em 09/10/2026. O processamento da base de treino fora do Brasil se apoia no consentimento do treino, que o informa em destaque. **O processamento dos dados da clínica no Hugging Face e no GitHub Actions continua sem mecanismo do art. 33**: a caixa de ciência informa, mas não é consentimento, e isso bloqueia a operação com paciente real ([`LGPD.md` §4.2 e §9.5](docs/LGPD/LGPD.md#42-mecanismo-adotado)).
 
 ### Proteções implementadas
 
@@ -127,7 +129,9 @@ Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase t
 - **Nome só na fila do dia**: não vai para log, API, dataset de treino, SMS nem LLM, e cada uma dessas saídas tem um teste ([ADR-007](docs/adr/adr-007-nome-do-paciente.md)).
 - **Log sem dado pessoal**: filtro de redação em todos os handlers do processo, mais uma guarda estática sobre o código ([`src/logging_config.py`](src/logging_config.py)).
 - **Consultas ao Supabase sem dado pessoal na URL**: um teste barra filtros por CPF, telefone, nome ou data de nascimento, porque a URL fica no log do provedor.
-- **SMS sem especialidade**: o lembrete só informa data e hora. Por isso ele não traz dado de saúde e faz parte do atendimento contratado com a clínica, sem pedir consentimento; o consentimento fica para o uso dos desfechos no treino do modelo e para o processamento fora do Brasil.
+- **SMS sem especialidade**: o lembrete só informa data e hora. Por isso ele não traz dado de saúde e faz parte do atendimento contratado com a clínica, sem pedir consentimento; o consentimento fica só para o uso dos desfechos no treino do modelo.
+- **Base de treino separada e fechada**: só recebe a consulta de quem consentiu (o banco recusa a linha sem consentimento vigente), só é acessada por funções do banco, e identifica titular e consulta por HMAC com chave secreta ([ADR-010](docs/adr/adr-010-base-de-treino-separada.md)). O re-treino lê só ela.
+- **Purga automática** (`.github/workflows/lgpd.yml`): executa os pedidos de eliminação e revogação, inclusive nas versões do dataset no remote do DVC, e apaga as versões com mais de 90 dias, com uma credencial de exclusão que só esse workflow tem ([`docs/LGPD/PROCEDIMENTO-ELIMINACAO.md`](docs/LGPD/PROCEDIMENTO-ELIMINACAO.md)).
 - **Retenção automática**: predições, explicações e registros de lembrete são apagados em 90 dias, pelo job diário.
 - **Cópias com a mesma retenção**: o banco não tem backup; versões apagadas do remote do DVC ficam 1 dia no soft delete; cópias locais do DVC são apagadas por [`scripts/purgar_dvc_local.py`](scripts/purgar_dvc_local.py) ([`LGPD.md` §5.1](docs/LGPD/LGPD.md)).
 - **Acesso**: RLS em todas as tabelas (só o backend lê); visão Funcionário com login individual e sessão de 30 minutos.
@@ -140,11 +144,10 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 
 | Pendência | Onde está decidido |
 |---|---|
-| Coleta e prova do consentimento (treino e transferência internacional), com filtro no export | [ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), não implementado |
 | Registro da oposição ao lembrete (o lembrete não depende de consentimento, mas o paciente pode pedir à clínica para não receber SMS) | [`LGPD.md` §9.4](docs/LGPD/LGPD.md) |
-| Eliminação a pedido do titular e retenção de 90 dias no remote do DVC | ADR-009, não implementado. Hoje a eliminação é manual no banco |
-| Coleta do consentimento da transferência internacional | [`LGPD.md` §4.2 e §4.3](docs/LGPD/LGPD.md) |
-| Política de privacidade pública | Rascunho em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), com as condições para publicar |
+| Mecanismo do art. 33 para o processamento dos dados da clínica fora do Brasil (tirar a aplicação e o job D-2 do exterior, ou cláusulas-padrão da ANPD) | [`LGPD.md` §4.2 e §9.5](docs/LGPD/LGPD.md) |
+| Validação jurídica da caixa única do treino com o aviso do exterior, da prova de 365 dias e dos Termos de uso | [`LGPD.md` §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
+| Política de privacidade e Termos de uso públicos | Rascunhos em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [`docs/LGPD/TERMOS-DE-USO.md`](docs/LGPD/TERMOS-DE-USO.md), já exibidos na tela, com as condições para publicar |
 | Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
 | Contrato do SaaS em que a clínica aprova os elementos essenciais propostos pela SaúdeJá | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
 | Encarregado de dados real (o `dpo@saudeja.com.br` é fictício) | [`LGPD.md` §11](docs/LGPD/LGPD.md) |
@@ -212,7 +215,7 @@ supabase start    # sobe Postgres + Studio via Docker e aplica supabase/migratio
 supabase status   # mostra a URL e a chave secreta para o .env
 ```
 
-Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
+Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO` (ver `.env.example`); sem ela, o agendamento funciona e só a base de treino deixa de receber dados. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
 
 ### 4. Subir a aplicação
 
@@ -422,7 +425,7 @@ git push -u origin rollback/modelo-anterior
 gh pr create --base main
 ```
 
-- O modelo antigo continua no remote do DVC, porque hoje nenhuma credencial do Actions apaga blobs. Quando o workflow de purga do [ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md) entrar, cada versão substituída fica disponível por 90 dias: o rollback do campeão continua possível dentro dessa janela.
+- O modelo antigo continua no remote do DVC por 90 dias depois de substituído: o workflow de purga ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md)) só apaga versões que deixaram de ser vigentes em `main` há mais tempo que isso. O rollback do campeão continua possível dentro dessa janela.
 - O merge dispara o deploy, que confere o hash do modelo restaurado contra o `champion_metrics.json` antes de subir o Space. O job D-2 do dia seguinte já usa o modelo restaurado.
 - O `champion_metrics.json` também guarda o threshold. Se `decision.threshold` em `params.yaml` mudou depois da promoção, restaure o valor antigo no mesmo PR, ou o deploy e o job D-2 recusam o modelo.
 - Esse caminho não registra o modelo descartado em `data/canario_historico.json`, então o gate pode aprová-lo de novo num re-treino futuro.
@@ -465,7 +468,7 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
 - [ ] Adequação à LGPD ([pendências](#pendências))
   - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
   - [x] Procedimento de revisão da decisão automatizada
-  - [ ] Consentimento, eliminação e purga do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md))
+  - [x] Agendamento sem consentimento, base de treino separada, eliminação e purga do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md))
   - [ ] Mecanismo de transferência internacional e DPAs
   - [ ] Publicação da política de privacidade
 - [ ] Etapa 8: validação final para o pitch — números do SLA/SLO medidos em produção e decisão sobre o gap de recall
