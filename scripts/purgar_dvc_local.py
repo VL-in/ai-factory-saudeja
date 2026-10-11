@@ -40,7 +40,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import yaml
 
@@ -96,9 +96,11 @@ def decidir(artefatos: list[Artefato]) -> dict[str, str]:
 def ausentes_no_remote(status_cloud: dict) -> set[str]:
     """Saída de `dvc status --cloud --json`: `{caminho: "new" | "deleted" |
     "missing"}`. "new" é o que está no cache local e não no remote; "missing",
-    o que não está em nenhum dos dois."""
+    o que não está em nenhum dos dois. O DVC no Windows devolve o caminho com
+    barra invertida, e `Path` no Linux não a converte: `PureWindowsPath`
+    aceita os dois separadores em qualquer sistema."""
     return {
-        Path(caminho).as_posix()
+        PureWindowsPath(caminho).as_posix()
         for caminho, situacao in status_cloud.items()
         if situacao in ("new", "missing")
     }
