@@ -11,8 +11,11 @@ treino recebia hora UTC e o SMS dizia 21:00 ao paciente. Nenhum teste pegava,
 porque nenhum partia do formato que o banco de fato devolve.
 
 Aqui a mesma linha, no formato do PostgREST, percorre os dois caminhos --
-serving (job D-2) e treino (export -> CSV -> `preprocessar`) -- e os vetores
-de features têm de ser idênticos. Sem banco: roda no CI rápido.
+serving (job D-2) e treino -- e os vetores de features têm de ser idênticos.
+Desde a base de treino separada (ADR-010), o caminho de treino é: a etapa de
+treino do agendamento (`logic.registrar_no_treino`) monta a linha da base de
+treino, que volta pela RPC do export no formato do PostgREST e segue para o
+CSV e o `preprocessar`. Sem banco: roda no CI rápido.
 """
 import io
 from datetime import date, datetime
@@ -26,6 +29,7 @@ import preprocess
 from config_projeto import fuso_da_clinica, para_horario_da_clinica
 from features import extrair_features_temporais
 from jobs import inferencia_diaria as job
+from ui import logic
 
 # Sexta-feira 02/10/2026, 18h em São Paulo = 21h UTC -- o horário de maior
 # no-show nas notas da Camila, e o que o bug empurrava para fora da grade.
@@ -73,13 +77,49 @@ def test_features_temporais_usam_a_hora_da_clinica_para_timestamp_com_fuso():
     assert features.loc[0, "dia_de_semana"] == 4  # sexta
 
 
+def _linha_de_treino(monkeypatch, linha: dict) -> dict:
+    """A linha que a etapa de treino do agendamento grava para `linha`, como a
+    RPC do export a devolve: timestamptz em UTC, desfecho e lembrete já
+    sincronizados pelo job D-2."""
+    monkeypatch.setenv(logic.pseudonimo.VARIAVEL_CHAVE, "k" * 32)
+    gravadas = []
+    monkeypatch.setattr(logic.repositorio_treino, "eventos_do_titular", lambda _id: [])
+    monkeypatch.setattr(logic.repositorio_treino, "registrar_consentimentos", lambda *a, **k: 1)
+    monkeypatch.setattr(
+        logic.repositorio_treino, "inserir_consulta", lambda **k: gravadas.append(k) or True
+    )
+    paciente = linha["pacientes"]
+    # O agendamento chega à etapa de treino com o fuso da clínica explícito,
+    # como `cadastrar_paciente_e_agendamento` o grava.
+    assert logic.registrar_no_treino(
+        cpf="111.444.777-35",
+        marcada=True,
+        id_agendamento=linha["id"],
+        data_nascimento=date.fromisoformat(paciente["data_nascimento"]),
+        sexo=paciente["sexo"],
+        especialidade=linha["especialidade"],
+        distancia_km=linha["distancia_km"],
+        data_hora_agendada=para_horario_da_clinica(linha["data_hora_agendada"]),
+        dias_entre_agendamento_consulta=linha["dias_entre_agendamento_consulta"],
+        historico_noshow=linha["historico_noshow"],
+    )
+    [gravada] = gravadas
+    return {
+        **gravada,
+        "data_hora_agendada": CONSULTA_UTC,
+        "status": linha["status"],
+        "lembrete_enviado": linha["lembrete_enviado"],
+    }
+
+
 @pytest.mark.parametrize("features_temporais", [False, True])
 def test_linha_do_banco_gera_as_mesmas_features_no_job_e_no_treino(features_temporais, monkeypatch):
     monkeypatch.setitem(preprocess.PARAMS, "features", {"temporais": features_temporais})
     linha = _linha_do_banco()
 
-    # caminho de treino: export -> CSV (strings) -> preprocessar
-    exportado = export_treino.montar_dataset_producao([linha])
+    # caminho de treino: agendamento -> base de treino -> export -> CSV
+    # (strings) -> preprocessar
+    exportado = export_treino.montar_dataset_producao([_linha_de_treino(monkeypatch, linha)])
     csv = pd.read_csv(io.StringIO(exportado.to_csv(index=False)))
     X_treino, _, mapa = preprocess.preprocessar(csv)
 
@@ -94,8 +134,9 @@ def test_linha_do_banco_gera_as_mesmas_features_no_job_e_no_treino(features_temp
         assert X_serving.loc[0, "horario"] == 18
 
 
-def test_export_grava_a_hora_da_clinica_e_se_houve_lembrete():
-    exportado = export_treino.montar_dataset_producao([_linha_do_banco(lembrete_enviado=True)])
+def test_export_grava_a_hora_da_clinica_e_se_houve_lembrete(monkeypatch):
+    linha = _linha_de_treino(monkeypatch, _linha_do_banco(lembrete_enviado=True))
+    exportado = export_treino.montar_dataset_producao([linha])
     assert exportado.loc[0, "data_hora_agendada"] == "2026-10-02 18:00:00"
     assert exportado.loc[0, "lembrete_enviado"] == 1
 
@@ -103,6 +144,14 @@ def test_export_grava_a_hora_da_clinica_e_se_houve_lembrete():
 def test_sms_informa_o_horario_da_clinica():
     mensagem = job._mensagem_de_lembrete(_linha_do_banco())
     assert "02/10/2026 às 18:00" in mensagem
+
+
+def test_sms_nao_revela_a_especialidade():
+    """A especialidade é dado sensível (LGPD.md §2): não vai para o log da
+    Infobip nem para a tela bloqueada do celular do paciente."""
+    linha = _linha_do_banco()
+    mensagem = job._mensagem_de_lembrete(linha)
+    assert linha["especialidade"].lower() not in mensagem.lower()
 
 
 def test_sms_de_agendamento_malformado_cai_na_mensagem_generica():

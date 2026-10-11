@@ -49,6 +49,11 @@ jobs:
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_LEITURA }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      # Sincronizacao diaria do desfecho com a base de treino (ADR-010): o job
+      # calcula o pseudonimo da consulta a partir do id do agendamento. Sem a
+      # chave, a sincronizacao nao roda e o resumo avisa; a fila de lembretes
+      # nao depende dela.
+      TREINO_CHAVE_PSEUDONIMO: ${{ secrets.TREINO_CHAVE_PSEUDONIMO }}
       # Variavel, nao secret, e sem default aqui: ver o passo de checagem.
       MESSAGING_PROVIDER: ${{ vars.MESSAGING_PROVIDER }}
       INFOBIP_BASE_URL: ${{ secrets.INFOBIP_BASE_URL }}

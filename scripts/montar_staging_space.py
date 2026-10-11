@@ -48,6 +48,11 @@ ARQUIVOS = (
     ("infra/deploy/entrypoint.sh", "infra/deploy/entrypoint.sh"),
     (".streamlit/config.toml", ".streamlit/config.toml"),
     ("data/model.pkl", "data/model.pkl"),
+    # Politica de privacidade e Termos de uso que a tela de agendamento exibe
+    # (src/documentos_legais.py, ADR-010). Os dois unicos arquivos de docs/
+    # que vao para o Space: o resto da documentacao nao serve a' aplicacao.
+    ("docs/LGPD/POLITICA-DE-PRIVACIDADE.md", "docs/LGPD/POLITICA-DE-PRIVACIDADE.md"),
+    ("docs/LGPD/TERMOS-DE-USO.md", "docs/LGPD/TERMOS-DE-USO.md"),
 )
 DIRETORIOS = (("src", "src"),)
 

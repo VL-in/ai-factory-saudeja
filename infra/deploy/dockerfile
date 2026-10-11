@@ -45,6 +45,10 @@ COPY params.yaml .
 # trabalho (/app), de onde o entrypoint o inicia.
 COPY .streamlit/config.toml ./.streamlit/config.toml
 COPY infra/deploy/entrypoint.sh ./entrypoint.sh
+# Politica de privacidade e Termos de uso exibidos na tela de agendamento
+# (ADR-010): o texto e a versao gravada na ciencia saem destes arquivos, os
+# mesmos do repositorio, no caminho que src/documentos_legais.py procura.
+COPY docs/LGPD/POLITICA-DE-PRIVACIDADE.md docs/LGPD/TERMOS-DE-USO.md ./docs/LGPD/
 RUN chmod 755 ./entrypoint.sh
 
 # Bytecode compilado no build: com /app so' de leitura para o uid 1000, o

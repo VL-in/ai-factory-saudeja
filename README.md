@@ -1,12 +1,14 @@
 # SaudeJa — Classificador de no-show em agendamentos médicos
 
-> Status: em desenvolvimento — (AI Factory: Build, Deploy and Showcase)
+> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.1.0](docs/logs/CHANGELOG.md). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
 
 Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia lembrete por SMS só para eles, dois dias antes do atendimento.
 
 ## Visão Geral
 
-SaudeJá é um SaaS voltado para clínicas particulares de saúde de médio e pequeno porte que oferece serviço de agendamento online, prontuário, faturamento e comunicação com pacientes. Atualmente visa desenvolver uma funcionalidade para prevê pacientes que se ausenta de agendamentos médicos usando o classificador LightGBM. O repositório foi herdado com um pipeline de treinamento que resulta em um modelo com desempenho de Acurácia 78% no test set, F1-score para classe positiva de 0,65 e ROC-AUC de 0,81, dentro da disciplina AI Factory: Build, Deploy and Showcase.
+SaudeJá é um SaaS voltado para clínicas particulares de saúde de médio e pequeno porte que oferece serviço de agendamento online, prontuário, faturamento e comunicação com pacientes. Este repositório desenvolve a funcionalidade que prevê quais pacientes vão faltar à consulta, usando o classificador LightGBM, dentro da disciplina AI Factory: Build, Deploy and Showcase.
+
+O repositório foi herdado com um pipeline de treinamento que reportava acurácia de 78%, F1-score de 0,65 para a classe positiva e ROC-AUC de 0,81. Medido no fold de teste isolado, o modelo em produção tem acurácia de 0,67, F1-score de 0,42 para a classe positiva e ROC-AUC de 0,64 ([`data/champion_metrics.json`](data/champion_metrics.json), [ADR-003](docs/adr/adr-003-SMOTE-NC.md)). O recall e o F1 da classe positiva ficam abaixo dos alvos do [SLO](docs/SLO.md) por limite do dataset. Essa exceção está documentada e será decidida na validação final.
 
 
 ## Problema
@@ -17,7 +19,8 @@ O no-show custa em média **R$ 180 por consulta perdida** e a taxa nacional gira
 
 | Ambiente | Endereço |
 |---|---|
-| Produção (Hugging Face Space) | _ainda não publicada — será adicionada após o primeiro deploy_ |
+| Produção (Hugging Face Space) | _no ar desde a v2.0.0; o endereço entra aqui depois que o UptimeRobot estiver monitorando a produção_ |
+| Desenvolvimento (Hugging Face Space) | _uso interno; o id do Space fica na variável `HF_SPACE_ID` do environment `dev`_ |
 
 O Space publica só a interface Streamlit (porta 7860). A API FastAPI roda no mesmo container, mas não fica exposta publicamente. A visão **Paciente** é aberta; a visão **Funcionário** exige uma conta criada pelo administrador (ver [Criar conta de funcionário](#criar-conta-de-funcionário)).
 
@@ -40,7 +43,7 @@ flowchart LR
 
 1. O paciente se cadastra e agenda a consulta pela interface. Os dados vão para o Supabase.
 2. Todo dia às 08h17 (horário de São Paulo), o job D-2 busca os agendamentos dos próximos dois dias ainda sem predição, calcula a probabilidade de no-show e grava o resultado com a explicação SHAP.
-3. Pacientes acima do threshold (`decision.threshold` em [`params.yaml`](params.yaml)) recebem SMS de confirmação via Infobip. Toda decisão, enviada ou não, fica registrada para auditoria.
+3. Pacientes acima do threshold (`decision.threshold` em [`params.yaml`](params.yaml)) recebem SMS de confirmação via Infobip, só com data e hora da consulta. Toda decisão, enviada ou não, fica registrada para auditoria por 90 dias.
 4. O funcionário da clínica consulta a "Fila do dia", ordenada por risco, com a explicação de cada paciente.
 
 ### Componentes
@@ -70,7 +73,7 @@ Quatro stages no [`dvc.yaml`](dvc.yaml), cada um em container próprio a partir 
 | `train` | `src/train.py` | SMOTE-NC só no fold de treino ([ADR-003](docs/adr/adr-003-SMOTE-NC.md)) e LightGBM. Registra a run no MLflow |
 | `validate` | `src/validate.py` | Métricas no fold de teste isolado, logadas na mesma run do MLflow |
 
-O dataset e o `data/model.pkl` são versionados pelo DVC num container privado do Azure Blob Storage. O histórico de métricas fica no MLflow; o do modelo em produção, em [`data/champion_metrics.json`](data/champion_metrics.json).
+O dataset e o `data/model.pkl` são versionados pelo DVC num container privado do Azure Blob Storage, na região Brazil South (ver [Dados pessoais e LGPD](#dados-pessoais-e-lgpd)). O histórico de métricas fica no MLflow; o do modelo em produção, em [`data/champion_metrics.json`](data/champion_metrics.json).
 
 ### CI/CD e ciclo de vida do modelo
 
@@ -88,9 +91,68 @@ Há dois ambientes, cada um com Space, projeto Supabase e secrets próprios no *
 
 Só o modelo campeão vai para produção: deploy e job D-2 conferem o hash do `model.pkl` e o threshold contra `data/champion_metrics.json`. O deploy envia ao Space apenas o necessário para a imagem (código, `params.yaml` e modelo), nunca o dataset nem a configuração do DVC.
 
-### Privacidade (LGPD)
+## Dados pessoais e LGPD
 
-Dados de saúde são tratados como reais desde o protótipo. CPF não é persistido (só o hash sha256), logs passam por filtro de redação de PII e há retenção automática dos dados derivados. Detalhes em [`docs/LGPD.md`](docs/LGPD.md); metas de serviço em [`docs/SLO.md`](docs/SLO.md) e [`docs/SLA.md`](docs/SLA.md).
+> Situação: **em adequação e sem validação jurídica.** A análise completa (inventário, bases legais, retenção, transferência internacional, riscos) está em [`docs/LGPD/LGPD.md`](docs/LGPD/LGPD.md).
+
+A SaúdeJá é fictícia e a semente do dataset é sintética, mas o sistema é desenhado e documentado como se todo dado fosse real: especialidade, status do agendamento e histórico de faltas revelam informação de saúde e são tratados como **dados sensíveis**.
+
+### Papéis
+
+| Tratamento | Controladora | Operadora |
+|---|---|---|
+| Cadastro, agendamento, predição, lembrete e fila do dia | Clínica-cliente | SaúdeJá |
+| Base de treino e re-treino do modelo compartilhado entre clínicas | SaúdeJá | — |
+| Contas de login dos funcionários | SaúdeJá | — |
+
+Pedidos de paciente chegam pela clínica, na aba "Pedidos do titular". Os pedidos sobre os dados de treino também podem ir direto à SaúdeJá. A SaúdeJá não apaga cadastro nem agendamento por iniciativa própria.
+
+**O agendamento não depende de consentimento** ([ADR-010](docs/adr/adr-010-base-de-treino-separada.md)). Antes do cadastro, o paciente marca que está ciente da Política de privacidade e dos Termos de uso, abertos por link. A única autorização opcional é a do uso dos desfechos no treino: quem autoriza vai também para a base de treino; quem recusa é agendado e lembrado do mesmo jeito.
+
+A clínica só é controladora se aprovar o que a SaúdeJá propõe no contrato do SaaS: os dados que o modelo usa, o critério do lembrete, o texto do SMS e a retenção de 90 dias. Pela ANPD, é controlador quem decide esses elementos essenciais, qualquer que seja o nome que o contrato dá às partes ([`LGPD.md` §1](docs/LGPD/LGPD.md#1-papéis-no-tratamento-de-dados)).
+
+### Onde os dados ficam
+
+| Destino | Dados | Região |
+|---|---|---|
+| Supabase (banco e login) | Todos os dados de paciente e as contas de funcionário. A base de treino fica num schema separado, sem nome, telefone, CPF nem data de nascimento, com pseudônimo HMAC | Brasil (São Paulo) |
+| Hugging Face Space (aplicação) | Tudo o que a tela recebe ou exibe, inclusive nome, telefone e o CPF antes de virar hash | Estados Unidos |
+| Runner do GitHub Actions (job D-2, re-treino e purga) | Dados da consulta e telefone; no re-treino, só a base de treino, de quem autorizou. Nunca nome nem CPF | Fora do Brasil |
+| Azure Blob Storage (remote do DVC) | Dataset de treino pseudonimizado, sem nome, telefone nem CPF, e o `model.pkl` | Brasil (Brazil South), desde 09/10/2026 |
+| Infobip (SMS) | Telefone, data e hora da consulta | A confirmar |
+
+Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase tem acordo de tratamento de dados (DPA). O remote do DVC foi migrado para Brazil South em 09/10/2026. O processamento da base de treino fora do Brasil se apoia no consentimento do treino, que o informa em destaque. **O processamento dos dados da clínica no Hugging Face e no GitHub Actions continua sem mecanismo do art. 33**: a caixa de ciência informa, mas não é consentimento, e isso bloqueia a operação com paciente real ([`LGPD.md` §4.2 e §9.5](docs/LGPD/LGPD.md#42-mecanismo-adotado)).
+
+### Proteções implementadas
+
+- **CPF não é gravado**: a tela converte o CPF em hash sha256 antes de chegar ao banco.
+- **Nome só na fila do dia**: não vai para log, API, dataset de treino, SMS nem LLM, e cada uma dessas saídas tem um teste ([ADR-007](docs/adr/adr-007-nome-do-paciente.md)).
+- **Log sem dado pessoal**: filtro de redação em todos os handlers do processo, mais uma guarda estática sobre o código ([`src/logging_config.py`](src/logging_config.py)).
+- **Consultas ao Supabase sem dado pessoal na URL**: um teste barra filtros por CPF, telefone, nome ou data de nascimento, porque a URL fica no log do provedor.
+- **SMS sem especialidade**: o lembrete só informa data e hora. Por isso ele não traz dado de saúde e faz parte do atendimento contratado com a clínica, sem pedir consentimento; o consentimento fica só para o uso dos desfechos no treino do modelo.
+- **Base de treino separada e fechada**: só recebe a consulta de quem consentiu (o banco recusa a linha sem consentimento vigente), só é acessada por funções do banco, e identifica titular e consulta por HMAC com chave secreta ([ADR-010](docs/adr/adr-010-base-de-treino-separada.md)). O re-treino lê só ela.
+- **Purga automática** (`.github/workflows/lgpd.yml`): executa os pedidos de eliminação e revogação, inclusive nas versões do dataset no remote do DVC, e apaga as versões com mais de 90 dias, com uma credencial de exclusão que só esse workflow tem ([`docs/LGPD/PROCEDIMENTO-ELIMINACAO.md`](docs/LGPD/PROCEDIMENTO-ELIMINACAO.md)).
+- **Retenção automática**: predições, explicações e registros de lembrete são apagados em 90 dias, pelo job diário.
+- **Cópias com a mesma retenção**: o banco não tem backup; versões apagadas do remote do DVC ficam 1 dia no soft delete; cópias locais do DVC são apagadas por [`scripts/purgar_dvc_local.py`](scripts/purgar_dvc_local.py) ([`LGPD.md` §5.1](docs/LGPD/LGPD.md)).
+- **Acesso**: RLS em todas as tabelas (só o backend lê); visão Funcionário com login individual e sessão de 30 minutos.
+
+### Direitos do titular e revisão da decisão automatizada
+
+A única decisão automatizada é enviar ou não o lembrete. O paciente pede explicação ou revisão à clínica, que examina a decisão com a explicação SHAP da fila do dia e, se precisar, pede apoio técnico à SaúdeJá. O roteiro aparece na própria tela "Fila do dia" e está detalhado em [`docs/LGPD/PROCEDIMENTO-REVISAO.md`](docs/LGPD/PROCEDIMENTO-REVISAO.md).
+
+### Pendências
+
+| Pendência | Onde está decidido |
+|---|---|
+| Registro da oposição ao lembrete (o lembrete não depende de consentimento, mas o paciente pode pedir à clínica para não receber SMS) | [`LGPD.md` §9.4](docs/LGPD/LGPD.md) |
+| Mecanismo do art. 33 para o processamento dos dados da clínica fora do Brasil (tirar a aplicação e o job D-2 do exterior, ou cláusulas-padrão da ANPD) | [`LGPD.md` §4.2 e §9.5](docs/LGPD/LGPD.md) |
+| Validação jurídica da caixa única do treino com o aviso do exterior, da prova de 365 dias e dos Termos de uso | [`LGPD.md` §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
+| Política de privacidade e Termos de uso públicos | Rascunhos em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [`docs/LGPD/TERMOS-DE-USO.md`](docs/LGPD/TERMOS-DE-USO.md), já exibidos na tela, com as condições para publicar |
+| Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
+| Contrato do SaaS em que a clínica aprova os elementos essenciais propostos pela SaúdeJá | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
+| Encarregado de dados real (o `dpo@saudeja.com.br` é fictício) | [`LGPD.md` §11](docs/LGPD/LGPD.md) |
+
+Metas de serviço relacionadas: [`docs/SLO.md`](docs/SLO.md) (§6, zero dado pessoal em log) e [`docs/SLA.md`](docs/SLA.md) (§6, comunicação de incidente).
 
 ## Como rodar
 
@@ -118,11 +180,12 @@ Copy-Item .env.example .env
 
 ### 2. Baixar dataset e modelo (DVC)
 
-A URL do remote não é versionada. Configure-a localmente e informe a credencial pelo ambiente:
+A URL do remote não é versionada. Configure-a localmente uma vez e use a **SAS de leitura** como credencial, nunca a chave da conta (ver [`.env.example`](.env.example)). O `dvc` lê a credencial do ambiente da sessão, não do `.env`:
 
 ```powershell
 dvc remote add --local -f azure $env:DVC_REMOTE_URL
-$env:AZURE_STORAGE_CONNECTION_STRING = "<connection string>"
+Get-Content .env | Where-Object { $_ -match '^AZURE_STORAGE_CONNECTION_STRING=' } |
+  ForEach-Object { $env:AZURE_STORAGE_CONNECTION_STRING = $_.Split('=', 2)[1] }
 dvc pull
 ```
 
@@ -131,7 +194,17 @@ dvc pull
 | `azure is supported, but requires 'dvc-azure'` | `requirements/dvc.txt` não instalado no venv |
 | remote `azure` não existe | faltou o `dvc remote add --local` |
 | `requires either account_name or connection_string` | `AZURE_STORAGE_CONNECTION_STRING` não definida na sessão |
-| `AuthorizationFailure` | o firewall da storage account não libera seu IP (*Networking → Firewalls and virtual networks → Add your client IP address*) |
+| `AuthenticationFailed`, `sp is mandatory` | a variável recebeu a "URL do SAS" do portal; use o formato `BlobEndpoint=https://<conta>.blob.core.windows.net/;SharedAccessSignature=sp=...` |
+| `AuthenticationFailed`, `Signature did not match` | a SAS foi gerada em outra conta, ou a chave que a assinou foi rotacionada |
+
+O dataset de treino tem desfechos reais de pacientes. A cópia local segue a retenção do remote ([`LGPD.md` §5.1](docs/LGPD/LGPD.md)): rode a purga local depois de cada `git pull` e pelo menos uma vez por semana. Ela reduz o cache ao que o workspace usa e apaga do workspace a versão que o remote já apagou.
+
+```powershell
+python scripts/purgar_dvc_local.py --dry-run   # mostra o que sairia
+python scripts/purgar_dvc_local.py
+```
+
+Não faça `supabase db dump` do banco de produção: o dump ficaria fora de qualquer purga.
 
 ### 3. Preparar o banco
 
@@ -142,7 +215,7 @@ supabase start    # sobe Postgres + Studio via Docker e aplica supabase/migratio
 supabase status   # mostra a URL e a chave secreta para o .env
 ```
 
-Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
+Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO` (ver `.env.example`); sem ela, o agendamento funciona e só a base de treino deixa de receber dados. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
 
 ### 4. Subir a aplicação
 
@@ -177,7 +250,7 @@ Variáveis principais:
 
 | Variável | Efeito |
 |---|---|
-| `APP_ENV` | `dev` exibe a aba "Dev: disparo manual", que executa o job D-2 pela interface. Use `prod` em produção |
+| `APP_ENV` | `dev` exibe "Time técnico → Dev: disparo manual", que executa o job D-2 pela interface e mostra o diagnóstico (ambiente, modo de predição, status do banco). Use `prod` em produção |
 | `PREDICT_BACKEND` | `processo` (padrão) ou `api` |
 | `MESSAGING_PROVIDER` | `stub` (padrão, não envia nada) ou `infobip` (SMS real) |
 | `TIMEZONE_CLINICA` | Fuso usado em datas e na fila do dia (padrão `America/Sao_Paulo`) |
@@ -352,7 +425,7 @@ git push -u origin rollback/modelo-anterior
 gh pr create --base main
 ```
 
-- O modelo antigo continua no remote do DVC, porque nenhuma credencial do Actions apaga blobs.
+- O modelo antigo continua no remote do DVC por 90 dias depois de substituído: o workflow de purga ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md)) só apaga versões que deixaram de ser vigentes em `main` há mais tempo que isso. O rollback do campeão continua possível dentro dessa janela.
 - O merge dispara o deploy, que confere o hash do modelo restaurado contra o `champion_metrics.json` antes de subir o Space. O job D-2 do dia seguinte já usa o modelo restaurado.
 - O `champion_metrics.json` também guarda o threshold. Se `decision.threshold` em `params.yaml` mudou depois da promoção, restaure o valor antigo no mesmo PR, ou o deploy e o job D-2 recusam o modelo.
 - Esse caminho não registra o modelo descartado em `data/canario_historico.json`, então o gate pode aprová-lo de novo num re-treino futuro.
@@ -366,15 +439,40 @@ gh pr create --base main
 
 - **Migrations não voltam com o código.** O `supabase db push` só aplica migrations novas. Se a versão revertida trouxe uma migration aditiva (coluna ou tabela nova), o código antigo convive com ela. Se a migration foi destrutiva, o caminho é uma correção para frente, não um revert.
 - O `workflow_dispatch` do `deploy.yml` não serve para voltar a uma tag antiga: fora de `main`, ele escolhe o environment `dev`. Em `main`, ele só reenvia o commit atual.
+- Este caminho foi ensaiado em `dev` no [RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md): 6 min 56 s do push do revert até o Space saudável, quase tudo de CI. Em produção, some o CI do PR e o do deploy.
+- Para conferir o que está no ar, compare o digest da árvore do Space, não o SHA do commit: o `hub-sync` cria um commit novo a cada sync, mesmo com conteúdo idêntico. Os comandos estão no RB-001.
+
+### Registros de incidente e de rollback
+
+| Tipo | Pasta | Registros |
+|---|---|---|
+| Post-mortem | [`docs/post-mortem/`](docs/post-mortem/) | [PM-001](docs/post-mortem/PM-001.md): falhas no primeiro deploy de dev (04/10/2026, SEV-3) |
+| Relatório de rollback | [`docs/rollbacks/`](docs/rollbacks/) | [RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md): ensaio de rollback de código em dev (05/10/2026) |
+
+Cada registro termina com uma tabela de ações. As ações em aberto também aparecem no [Roadmap](#roadmap).
 
 ## Roadmap
 
 - [x] Etapa 1: adoção do protótipo
 - [x] Etapa 2: escolha da stack (ADR-001)
 - [x] Etapa 3: arquitetura C4 + ADR-002 + repositório
-- [ ] Etapa 4: deploy manual
-- [ ] Etapa 5: CI/CD
-- (etc.)
+- [x] Etapa 4: produto deployável — inferência, SHAP, API, interface, banco, job D-2, mensageria e blindagem LGPD
+- [x] Etapa 5: CI/CD, re-treino mensal com gate, canário do modelo e observabilidade com alertas
+- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 e v2.1.0)
+- [ ] Etapa 7: operação e ensaios
+  - [x] Ensaio de rollback de código em dev ([RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md))
+  - [ ] Guarda no `deploy.yml` que recusa um `HF_SPACE_ID` de outro environment ([PM-001](docs/post-mortem/PM-001.md))
+  - [ ] Conferência de que o modelo do `dvc.lock` está no remote antes do push ([PM-001](docs/post-mortem/PM-001.md))
+  - [ ] RB-002: rollback de código com migration aditiva
+  - [ ] Ensaio do rollback do modelo (canário)
+- [ ] Adequação à LGPD ([pendências](#pendências))
+  - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
+  - [x] Procedimento de revisão da decisão automatizada
+  - [x] Agendamento sem consentimento, base de treino separada, eliminação e purga do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md))
+  - [ ] Mecanismo de transferência internacional e DPAs
+  - [ ] Publicação da política de privacidade
+- [ ] Etapa 8: validação final para o pitch — números do SLA/SLO medidos em produção e decisão sobre o gap de recall
+- [ ] Etapa 9 (opcional): assistente com LLM para a equipe da clínica
 
 ## Autor
 

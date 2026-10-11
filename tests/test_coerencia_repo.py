@@ -389,6 +389,89 @@ def test_a_guarda_de_log_realmente_detecta_pii():
         assert not achados, f"falso positivo da guarda: {codigo}"
 
 
+# Filtros do supabase-py/postgrest-py. Cada um vira query string da requisição
+# ao PostgREST (`?telefone=eq.5511...`), e a URL inteira fica no log de API do
+# Supabase -- um log do provedor, que o filtro de `src/logging_config.py` não
+# alcança. O corpo do POST (insert/upsert/rpc) não entra nesse log.
+_METODOS_DE_FILTRO_POSTGREST = frozenset(
+    {"eq", "neq", "in_", "like", "ilike", "gt", "gte", "lt", "lte", "contains", "match",
+     "filter", "or_", "text_search"}
+)
+# Colunas cujo VALOR é dado pessoal. `id_paciente_externo` entra apesar de ser
+# hash: é reversível por força bruta sobre o espaço de CPFs (LGPD.md, Quadro 2).
+_COLUNAS_DE_PII_NO_BANCO = frozenset(
+    {"id_paciente_externo", "telefone", "nome_completo", "data_nascimento", "cpf", "email"}
+)
+
+
+def _colunas_filtradas(no: ast.Call):
+    """Colunas usadas como filtro numa chamada `.eq("coluna", valor)`,
+    `.match({"coluna": valor})` ou `.or_("coluna.eq.valor,...")`."""
+    func = no.func
+    if not isinstance(func, ast.Attribute) or func.attr not in _METODOS_DE_FILTRO_POSTGREST:
+        return
+    if not no.args:
+        return
+    primeiro = no.args[0]
+    if isinstance(primeiro, ast.Dict):
+        for chave in primeiro.keys:
+            if isinstance(chave, ast.Constant) and isinstance(chave.value, str):
+                yield chave.value
+    elif isinstance(primeiro, ast.Constant) and isinstance(primeiro.value, str):
+        # `or_`/`filter` com expressão: a coluna é o trecho antes do primeiro ponto
+        # de cada condição; para os demais, o próprio argumento.
+        for condicao in primeiro.value.split(","):
+            yield condicao.strip().strip("()").split(".", 1)[0]
+
+
+def _filtros_por_pii(codigo: str, origem: str = "<teste>") -> list[str]:
+    arvore = ast.parse(codigo, filename=origem)
+    return [
+        f"{origem}:{no.lineno} -> {coluna}"
+        for no in ast.walk(arvore)
+        if isinstance(no, ast.Call)
+        for coluna in _colunas_filtradas(no)
+        if coluna in _COLUNAS_DE_PII_NO_BANCO
+    ]
+
+
+def test_nenhuma_consulta_ao_supabase_filtra_por_dado_pessoal():
+    """O valor de um filtro do PostgREST viaja na URL, e a URL fica no log de API
+    do Supabase (LGPD.md §8). Consultar por dado pessoal -- hoje ou numa futura
+    ferramenta de LLM que consulte o banco -- tem de passar o valor no corpo de
+    um POST, via `rpc()` para uma função do Postgres, nunca como filtro de GET.
+    Filtrar por uuid interno, status ou data continua permitido."""
+    encontrados = []
+    for arquivo in sorted((REPO_ROOT / "src").rglob("*.py")):
+        encontrados += _filtros_por_pii(
+            arquivo.read_text(encoding="utf-8"), str(arquivo.relative_to(REPO_ROOT))
+        )
+    assert not encontrados, (
+        "Consulta ao Supabase filtrando por dado pessoal -- o valor iria para a URL e "
+        f"para o log de API do provedor. Use rpc() com o valor no corpo: {encontrados}"
+    )
+
+
+def test_a_guarda_de_filtro_realmente_detecta_pii():
+    """Controle negativo da guarda acima, no mesmo espírito da guarda de log."""
+    deve_flagrar = [
+        'c.table("pacientes").select("id").eq("id_paciente_externo", h).execute()',
+        'c.table("pacientes").select("id").in_("telefone", fones).execute()',
+        'c.table("pacientes").select("id").match({"nome_completo": n}).execute()',
+        'c.table("pacientes").select("id").or_("email.eq.x,cpf.eq.y").execute()',
+    ]
+    nao_deve_flagrar = [
+        'c.table("agendamentos").select("*").eq("id_paciente", uuid).execute()',
+        'c.table("agendamentos").select("*").in_("status", ["no_show"]).execute()',
+        'c.table("pacientes").upsert(r, on_conflict="id_paciente_externo").execute()',
+        'c.rpc("buscar_paciente", {"id_paciente_externo": h}).execute()',
+    ]
+    for codigo in deve_flagrar:
+        assert _filtros_por_pii(codigo), f"guarda deixou passar: {codigo}"
+    for codigo in nao_deve_flagrar:
+        assert not _filtros_por_pii(codigo), f"falso positivo da guarda: {codigo}"
+
+
 def test_architecture_md_sem_placeholder_generico():
     """docs/architecture.md é um template genérico -- este teste falha se algum
     placeholder tipo '[e.g., ...]' ainda não foi preenchido com conteúdo real
@@ -522,7 +605,7 @@ def test_canario_e_encerrado_sempre_por_pr_nunca_por_push_em_main():
 _SECRETS_DE_AMBIENTE = re.compile(
     r"secrets\.(SUPABASE_URL|SUPABASE_SECRET_KEY|SUPABASE_DB_PASSWORD|SUPABASE_PROJECT_REF"
     r"|SUPABASE_ACCESS_TOKEN|INFOBIP_\w+|HF_TOKEN|HEALTHCHECKS_\w+"
-    r"|AZURE_STORAGE_CONNECTION_STRING_ESCRITA)\b"
+    r"|AZURE_STORAGE_CONNECTION_STRING_ESCRITA|AZURE_STORAGE_CONNECTION_STRING_EXCLUSAO)\b"
 )
 
 
@@ -540,6 +623,10 @@ def test_jobs_com_secret_de_ambiente_declaram_o_environment():
             assert ambiente, f"{arquivo.name}::{nome} lê secret de ambiente sem environment"
             if arquivo.name == "deploy.yml":
                 assert ambiente == "${{ github.ref_name == 'main' && 'production' || 'dev' }}"
+            elif arquivo.name == "lgpd.yml":
+                # A credencial de exclusão fica num environment só dela,
+                # restrito a `main` (ADR-009).
+                assert ambiente == {"name": "lgpd", "deployment": False}
             else:
                 assert ambiente == {"name": "production", "deployment": False}, (
                     f"{arquivo.name}::{nome}"
@@ -645,3 +732,71 @@ def test_prs_automaticos_pedem_revisao_sem_arriscar_o_ci():
         assert linhas[i + 1].strip().startswith("||"), (
             f"{nome}: pedido de revisão não pode falhar o passo"
         )
+
+
+# --- fronteira da base de treino (ADR-010) ---------------------------------------
+
+
+def _modulos_importados(caminho: Path) -> set[str]:
+    arvore = ast.parse(caminho.read_text(encoding="utf-8"))
+    nomes: set[str] = set()
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.Import):
+            nomes |= {alias.name for alias in no.names}
+        elif isinstance(no, ast.ImportFrom) and no.module:
+            nomes.add(no.module)
+            nomes |= {f"{no.module}.{alias.name}" for alias in no.names}
+    return nomes
+
+
+def test_export_de_treino_le_so_a_base_de_treino():
+    """O re-treino roda fora do Brasil com a mesma chave do banco da clínica
+    (decisão D1 do ADR-010): a fronteira que impede o dataset de receber dado
+    de quem não consentiu é o export só importar `db.repositorio_treino`."""
+    importados = _modulos_importados(REPO_ROOT / "src" / "export_treino.py")
+
+    assert "db.repositorio_treino" in importados
+    assert not {"db.repositories", "db.client"} & importados
+
+
+def test_schema_treino_so_e_acessado_por_rpc():
+    """O schema `treino` não é exposto ao PostgREST e o pseudônimo nunca vai
+    na URL: nenhum código chama `.schema(...)`, e `repositorio_treino` não
+    monta consulta com `.table(...)`."""
+    diretos = [
+        str(arquivo.relative_to(REPO_ROOT))
+        for arquivo in sorted((REPO_ROOT / "src").rglob("*.py"))
+        if ".schema(" in arquivo.read_text(encoding="utf-8")
+    ]
+    assert diretos == []
+    repositorio = (REPO_ROOT / "src" / "db" / "repositorio_treino.py").read_text(encoding="utf-8")
+    assert ".table(" not in repositorio
+
+
+def test_chave_do_pseudonimo_fica_fora_do_re_treino_e_do_canario():
+    """Quem recebe pseudônimos prontos não precisa recalculá-los a partir de
+    um CPF: a chave fica só no Space, no job D-2 e no .env do encarregado."""
+    for workflow in ("retrain.yml", "canario.yml", "ci.yml"):
+        texto = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+        assert "secrets.TREINO_CHAVE_PSEUDONIMO" not in texto, workflow
+    job_d2 = (WORKFLOWS / "job_d2.yml").read_text(encoding="utf-8")
+    assert "secrets.TREINO_CHAVE_PSEUDONIMO" in job_d2
+
+
+def test_so_o_workflow_de_purga_apaga_e_sem_input_que_identifique_o_titular():
+    """ADR-009: a SAS de exclusão fica só no `lgpd.yml`, num environment
+    próprio, num job que só roda em `main`. O disparo manual não tem input: o
+    repositório é público, e um identificador apareceria na página do run."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        texto = arquivo.read_text(encoding="utf-8")
+        assert ("secrets.AZURE_STORAGE_CONNECTION_STRING_EXCLUSAO" in texto) == (
+            arquivo.name == "lgpd.yml"
+        ), arquivo.name
+    lgpd = yaml.safe_load((WORKFLOWS / "lgpd.yml").read_text(encoding="utf-8"))
+    gatilhos = lgpd[True]  # o PyYAML lê a chave `on` como booleano
+    assert not (gatilhos.get("workflow_dispatch") or {}).get("inputs")
+    [job] = lgpd["jobs"].values()
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert lgpd["permissions"] == {"contents": "read"}
+    passos = " ".join(p.get("run", "") for p in job["steps"])
+    assert "dvc gc" not in passos

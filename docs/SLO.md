@@ -82,7 +82,7 @@ Os números do modelo vigente, **medidos** no fold de teste isolado e registrado
 |---|---|---|
 | PII em logs de aplicação | 0 ocorrências | Requisito absoluto do BRIEFING.md ("Sem PII em logs. Nunca.") e das notas da Camila. Como é verificado: ver §6.1. |
 | Dados sensíveis (Art. 5º/11 LGPD) em repouso | 100% criptografados | Dados de saúde são categoria especial mesmo sendo sintéticos no protótipo (`AVISO-DADOS-SINTETICOS.md`, `notas-camila.md`). Herdado do provedor gerenciado (Supabase, Azure Blob Storage), não implementado por nós — registrado como risco residual em [LGPD.md §9](LGPD.md). |
-| Retenção de dados derivados | `predicoes`/`mensagens_disparadas` purgadas em ≤ 365 dias | Princípio da necessidade (Art. 6º, III). Purga no job diário; política por tabela em [LGPD.md §5](LGPD.md). |
+| Retenção de dados derivados | `predicoes`/`mensagens_disparadas` purgadas em ≤ 90 dias | Princípio da necessidade (Art. 6º, III). Purga no job diário; política por tabela em [LGPD.md §5](LGPD.md). |
 
 ### 6.1 Como o "zero PII em log" é verificado (revisão de 2026-09-27)
 

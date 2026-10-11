@@ -72,3 +72,15 @@ Cons:
 ## Alternativas consideradas
 - Scheduler interno ao Space (ex.: `APScheduler` num processo de background do próprio container): descartado por depender do Space estar acordado no horário exato, o que o tier free não garante.
 - UI e job chamando a API FastAPI via HTTP mesmo internamente (em vez de import direto): descartado por adicionar uma dependência de rede/disponibilidade desnecessária dentro do mesmo processo/imagem, sem ganho de desacoplamento relevante neste estágio do projeto.
+
+### Emenda (2026-10-09) — remote do DVC migrado para Brazil South
+
+A revisão das transferências internacionais ([`LGPD.md`](../LGPD/LGPD.md) §4.1) mostrou que a base registrada em 2026-09-27 não se sustenta: desde a Resolução CD/ANPD nº 19/2024, cláusula contratual só ampara transferência se adotar o texto da ANPD num instrumento assinado, e a assinatura Azure for Students não oferece isso. O caminho de reversão descrito acima foi executado.
+
+**Decisão** (da autora): o remote do DVC passa a ficar numa conta de armazenamento nova, em **Brazil South**. O caminho acima ("criar um container em Brazil South") estava incompleto: a região é da **conta**, não do container, e não muda depois de criada. A migração exigiu conta nova, cópia dos blobs com `azcopy` e SAS novas.
+
+- Container e prefixo mantiveram os nomes, então `DVC_REMOTE_URL` e o `.dvc/config.local` não mudaram: a conta vem só da credencial (`BlobEndpoint`).
+- Redundância **LRS**: GRS copiaria os blobs para a região pareada, nos Estados Unidos, e recriaria a transferência.
+- A conta do Chile nunca guardou dado de titular: o dataset de treino só teve uma versão no histórico, igual à semente sintética. As chaves dela foram rotacionadas; a exclusão da conta está pendente.
+
+**O que continua fora do Brasil**: o processamento. O re-treino lê o dataset no runner do GitHub, e o job D-2 e o Space seguem como nas emendas anteriores. A base para eles passa a ser o consentimento do art. 33, VIII ([`LGPD.md`](../LGPD/LGPD.md) §4.2). A frase para o pitch muda para: **os dados são armazenados no Brasil e processados fora dele.**

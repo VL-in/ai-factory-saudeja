@@ -65,7 +65,7 @@ jobs:
           if [ "$EVENTO" != "pull_request" ]; then
             echo "integracao=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "origin/${BASE}...HEAD" \
-              | grep -qE '^(src/jobs/|src/db/|src/export_treino\.py|src/canario\.py|supabase/)'; then
+              | grep -qE '^(src/jobs/|src/db/|src/export_treino\.py|src/canario\.py|src/pseudonimo\.py|src/consentimento\.py|supabase/)'; then
             echo "integracao=true" >> "$GITHUB_OUTPUT"
           else
             echo "integracao=false" >> "$GITHUB_OUTPUT"

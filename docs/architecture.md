@@ -18,7 +18,7 @@ ai-factory-saudeja/
 │   └── AVISO-MODELO.md
 ├── docs/
 │   ├── BRIEFING.md
-│   ├── LGPD.md                        # base legal, retenção, direitos, riscos residuais
+│   ├── LGPD/                          # LGPD.md (base legal, retenção, direitos, riscos), política de privacidade e procedimento de revisão
 │   ├── SLA.md
 │   ├── SLO.md
 │   ├── adr/                           # Architecture Decision Records
@@ -37,13 +37,16 @@ ai-factory-saudeja/
 │   └── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 ├── supabase/
 │   ├── config.toml                    # config do Supabase CLI (supabase start, região local)
-│   └── migrations/                    # schema versionado (pacientes/agendamentos/predicoes/mensagens_disparadas, eventos_app, canarios_revertidos e índices)
+│   └── migrations/                    # schema versionado (pacientes/agendamentos/predicoes/mensagens_disparadas, eventos_app, canarios_revertidos, pedidos_titular, schema treino e índices)
 ├── src/
 │   ├── config_projeto.py              # REPO_ROOT + carregar_params(): caminhos independentes do CWD
 │   ├── logging_config.py              # log estruturado JSON + redação de PII
 │   ├── agenda_clinica.py              # grade de horários da clínica (cadastro do paciente)
-│   ├── db/                            # client.py (supabase-py) + repositories.py
-│   ├── export_treino.py               # desfechos reais do Supabase -> consultas-treino.csv
+│   ├── db/                            # client.py (supabase-py) + repositories.py (banco da clínica) + repositorio_treino.py (schema treino, só RPC)
+│   ├── pseudonimo.py                  # pseudônimos HMAC da base de treino (ADR-010)
+│   ├── documentos_legais.py           # Política de privacidade e Termos de uso exibidos na tela de agendamento
+│   ├── lgpd_purga.py                  # workflow de purga LGPD: pedidos do titular e retenção do DVC e da base de treino
+│   ├── export_treino.py               # base de treino (schema treino) -> consultas-treino.csv
 │   ├── contrato_features.py           # contrato de features: regra de negócio x domínio do treino
 │   ├── validate_data.py               # gate de dados do re-treino (stage 0)
 │   ├── retrain_gate.py                # gate de promoção do re-treino mensal (regressão relativa, piso e sanidade)
@@ -62,7 +65,7 @@ ai-factory-saudeja/
 │   ├── jobs/                          # inferencia_diaria.py: job D-2
 │   └── messaging/                     # client.py: interface + stub + InfobipClient (SMS real)
 ├── tests/                             # testes unitários e de integração do pipeline
-├── .github/                          # workflows/: ci.yml, deploy.yml, job_d2.yml, retrain.yml, canario.yml, dependency-review.yml; dependabot.yml
+├── .github/                          # workflows/: ci.yml, deploy.yml, job_d2.yml, retrain.yml, canario.yml, lgpd.yml, dependency-review.yml; dependabot.yml
 ├── .dvc/                              # configuração e cache do DVC (config versionado só com `core.remote`; URL/credencial fora do git)
 ├── dvc.yaml / dvc.lock                # definição e lock do pipeline DVC
 ├── params.yaml                        # hiperparâmetros do modelo
@@ -133,10 +136,12 @@ flowchart TB
             gate["Gate de re-treino — mensal<br/>retrain.yml + DVC/MLflow"]
             canario["Avaliação do canário <br/>canario.yml"]
             alerta["Alerta de observabilidade — diário<br/>alerta_observabilidade.yml"]
+            purga["Purga LGPD — diária<br/>lgpd.yml"]
             deploy["Deploy — push em main<br/>ci.yml + deploy.yml"]
         end
 
-        DB[("Supabase<br/>Postgres + Auth")]
+        DB[("Supabase<br/>Postgres + Auth<br/>schema public: dados da clínica")]
+        Treino[("Supabase — schema treino<br/>base de treino da SaúdeJá<br/>só RPC, pseudônimo HMAC")]
         Blob[("Azure Blob — remote do DVC<br/>model.pkl, canário e dataset")]
     end
 
@@ -144,6 +149,7 @@ flowchart TB
     Funcionario -->|"HTTPS, fila do dia e desfecho"| web
     web -->|"login e-mail/senha — Supabase Auth"| DB
     web -->|"SQL via supabase-py"| DB
+    web -->|"RPC: consentimento e consulta<br/>de quem autorizou o treino"| Treino
     web -->|"import em processo"| nucleo
     web -.->|"REST, só com PREDICT_BACKEND=api"| api
     api -->|"import em processo"| nucleo
@@ -154,7 +160,11 @@ flowchart TB
     Infobip -.->|"SMS"| Paciente
     jobd2 -->|"dvc pull com SAS de leitura"| Blob
 
-    gate -->|"export dos desfechos reais"| DB
+    jobd2 -->|"sincroniza desfecho e lembrete<br/>pelo pseudônimo da consulta"| Treino
+    gate -->|"export só da base de treino"| Treino
+    purga -->|"pedidos, eliminação e retenção"| Treino
+    purga -->|"eliminações confirmadas pela clínica"| DB
+    purga -->|"apaga versões expiradas e do titular<br/>(SAS de exclusão)"| Blob
     gate -->|"dvc push do desafiante"| Blob
     gate -->|"aprovado abre o canário (PR)"| canario
     canario -->|"guardrails por braço e<br/>reversões registradas"| DB
@@ -174,7 +184,7 @@ flowchart TB
 
 Name: App Web (Streamlit)
 
-Description: Interface única para dois perfis de usuário — Paciente (cadastro/agendamento) e Funcionário da clínica (consulta da fila do dia com probabilidade de no-show, disparo manual do job de inferência em modo dev, consulta ao LLM sobre um paciente específico). Organizada em abas (`st.tabs`) que crescem incrementalmente conforme backend/banco/job ficam prontos: "Testar predição" e "Explicabilidade" funcionam só com o modelo, sem banco; "Fila do dia" lê do Supabase — e é operável de fato desde 2026-09-28, quando a coluna "Paciente" deixou de mostrar o hash sha256 e passou a mostrar o nome ([ADR-007](adr/adr-007-nome-do-paciente.md)); "Dev: disparo manual" (visível só com `APP_ENV=dev`) chama o job D-2. Desde 2026-09-28 a visão do funcionário fica atrás de login com e-mail e senha no Supabase Auth (ver §7, Authorization); a do paciente segue aberta, porque é o autoagendamento.
+Description: Interface única para dois perfis de usuário — Paciente (cadastro/agendamento) e Funcionário da clínica (consulta da fila do dia com probabilidade de no-show, disparo manual do job de inferência em modo dev, consulta ao LLM sobre um paciente específico). Organizada em abas (`st.tabs`) que crescem incrementalmente conforme backend/banco/job ficam prontos: "Testar predição" e "Explicabilidade" funcionam só com o modelo, sem banco; "Fila do dia" lê do Supabase — e é operável de fato desde 2026-09-28, quando a coluna "Paciente" deixou de mostrar o hash sha256 e passou a mostrar o nome ([ADR-007](adr/adr-007-nome-do-paciente.md)); "Dev: disparo manual" (visível só com `APP_ENV=dev`) chama o job D-2. Desde 2026-09-28 a visão do funcionário fica atrás de login com e-mail e senha no Supabase Auth (ver §7, Authorization); a do paciente segue aberta, porque é o autoagendamento. Desde 2026-10-10 ([ADR-010](adr/adr-010-base-de-treino-separada.md)), a tela do paciente começa por uma caixa de **ciência** da Política de privacidade e dos Termos de uso, abertos em telas próprias por link, e um botão "Continuar" que libera o formulário; o agendamento não depende de consentimento, e a única autorização opcional, a do treino, leva a consulta também para a base de treino (§4.1). A visão do funcionário ganhou a aba "Pedidos do titular", onde a clínica registra, confirma ou recusa os pedidos sobre os dados dela e encaminha à SaúdeJá os pedidos sobre os dados de treino.
 
 Separação interna: `src/ui/app.py` é só apresentação; toda a lógica (montagem do payload, tradução de erro para mensagem, escolha do backend) vive em `src/ui/logic.py`, que não importa `streamlit` e é testado sem o runtime dele.
 
@@ -200,7 +210,7 @@ Deployment: Hugging Face Space (SDK Docker), junto com o Streamlit no mesmo cont
 
 Name: Job de inferência no-show
 
-Description: Executado diariamente às 08h17 de São Paulo (agendado externamente, ver ADR-005-a), busca no Supabase os agendamentos **de amanhã até D+2** ainda sem predição e sem lembrete — a janela de três dias recupera sozinha um dia em que o cron não rodou (desde 2026-09-29). Agendamento que não pode ser predito vai para quarentena sem interromper a fila, e o paciente recebe o lembrete mesmo assim, registrado como exceção (`enviado_sem_predicao`); todo lembrete enviado marca `agendamentos.lembrete_enviado`, que o re-treino usa contra o feedback loop. Datas e horas lidas do banco (UTC) são convertidas para o fuso da clínica antes de virar feature ou texto do SMS. Cada agendamento passa pelo **contrato de features** (`src/contrato_features.py`): fora da regra de negócio vai para a quarentena; fora do domínio do treino é predito e marcado (`predicoes.fora_do_dominio`). Roda a predição+explicação (import direto de `src/inference.py`, mesmo módulo usado pela API), grava o resultado na tabela `predicoes` e aciona o disparo de mensageria (5) quando a probabilidade ultrapassa o threshold de `params.yaml`. É também onde as duas políticas de retenção rodam (`eventos_app` e dados derivados, ver 4.1) -- o job já é diário, e agendador novo seria peça de infra a manter. Também exposto na aba "Dev: disparo manual" do Streamlit para acompanhamento sem depender de CLI/cron separados.
+Description: Executado diariamente às 08h17 de São Paulo (agendado externamente, ver ADR-005-a), busca no Supabase os agendamentos **de amanhã até D+2** ainda sem predição e sem lembrete — a janela de três dias recupera sozinha um dia em que o cron não rodou (desde 2026-09-29). Agendamento que não pode ser predito vai para quarentena sem interromper a fila, e o paciente recebe o lembrete mesmo assim, registrado como exceção (`enviado_sem_predicao`); todo lembrete enviado marca `agendamentos.lembrete_enviado`, que o re-treino usa contra o feedback loop. Datas e horas lidas do banco (UTC) são convertidas para o fuso da clínica antes de virar feature ou texto do SMS. Cada agendamento passa pelo **contrato de features** (`src/contrato_features.py`): fora da regra de negócio vai para a quarentena; fora do domínio do treino é predito e marcado (`predicoes.fora_do_dominio`). Roda a predição+explicação (import direto de `src/inference.py`, mesmo módulo usado pela API), grava o resultado na tabela `predicoes` e aciona o disparo de mensageria (5) quando a probabilidade ultrapassa o threshold de `params.yaml`. É também onde as duas políticas de retenção rodam (`eventos_app` e dados derivados, ver 4.1) -- o job já é diário, e agendador novo seria peça de infra a manter. Depois da fila, sincroniza o desfecho e o `lembrete_enviado` dos últimos 90 dias com a base de treino, pelo pseudônimo da consulta ([ADR-010](adr/adr-010-base-de-treino-separada.md)); a falha da sincronização vira aviso no resumo e se recupera na execução seguinte, sem afetar os lembretes. Também exposto na aba "Dev: disparo manual" do Streamlit para acompanhamento sem depender de CLI/cron separados.
 
 Technologies: Python (`src/jobs/inferencia_diaria.py`)
 
@@ -212,7 +222,7 @@ Deployment: roda **no runner do GitHub Actions** (`.github/workflows/job_d2.yml`
 
 Name: Gate de promoção de modelo
 
-Description: Re-treina o pipeline DVC/MLflow contra os desfechos reais que a clínica registra na "Fila do dia" (`src/export_treino.py`), compara `recall_1`/`f1_1`/`roc_auc` contra o campeão (`data/champion_metrics.json`, versionado em git) e só promove se não houver **regressão relativa** além da tolerância por métrica de `params.yaml` (`gate.tolerancia`, justificada no [SLO §3.1](SLO.md)). Os alvos absolutos do SLO §3 não são critério de promoção — o modelo vigente já os viola, e se fossem nada seria promovido.
+Description: Re-treina o pipeline DVC/MLflow contra os desfechos reais da **base de treino** (`src/export_treino.py`, só consultas de quem consentiu e com até 90 dias; [ADR-010](adr/adr-010-base-de-treino-separada.md)), compara `recall_1`/`f1_1`/`roc_auc` contra o campeão (`data/champion_metrics.json`, versionado em git) e só promove se não houver **regressão relativa** além da tolerância por métrica de `params.yaml` (`gate.tolerancia`, justificada no [SLO §3.1](SLO.md)). Os alvos absolutos do SLO §3 não são critério de promoção — o modelo vigente já os viola, e se fossem nada seria promovido.
 
 Além da regressão relativa, o gate tem um **piso absoluto** de `roc_auc` (0,60, contra o efeito catraca), a **suíte de sanidade** do desafiante (`src/sanidade_modelo.py`: saída em [0, 1], não constante, SHAP aditivo, política do contrato nos casos limítrofes) e a **taxa de disparo projetada** no fold de teste, que só avisa. Antes do treino, o stage `validate_data` barra o dataset por schema, regra de negócio e distribuição.
 
@@ -238,9 +248,9 @@ Purpose: armazena pacientes, agendamentos e resultado das predições/mensagens,
 
 **CPF segue nunca persistido**: `id_paciente_externo` é o hash sha256 dele, calculado em `src/ui/logic.py::_id_paciente_externo_de_cpf`. O ADR-007 fecha sete portas de saída para o nome (log, guarda de AST, `eventos_app`, export de treino, schema da API, select do job D-2 → Infobip, e o contexto do LLM), cada uma com teste travando. `idade` também não é mais coluna: guarda-se `data_nascimento`, e a idade usada como feature de inferência é sempre calculada sob demanda (`src/features.py::calcular_idade`), nunca persistida. Projeto na região São Paulo (`sa-east-1`) — dados permanecem no Brasil, sem transferência internacional (ver [ADR-005, emenda de 2026-09-19](adr/adr-005-integracoes-implicitas.md)). RLS habilitado em todas as tabelas, sem policies: acesso só via `SUPABASE_SECRET_KEY` (chave secreta do backend, ignora RLS).
 
-Key Schemas/Collections: `pacientes`, `agendamentos` (`lembrete_enviado` registra se o paciente foi lembrado — o re-treino precisa disso para não confundir "compareceu" com "compareceu porque foi lembrado"; desfecho só é gravado para consulta de hoje ou anterior; status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb`, `explicacao_texto` nullable — plug do LLM, ainda inativo — e `fora_do_dominio` nullable: a predição foi feita sobre um agendamento com algum campo que o modelo não viu no treino; `null` = anterior à checagem), `mensagens_disparadas` (auditoria de envio, SLA §6), `eventos_app` (observabilidade de aplicação, [ADR-006](adr/adr-006-observabilidade.md) — latência por predição, execução do job e erros; **sem nenhuma coluna de PII**, e o `detalhe jsonb` é restringido por allowlist em `src/observabilidade.py`, já que o grep de nome de coluna não alcança dentro de um jsonb), `canarios_revertidos` (ADR-008: `model_version` de canário revertido, motivo e data — o estado que tira o canário da fila do job antes de o PR de reversão chegar a `main`, e a trilha de auditoria dos rollbacks; sem PII, sem purga). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
+Key Schemas/Collections: **base de treino** no schema `treino` do mesmo projeto ([ADR-010](adr/adr-010-base-de-treino-separada.md)), controlada pela SaúdeJá e fechada: não é exposta ao PostgREST, nenhum papel tem acesso direto, e o único caminho são as funções `public.treino_*` (`src/db/repositorio_treino.py`), executáveis só pela chave secreta — `consultas_treino` (só de quem consentiu; idade na data da consulta, sem nome, telefone, CPF nem data de nascimento; o banco recusa a linha sem consentimento vigente), `eventos_consentimento` (só de inserção) e `pedidos_titular`, com titular e consulta identificados por pseudônimo HMAC com chave secreta (`src/pseudonimo.py`). O job D-2 sincroniza o desfecho e o `lembrete_enviado` para ela uma vez por dia. No banco da clínica: `pedidos_titular` (eliminação e revisão de decisão), `agendamentos.versao_documentos` (ciência da política e dos termos), `pacientes`, `agendamentos` (`lembrete_enviado` registra se o paciente foi lembrado — o re-treino precisa disso para não confundir "compareceu" com "compareceu porque foi lembrado"; desfecho só é gravado para consulta de hoje ou anterior; status inclui `no_show`, usado por `repositories.contar_no_shows_anteriores` para calcular `historico_noshow` automaticamente no próximo cadastro do mesmo paciente, em vez de ele autodeclarar), `predicoes` (inclui `explicacao_shap jsonb`, `explicacao_texto` nullable — plug do LLM, ainda inativo — e `fora_do_dominio` nullable: a predição foi feita sobre um agendamento com algum campo que o modelo não viu no treino; `null` = anterior à checagem), `mensagens_disparadas` (auditoria de envio, SLA §6), `eventos_app` (observabilidade de aplicação, [ADR-006](adr/adr-006-observabilidade.md) — latência por predição, execução do job e erros; **sem nenhuma coluna de PII**, e o `detalhe jsonb` é restringido por allowlist em `src/observabilidade.py`, já que o grep de nome de coluna não alcança dentro de um jsonb), `canarios_revertidos` (ADR-008: `model_version` de canário revertido, motivo e data — o estado que tira o canário da fila do job antes de o PR de reversão chegar a `main`, e a trilha de auditoria dos rollbacks; sem PII, sem purga). Schema versionado em `supabase/migrations/` (aplicado localmente via `supabase start`/`supabase db reset`, ver README).
 
-Retenção ([`LGPD.md` §5](LGPD.md)): `eventos_app` 90 dias (teto do free tier, ADR-006) e `predicoes`/`mensagens_disparadas` 365 dias (`RETENCAO_DADOS_DERIVADOS_DIAS`, necessidade — Art. 6º, III), as duas purgas penduradas no job diário, sem agendador novo. `pacientes`/`agendamentos` **não** têm purga automática: são registro do atendimento, cuja exclusão é decisão do controlador (§7).
+Retenção ([`LGPD.md` §5](LGPD/LGPD.md)): `eventos_app` 90 dias (teto do free tier, ADR-006) e `predicoes`/`mensagens_disparadas` 90 dias (`RETENCAO_DADOS_DERIVADOS_DIAS`, necessidade — Art. 6º, III; rastreabilidade e auditoria do modelo), as duas purgas penduradas no job diário, sem agendador novo. `pacientes`/`agendamentos` **não** têm purga automática: são registro do atendimento, cuja exclusão é decisão do controlador (§7).
 
 ### 4.2. Tracking de experimentos de ML
 
@@ -288,6 +298,7 @@ CI/CD Pipeline: GitHub Actions, com gates por camada do mais barato ao mais caro
 | `deploy.yml` | push em `dev` ou `main` (sem `docs/**`), `workflow_dispatch` | `ci` reutilizado → `dvc pull data/model.pkl` → guarda do campeão (`src/campeao.py`: sha e threshold) → em `main`, versão nova no CHANGELOG → **staging com lista fechada** (`scripts/montar_staging_space.py`) → `supabase db push` → `huggingface/hub-sync` do staging → espera o Space buildar no commit novo e responder na URL pública (`scripts/smoke_deploy.py space`) → em `main`, tag `vX.Y.Z` e Release no GitHub. Environment `dev` ou `production` conforme o branch, `concurrency` por branch sem cancelamento |
 | `job_d2.yml` | cron 08h17 SP, `workflow_dispatch` | job D-2 no runner (3.2.2) |
 | `retrain.yml` | cron dia 1 às 03h17 SP, `workflow_dispatch` | gate de re-treino (3.2.3); aprovado com campeão existente abre o canário |
+| `lgpd.yml` | cron 10h37 SP, `workflow_dispatch` sem input | purga LGPD (`src/lgpd_purga.py`): pedidos do titular sobre a base de treino e eliminações confirmadas pela clínica, expiração das versões do DVC e da base de treino; environment `lgpd`, restrito a `main`, com a única SAS que apaga ([ADR-009](adr/adr-009-tratamentos-lgpd-centralizados.md), [ADR-010](adr/adr-010-base-de-treino-separada.md)) |
 | `canario.yml` | cron 09h47 SP, `workflow_dispatch` (`acao=reverter` + motivo) | avalia o canário e abre o PR de promoção ou de reversão (3.2.3, [ADR-008](adr/adr-008-canario-do-modelo.md)) |
 | `dependency-review.yml` | PR | template do GitHub |
 
@@ -297,21 +308,21 @@ O CI é o primeiro job do deploy (`workflow_call`): o SHA testado é o deployado
 
 Monitoring & Logging: MLflow para métricas de ML (4.2); `eventos_app` no Supabase como fonte de verdade das métricas de aplicação (4.1/ADR-006); logging estruturado JSON com redação de PII (`src/logging_config.py`) para a aplicação. Sem Langfuse/APM dedicado no núcleo — reservado para tracing do LLM opcional.
 
-O filtro de redação é instalado por `configurar_logging()`, chamado uma vez em cada entrypoint (`lifespan` da API, `main()` do job, topo de `src/ui/app.py`), e mora no **handler** — aplicado a todos os handlers já presentes no processo, não só ao da raiz. Isso é o que faz a garantia valer para o log de terceiros (`uvicorn` põe `propagate=False` nos loggers dele; o Streamlit faz algo equivalente), que é o único que existe em volume em produção. Detalhe da decisão em [`LGPD.md` §8](LGPD.md).
+O filtro de redação é instalado por `configurar_logging()`, chamado uma vez em cada entrypoint (`lifespan` da API, `main()` do job, topo de `src/ui/app.py`), e mora no **handler** — aplicado a todos os handlers já presentes no processo, não só ao da raiz. Isso é o que faz a garantia valer para o log de terceiros (`uvicorn` põe `propagate=False` nos loggers dele; o Streamlit faz algo equivalente), que é o único que existe em volume em produção. Detalhe da decisão em [`LGPD.md` §8](LGPD/LGPD.md).
 
 ## 7. Security Considerations
 
-Authentication: chaves de serviço do Supabase (`SUPABASE_URL`/`SUPABASE_SECRET_KEY`), token do HF Space (`HF_TOKEN`, fine-grained, só no environment `production`) e credencial do remote DVC como secrets, nunca versionados — com duas SAS do container para o DVC, e nunca a account key: a de escrita (`AZURE_STORAGE_CONNECTION_STRING_ESCRITA`, permissões `rlcw`, que grava mas não apaga; o `w` é exigido porque o `adlfs` sobe com `overwrite=True`, e como o remote é endereçado por conteúdo, sobrescrever regrava os mesmos bytes) só no re-treino, o único que faz `dvc push`, e uma **SAS só de leitura** (`AZURE_STORAGE_CONNECTION_STRING_LEITURA`) no CI, no deploy, no job D-2 e no canário, porque o CI roda código de PR. Cada uma é assinada com uma chave diferente da conta, para que uma possa ser revogada sem derrubar a outra (`.env.example` documenta as variáveis, não os valores). No caso do DVC, **a própria URL do remote** (`DVC_REMOTE_URL`) também fica fora do git: `.dvc/config` é versionado e guarda só `[core] remote = azure`, porque a URL carrega o nome do container onde o dataset de treino está armazenado.
+Authentication: chaves de serviço do Supabase (`SUPABASE_URL`/`SUPABASE_SECRET_KEY`), token do HF Space (`HF_TOKEN`, fine-grained, só no environment `production`) e credencial do remote DVC como secrets, nunca versionados — com duas SAS do container para o DVC, e nunca a account key: a de escrita (`AZURE_STORAGE_CONNECTION_STRING_ESCRITA`, permissões `rlcw`, que grava mas não apaga; o `w` é exigido porque o `adlfs` sobe com `overwrite=True`, e como o remote é endereçado por conteúdo, sobrescrever regrava os mesmos bytes) só no re-treino, o único que faz `dvc push`, e uma **SAS só de leitura** (`AZURE_STORAGE_CONNECTION_STRING_LEITURA`) no CI, no deploy, no job D-2 e no canário, porque o CI roda código de PR. Uma terceira SAS, de exclusão sem escrita (`AZURE_STORAGE_CONNECTION_STRING_EXCLUSAO`, `rld`), fica só no workflow de purga (`lgpd.yml`), no environment `lgpd`, restrito a `main` ([ADR-009](adr/adr-009-tratamentos-lgpd-centralizados.md)). A chave do pseudônimo da base de treino (`TREINO_CHAVE_PSEUDONIMO`) fica só no Space e no job D-2. Cada uma é assinada com uma chave diferente da conta, para que uma possa ser revogada sem derrubar a outra (`.env.example` documenta as variáveis, não os valores). No caso do DVC, **a própria URL do remote** (`DVC_REMOTE_URL`) também fica fora do git: `.dvc/config` é versionado e guarda só `[core] remote = azure`, porque a URL carrega o nome do container onde o dataset de treino está armazenado.
 
-Data residency: o banco de produção fica em `sa-east-1` (São Paulo), mas o remote do DVC fica em **Chile Central** — ou seja, há transferência internacional de um dataset derivado de dados de saúde. O que limita a exposição é o conteúdo, não a região: o dataset exportado é pseudonimizado (`id_paciente` é hash sha256 de CPF) e nunca inclui telefone, nome ou CPF. Registrado como emenda de 2026-09-21 no [ADR-005](adr/adr-005-integracoes-implicitas.md); base legal fechada em [`LGPD.md` §4](LGPD.md) (Art. 33, II, "d" — cláusulas contratuais padrão do DPA do provedor), com o risco residual declarado ali e destinado ao slide de risco do pitch. A formulação correta para o pitch: "os dados não saem do Brasil" é verdade para o banco de produção e **falso** para o artefato de treino.
+Data residency: o banco de produção fica em `sa-east-1` (São Paulo) e o remote do DVC, em **Brazil South**, desde 2026-10-09 (conta de armazenamento com redundância LRS, que não replica para fora da região). Até essa data, o remote ficava em Chile Central, mas nunca guardou dado de titular ([ADR-005](adr/adr-005-integracoes-implicitas.md), emenda de 2026-10-09). O que continua fora do Brasil é o **processamento**: a aplicação no Hugging Face Space e o job D-2 e o re-treino no runner do GitHub Actions. A base legal desse processamento é o consentimento do Art. 33, VIII, ainda não coletado, porque as contas atuais não oferecem as cláusulas-padrão da ANPD ([`LGPD.md` §4](LGPD/LGPD.md)). A formulação correta para o pitch: "os dados são armazenados no Brasil e processados fora dele".
 
-Papéis LGPD: a **clínica-cliente é a controladora** (decide finalidade, tem a relação com o paciente, responde pelo prontuário) e a **SaúdeJá é operadora** (trata em nome dela, nos limites do contrato do SaaS) — ver [`LGPD.md` §1](LGPD.md). Isso é o que determina de quem é a base legal, por onde chega um pedido do Art. 18 e, concretamente, o que a retenção automática pode apagar: só dado **derivado** (`predicoes`, `mensagens_disparadas`, 365 dias, purga no job diário). `pacientes`/`agendamentos` nunca são purgados por iniciativa nossa.
+Papéis LGPD: a **clínica-cliente é a controladora** (decide finalidade, tem a relação com o paciente, responde pelo prontuário) e a **SaúdeJá é operadora** (trata em nome dela, nos limites do contrato do SaaS) — ver [`LGPD.md` §1](LGPD/LGPD.md). Isso é o que determina de quem é a base legal, por onde chega um pedido do Art. 18 e, concretamente, o que a retenção automática pode apagar: só dado **derivado** (`predicoes`, `mensagens_disparadas`, 90 dias, purga no job diário). `pacientes`/`agendamentos` nunca são purgados por iniciativa nossa.
 
-Authorization: a visão do funcionário exige e-mail e senha no **Supabase Auth** do mesmo projeto. O cadastro aberto fica desligado e as contas são criadas pelo administrador (`scripts/criar_funcionario.py`). O login só **prova identidade**: os dados continuam sendo lidos com a chave secreta do backend, o RLS segue sem policies e o token do Supabase é revogado logo após a verificação, sem ser guardado. A tentativa de login usa um client descartável, nunca o singleton de `src/db/client.py`, porque o `supabase-py` troca o `Authorization` do client pelo JWT do usuário depois do sign-in e isso esvaziaria as consultas do backend para todos os navegadores. A sessão fica em `st.session_state` (memória do servidor, sem cookie) e expira depois de 30 minutos sem interação. O que continua **sem** controle: não há RBAC (toda conta vê as mesmas abas), a visão do paciente é aberta e a API FastAPI não tem autenticação (`/predict` não lê o banco). Riscos residuais em [`LGPD.md` §9](LGPD.md).
+Authorization: a visão do funcionário exige e-mail e senha no **Supabase Auth** do mesmo projeto. O cadastro aberto fica desligado e as contas são criadas pelo administrador (`scripts/criar_funcionario.py`). O login só **prova identidade**: os dados continuam sendo lidos com a chave secreta do backend, o RLS segue sem policies e o token do Supabase é revogado logo após a verificação, sem ser guardado. A tentativa de login usa um client descartável, nunca o singleton de `src/db/client.py`, porque o `supabase-py` troca o `Authorization` do client pelo JWT do usuário depois do sign-in e isso esvaziaria as consultas do backend para todos os navegadores. A sessão fica em `st.session_state` (memória do servidor, sem cookie) e expira depois de 30 minutos sem interação. O que continua **sem** controle: não há RBAC (toda conta vê as mesmas abas), a visão do paciente é aberta e a API FastAPI não tem autenticação (`/predict` não lê o banco). Riscos residuais em [`LGPD.md` §9](LGPD/LGPD.md).
 
 Data Encryption: TLS em trânsito (HTTPS do HF Space, conexão do `supabase-py` ao Postgres gerenciado); repouso sob responsabilidade do Supabase gerenciado.
 
-Key Security Tools/Practices: minimização de PII por design no schema (4.1), pseudonimização do CPF antes da persistência, RLS sem policies em todas as tabelas, redação de PII em log (`src/logging_config.py`) mais a guarda estática sobre a AST de `src/` (`tests/test_coerencia_repo.py::test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii`), e `scripts/auditoria_lgpd.py` como varredura de log — rebaixada de evidência principal a ferramenta de verificação local, porque o log do Space é efêmero (ADR-006). `ErroEnvioInfobip` deixou de embutir o corpo da resposta da Infobip, que ecoava o telefone do destinatário. Base legal, retenção, direitos do titular e riscos residuais em [`docs/LGPD.md`](LGPD.md).
+Key Security Tools/Practices: minimização de PII por design no schema (4.1), pseudonimização do CPF antes da persistência, RLS sem policies em todas as tabelas, redação de PII em log (`src/logging_config.py`) mais a guarda estática sobre a AST de `src/` (`tests/test_coerencia_repo.py::test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii`), e `scripts/auditoria_lgpd.py` como varredura de log — rebaixada de evidência principal a ferramenta de verificação local, porque o log do Space é efêmero (ADR-006). `ErroEnvioInfobip` deixou de embutir o corpo da resposta da Infobip, que ecoava o telefone do destinatário. Base legal, retenção, direitos do titular e riscos residuais em [`docs/LGPD.md`](LGPD/LGPD.md).
 
 ## 8. Development & Testing Environment
 
@@ -361,6 +372,6 @@ Canário: modelo aprovado pelo gate que decide só uma fração da fila do job D
 
 Campeão: o modelo em produção, registrado em `data/champion_metrics.json`.
 
-LGPD: Lei Geral de Proteção de Dados (Brasil) — ver [`docs/LGPD.md`](LGPD.md).
+LGPD: Lei Geral de Proteção de Dados (Brasil) — ver [`docs/LGPD.md`](LGPD/LGPD.md).
 
-Controlador / Operador: quem decide a finalidade do tratamento (a clínica-cliente) e quem trata em nome dele (a SaúdeJá) — Art. 5º, VI e VII da LGPD. Ver [`LGPD.md` §1](LGPD.md).
+Controlador / Operador: quem decide a finalidade do tratamento (a clínica-cliente) e quem trata em nome dele (a SaúdeJá) — Art. 5º, VI e VII da LGPD. Ver [`LGPD.md` §1](LGPD/LGPD.md).

@@ -128,7 +128,12 @@ def inserir_agendamento(
     data_hora_agendada: datetime,
     dias_entre_agendamento_consulta: int,
     historico_noshow: int,
+    versao_documentos: str | None = None,
 ) -> Linha:
+    """`versao_documentos` (migration `20261010000000_pedidos_e_ciencia.sql`)
+    é a versão da Política de privacidade e dos Termos de uso que o paciente
+    declarou conhecer na tela. Prova de informação (art. 9º), não feature: o
+    export não a lê."""
     client = obter_client()
     resposta = (
         client.table("agendamentos")
@@ -140,6 +145,7 @@ def inserir_agendamento(
                 "data_hora_agendada": data_hora_agendada.isoformat(),
                 "dias_entre_agendamento_consulta": dias_entre_agendamento_consulta,
                 "historico_noshow": historico_noshow,
+                "versao_documentos": versao_documentos,
             }
         )
         .execute()
@@ -204,7 +210,7 @@ def buscar_agendamentos_d2_pendentes(data_referencia: date) -> list[Linha]:
 def marcar_lembrete_enviado(id_agendamento: str) -> None:
     """Grava no próprio agendamento que o paciente recebeu lembrete. Em
     `agendamentos`, e não só em `mensagens_disparadas`, por
-    dois motivos: `mensagens_disparadas` é purgada em 365 dias (LGPD §5), e o
+    dois motivos: `mensagens_disparadas` é purgada em 90 dias (LGPD §5), e o
     re-treino precisa do dado enquanto o agendamento existir -- o SMS é uma
     intervenção que muda o desfecho (feedback loop); e é o filtro que impede
     reenvio na janela de três dias do job."""
@@ -250,7 +256,7 @@ def gravar_predicao(
 
 
 def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> Linha:
-    """Auditoria de disparo (SLA §6) -- uma linha por agendamento processado
+    """Auditoria de disparo (`docs/LGPD/LGPD.md` §5) -- uma linha por agendamento processado
     pelo job D-2, enviado ou não: `status_envio` distingue
     'enviado' (probabilidade acima do threshold, lembrete pago disparado) de
     'nao_enviado' (abaixo do threshold, nenhum custo de mensageria), então a
@@ -276,7 +282,8 @@ def atualizar_status_agendamento(
 ) -> Linha:
     """Registra o desfecho real de um agendamento, acionado pela
     aba "Fila do dia". É a fonte do `historico_noshow` automático do cadastro
-    e, via `export_treino.py`, do dataset real do re-treino mensal.
+    e, para quem consentiu, do desfecho na base de treino (sincronizado pelo
+    job D-2, ADR-010), de onde sai o dataset real do re-treino mensal.
 
     **Só para consulta de hoje ou anterior**: marcar
     no-show numa consulta futura gravaria um rótulo que não aconteceu no
@@ -303,44 +310,38 @@ def atualizar_status_agendamento(
     return _primeira(resposta.data)
 
 
-_COLUNAS_AGENDAMENTO_PARA_EXPORT = (
-    "id, especialidade, distancia_km, data_hora_agendada, "
-    "dias_entre_agendamento_consulta, historico_noshow, status, lembrete_enviado, "
-    "pacientes(id_paciente_externo, data_nascimento, sexo)"
-)
+# Teto de linhas por resposta do PostgREST (`max_rows` do Supabase, 1000 por
+# padrão): acima disso a resposta vem cortada sem erro.
+_PAGINA = 1000
 
 
-def buscar_agendamentos_com_desfecho() -> list[Linha]:
-    """Agendamentos com desfecho real conhecido (`concluido` ou `no_show`,
-    registrado na "Fila do dia") -- fonte de dado real de `src/export_treino.py`. Sem
-    `telefone` no select, mesma minimização de PII de
-    `buscar_agendamentos_d2_pendentes`: o export nunca deve ter como emitir
-    essa coluna, mesmo por acidente."""
-    client = obter_client()
-    return _linhas(
-        client.table("agendamentos")
-        .select(_COLUNAS_AGENDAMENTO_PARA_EXPORT)
-        .in_("status", ["concluido", "no_show"])
-        .order("data_hora_agendada")
-        .execute()
-        .data
-    )
+def buscar_desfechos_para_treino(desde: datetime) -> list[Linha]:
+    """`id`, `status` e `lembrete_enviado` dos agendamentos a partir de
+    `desde` que já têm algo a levar para a base de treino: desfecho registrado
+    ou lembrete enviado. É a origem da sincronização diária do job D-2
+    (ADR-010), que transforma o `id` no pseudônimo da consulta e só atualiza
+    as linhas de quem consentiu. Nenhuma coluna do paciente: o pseudônimo vem
+    só do `id` do agendamento.
 
-
-def contar_consultas_sem_desfecho(antes_de: date) -> int:
-    """Consultas de antes de `antes_de` (dia civil da clínica) ainda
-    `agendado`: o desfecho não foi registrado. Completude de rótulo do
-    re-treino, medida no export porque só o banco a enxerga."""
-    inicio, _ = _intervalo_do_dia(antes_de)
-    resposta = (
-        obter_client()
-        .table("agendamentos")
-        .select("id", count=CountMethod.exact)
-        .eq("status", "agendado")
-        .lt("data_hora_agendada", inicio)
-        .execute()
-    )
-    return resposta.count or 0
+    Paginado: a janela de 90 dias de uma clínica passa facilmente do teto de
+    linhas de uma resposta, e uma página cortada deixaria desfechos sem
+    sincronizar sem nenhum erro."""
+    linhas: list[Linha] = []
+    while True:
+        pagina = _linhas(
+            obter_client()
+            .table("agendamentos")
+            .select("id, status, lembrete_enviado")
+            .gte("data_hora_agendada", desde.isoformat())
+            .or_("status.neq.agendado,lembrete_enviado.eq.true")
+            .order("id")
+            .range(len(linhas), len(linhas) + _PAGINA - 1)
+            .execute()
+            .data
+        )
+        linhas += pagina
+        if len(pagina) < _PAGINA:
+            return linhas
 
 
 # Lista explícita, em vez do `*, pacientes(*), predicoes(*)` que vigorava até
@@ -623,3 +624,126 @@ def registrar_canario_revertido(model_version: str, motivo: str) -> None:
         on_conflict="model_version",
         ignore_duplicates=True,
     ).execute()
+
+
+# --------------------------------------------------------------------------
+# pedidos do titular sobre os dados da clínica (ADR-009)
+#
+# Toda consulta filtra por uuid interno (`id_paciente`, `id` do pedido), nunca
+# por `id_paciente_externo`: o valor de um filtro viaja na URL e fica no log de
+# API do Supabase (LGPD.md §8.1). Consentimento não existe neste banco: o do
+# treino é da SaúdeJá e fica no schema `treino` (`db.repositorio_treino`).
+# --------------------------------------------------------------------------
+TIPOS_PEDIDO = ("eliminacao", "revisao_decisao")
+
+
+def eliminar_paciente(id_paciente: str) -> int:
+    """Eliminação a pedido confirmado da clínica (art. 18, VI): o cascade leva
+    agendamentos, predições e mensagens, e o `set null` tira o vínculo dos
+    pedidos. Só pelo uuid interno. A base de treino não é tocada: é outra
+    controladora, e o pedido sobre ela é registrado à parte. Devolve quantas
+    linhas de `pacientes` saíram (0 se já tinha sido eliminado)."""
+    linhas = (
+        obter_client().table("pacientes").delete().eq("id", id_paciente).execute().data
+    )
+    return len(linhas or [])
+
+
+def registrar_pedido(id_paciente: str, tipo: str) -> Linha:
+    """Pedido do titular, sempre `pendente`: só a clínica, controladora,
+    confirma (art. 39)."""
+    if tipo not in TIPOS_PEDIDO:
+        raise ValueError(f"tipo de pedido desconhecido: {tipo!r}")
+    return _primeira(
+        obter_client()
+        .table("pedidos_titular")
+        .insert({"id_paciente": id_paciente, "tipo": tipo})
+        .execute()
+        .data
+    )
+
+
+def paciente_do_agendamento(id_agendamento: str) -> str | None:
+    """`id_paciente` do agendamento, pelo código que a "Fila do dia" mostra
+    (uuid). É por ele que a equipe registra um pedido sem buscar o paciente
+    por CPF ou nome, que iriam na URL (LGPD.md §8.1)."""
+    linhas = _linhas(
+        obter_client()
+        .table("agendamentos")
+        .select("id_paciente")
+        .eq("id", id_agendamento)
+        .execute()
+        .data
+    )
+    return linhas[0]["id_paciente"] if linhas else None
+
+
+def pedidos_abertos() -> list[Linha]:
+    """Pedidos ainda sem desfecho (pendentes ou confirmados), do mais antigo
+    ao mais recente -- a aba de pedidos da equipe. Sem o vínculo com o
+    paciente: a tela mostra tipo, situação e datas, que bastam para decidir."""
+    return _linhas(
+        obter_client()
+        .table("pedidos_titular")
+        .select("id, tipo, situacao, criado_em, confirmado_em")
+        .in_("situacao", ["pendente", "confirmado_pela_clinica"])
+        .order("criado_em")
+        .execute()
+        .data
+    )
+
+
+def _mudar_situacao_do_pedido(id_pedido: str, de: str, para: dict[str, Any]) -> bool:
+    """Update condicionado à situação atual: confirmar um pedido já recusado,
+    ou executar um que a clínica não confirmou, não muda nada. Devolve se a
+    linha mudou -- o workflow conta pedidos executados por esse retorno."""
+    linhas = (
+        obter_client()
+        .table("pedidos_titular")
+        .update(para)
+        .eq("id", id_pedido)
+        .eq("situacao", de)
+        .execute()
+        .data
+    )
+    return bool(linhas)
+
+
+def confirmar_pedido(id_pedido: str) -> bool:
+    """`confirmado_em` é gravada pelo trigger, com o relógio do banco: o prazo
+    de 15 dias não pode depender do relógio de quem confirma."""
+    return _mudar_situacao_do_pedido(
+        id_pedido, de="pendente", para={"situacao": "confirmado_pela_clinica"}
+    )
+
+
+def recusar_pedido(id_pedido: str) -> bool:
+    """Recusado mantém o vínculo com o paciente: a clínica precisa provar a
+    quem respondeu a recusa (art. 18, § 4º). `recusado_em` vem do trigger."""
+    return _mudar_situacao_do_pedido(id_pedido, de="pendente", para={"situacao": "recusado"})
+
+
+def pedidos_confirmados() -> list[Linha]:
+    """Fila do workflow de purga: o que a clínica já confirmou e ainda não foi
+    executado, do mais antigo ao mais recente (o prazo de 15 dias corre)."""
+    return _linhas(
+        obter_client()
+        .table("pedidos_titular")
+        .select("id, id_paciente, tipo, confirmado_em")
+        .eq("situacao", "confirmado_pela_clinica")
+        .order("confirmado_em")
+        .execute()
+        .data
+    )
+
+
+def marcar_pedido_executado(id_pedido: str) -> bool:
+    """Executado e sem vínculo no mesmo update: o check da migration recusa um
+    pedido executado que ainda aponte para o paciente. Na eliminação o vínculo
+    já foi anulado pelo `set null`; na revisão de decisão é este update que o
+    anula. `executado_em` vem do trigger."""
+    return _mudar_situacao_do_pedido(
+        id_pedido,
+        de="confirmado_pela_clinica",
+        para={"situacao": "executado", "id_paciente": None},
+    )

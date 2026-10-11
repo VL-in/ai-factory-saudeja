@@ -9,7 +9,7 @@ explicação reaproveitando `src/inference.py`/`src/explain.py` -- os mesmos
 módulos que a API usa, sem lógica de predição duplicada --, grava
 o resultado em `predicoes` e decide o disparo de lembrete pago conforme o
 threshold de `params.yaml`, sempre registrando a decisão (enviado ou não)
-em `mensagens_disparadas` para auditoria (SLA §6).
+em `mensagens_disparadas` para auditoria (`docs/LGPD/LGPD.md` §5).
 
 Importa o modelo em processo (decisão do ADR-005 b), não via HTTP à API. Roda
 no runner do GitHub Actions (`.github/workflows/job_d2.yml`), não
@@ -29,6 +29,12 @@ automático se algum estiver violado -- e `processar_dia` manda a fração
 configurada da fila (por paciente) para o modelo em observação. Qualquer
 problema com o canário cai para 100% campeão, nunca para fila sem lembrete.
 A aba de dev roda só com o campeão.
+
+**Base de treino (ADR-010)**: só o caminho agendado sincroniza, uma vez por
+dia, o desfecho e o `lembrete_enviado` dos agendamentos para as linhas de
+treino de quem consentiu (`sincronizar_treino`). A "Fila do dia" e o próprio
+job continuam gravando só no banco da clínica. Uma sincronização perdida se
+recupera na execução seguinte, e a falha dela nunca afeta a fila de lembretes.
 """
 import argparse
 import logging
@@ -47,11 +53,14 @@ import campeao  # noqa: E402
 import canario  # noqa: E402
 import contrato_features  # noqa: E402
 import db.repositories as repositories  # noqa: E402
+import db.repositorio_treino as repositorio_treino  # noqa: E402
 import inference  # noqa: E402
 import observabilidade  # noqa: E402
+import pseudonimo  # noqa: E402
 from config_projeto import (  # noqa: E402
     caminho_de_env,
     hoje_na_clinica,
+    janela_treino_dias,
     para_horario_da_clinica,
     retencao_dados_derivados_dias,
 )
@@ -361,12 +370,17 @@ def _registrar_quarentena(
 def _mensagem_de_lembrete(agendamento: dict[str, Any]) -> str:
     """Texto do SMS, com data e hora no fuso da clínica. Se o próprio
     agendamento estiver malformado (é o caso da quarentena), cai numa mensagem
-    genérica em vez de deixar de lembrar o paciente."""
+    genérica em vez de deixar de lembrar o paciente.
+
+    Sem a especialidade, de propósito (`docs/LGPD/LGPD.md` §2.1): ela é dado
+    sensível, e o texto fica no log da Infobip (3 meses por padrão) e na tela
+    bloqueada do celular, visível a quem estiver perto. Data e hora bastam para
+    o paciente reconhecer a consulta."""
     try:
         quando = para_horario_da_clinica(agendamento["data_hora_agendada"])
         return (
-            f"Olá! Confirmamos sua consulta de {agendamento['especialidade']} em "
-            f"{quando:%d/%m/%Y às %H:%M}. Poderá comparecer?"
+            f"Olá! Confirmamos sua consulta em {quando:%d/%m/%Y às %H:%M}. "
+            "Poderá comparecer?"
         )
     except Exception:
         return "Olá! Lembramos da sua consulta agendada nos próximos dias. Poderá comparecer?"
@@ -378,7 +392,7 @@ def _enviar_lembrete(
     resultado: dict[str, Any],
     status: str,
 ) -> None:
-    """Envia o lembrete, registra a auditoria (SLA §6) e marca
+    """Envia o lembrete, registra a auditoria (`docs/LGPD/LGPD.md` §5) e marca
     `agendamentos.lembrete_enviado` -- o registro que o re-treino usa para não
     confundir "compareceu" com "compareceu porque foi lembrado", e que impede
     reenvio na janela de três dias do job."""
@@ -436,7 +450,7 @@ def purgar_dados_derivados_antigos() -> dict[str, int]:
 
     Roda junto da purga de `eventos_app` e falha do mesmo jeito: sem derrubar o
     job. Perder a limpeza de um dia é irrelevante perto de perder a fila de
-    lembretes, e a janela (365 dias) tem folga de sobra para uma execução
+    lembretes, e a janela (90 dias) tem folga de sobra para uma execução
     perdida não virar retenção indevida."""
     try:
         limite = observabilidade.inicio_da_janela(
@@ -448,6 +462,39 @@ def purgar_dados_derivados_antigos() -> dict[str, int]:
             "purga de dados derivados falhou", extra={"excecao": exc.__class__.__name__}
         )
         return {}
+
+
+def sincronizar_treino() -> int | None:
+    """Leva o desfecho e o `lembrete_enviado` dos agendamentos da janela de
+    treino para as linhas da base de treino (ADR-010, decisão D5). Devolve
+    quantas linhas mudaram, ou `None` quando não rodou -- o que vira aviso no
+    resumo, não falha: a próxima execução refaz a janela inteira.
+
+    Um caminho só, idempotente: cobre o desfecho registrado na "Fila do dia",
+    a correção dele, o cancelamento e o lembrete enviado por este mesmo job,
+    sem escrita dupla na tela. O lote leva todos os agendamentos com algo a
+    sincronizar, com o pseudônimo calculado do `id`; a RPC só atualiza os que
+    têm linha de treino, então o banco da clínica nunca precisa saber quem
+    consentiu."""
+    if not pseudonimo.chave_configurada():
+        logger.warning("sincronização do treino não rodou: chave do pseudônimo ausente")
+        return None
+    try:
+        desde = observabilidade.inicio_da_janela(horas=24 * janela_treino_dias())
+        itens = [
+            {
+                "id_consulta": pseudonimo.id_consulta(a["id"]),
+                "status": a["status"],
+                "lembrete_enviado": bool(a["lembrete_enviado"]),
+            }
+            for a in repositories.buscar_desfechos_para_treino(desde)
+        ]
+        return repositorio_treino.sincronizar_desfechos(itens)
+    except Exception as exc:
+        logger.warning(
+            "sincronização do treino falhou", extra={"excecao": exc.__class__.__name__}
+        )
+        return None
 
 
 # --------------------------------------------------------------------------
@@ -564,6 +611,7 @@ def _publicar_resumo(
                 "falhas_de_envio",
             )
         ),
+        f"| sincronizados_treino | {resultado.get('sincronizados_treino', '—')} |",
         "",
         *_linhas_do_canario(resultado, canario_version),
         *(f"- **falha:** {f}" for f in falhas),
@@ -607,12 +655,20 @@ def main(argv: list[str] | None = None) -> int:
     resultado = processar_dia(contexto_canario=preparacao.contexto)
     purgados = purgar_eventos_antigos()
     derivados_purgados = purgar_dados_derivados_antigos()
+    # Depois da fila: o `lembrete_enviado` de hoje já vai junto.
+    sincronizados_treino = sincronizar_treino()
     # Processo curto: sem o flush, os eventos enfileirados morreriam junto com
     # o processo antes de o worker daemon gravá-los (ver observabilidade.flush).
     observabilidade.flush()
     falhas, avisos = pos_checagem(resultado)
     falhas += preparacao.falhas
     avisos += preparacao.avisos
+    if sincronizados_treino is None:
+        avisos.append(
+            "sincronização do desfecho com a base de treino não rodou -- a próxima "
+            "execução refaz a janela; se repetir, confira TREINO_CHAVE_PSEUDONIMO e o "
+            "schema `treino`"
+        )
     if preparacao.contexto is not None:
         falhas += canario.avaliar_execucao(
             preparacao.contexto, resultado.get("por_braco", {}), params=inference.PARAMS
@@ -638,12 +694,13 @@ def main(argv: list[str] | None = None) -> int:
             "erros": len(resultado["erros"]),
             "eventos_purgados": purgados,
             "derivados_purgados": derivados_purgados,
+            "sincronizados_treino": sincronizados_treino,
             "canario": preparacao.contexto.model_version if preparacao.contexto else None,
             "por_braco": resultado.get("por_braco"),
         },
     )
     _publicar_resumo(
-        resultado,
+        {**resultado, "sincronizados_treino": sincronizados_treino},
         falhas,
         avisos,
         model_version,
