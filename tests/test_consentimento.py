@@ -1,5 +1,6 @@
 """
-SaúdeJá — regra do consentimento vigente (src/consentimento.py, ADR-009).
+SaúdeJá — regra do consentimento vigente do treino (src/consentimento.py,
+ADR-009, ADR-010).
 
 Sem banco: os eventos chegam como o PostgREST os devolve, com `registrado_em`
 em texto ISO 8601 e a fração de segundo sem os zeros finais.
@@ -15,7 +16,6 @@ from consentimento import (
     ACAO_REVOGADO,
     CONSENTIDO_POR_RESPONSAVEL,
     CONSENTIDO_POR_TITULAR,
-    FINALIDADE_TRANSFERENCIA,
     FINALIDADE_TREINO,
     FINALIDADES,
     TEXTOS_DO_TERMO,
@@ -36,7 +36,16 @@ def _evento(finalidade, acao, registrado_em, versao="2026-10-10"):
     }
 
 
-def test_sem_evento_nao_ha_consentimento_em_nenhuma_finalidade():
+def test_o_treino_e_a_unica_finalidade_com_consentimento():
+    """O agendamento, a predição e o lembrete fazem parte do serviço da
+    clínica (art. 7º, V; art. 11, II, f): só o treino depende de consentimento
+    (ADR-010). A transferência internacional deixou de ser finalidade."""
+    assert FINALIDADES == (FINALIDADE_TREINO,)
+    with pytest.raises(ValueError):
+        tem_consentimento([], "transferencia_internacional")
+
+
+def test_sem_evento_nao_ha_consentimento():
     """Ausência de evento é ausência de consentimento (art. 8º, § 2º): o
     paciente cadastrado antes da coleta não entra no treino."""
     vigentes = consentimentos_vigentes([])
@@ -46,12 +55,11 @@ def test_sem_evento_nao_ha_consentimento_em_nenhuma_finalidade():
 
 
 def test_concessao_vigente_devolve_o_proprio_evento():
-    concessao = _evento(FINALIDADE_TRANSFERENCIA, ACAO_CONCEDIDO, "2026-10-10T12:00:00+00:00")
+    concessao = _evento(FINALIDADE_TREINO, ACAO_CONCEDIDO, "2026-10-10T12:00:00+00:00")
 
     vigentes = consentimentos_vigentes([concessao])
 
-    assert vigentes[FINALIDADE_TRANSFERENCIA] == concessao
-    assert vigentes[FINALIDADE_TREINO] is None
+    assert vigentes[FINALIDADE_TREINO] == concessao
 
 
 def test_revogacao_depois_da_concessao_anula():
@@ -77,32 +85,18 @@ def test_nova_concessao_depois_da_revogacao_volta_a_valer_com_a_versao_nova():
     assert vigente["versao_termo"] == "v2"
 
 
-def test_finalidades_sao_independentes():
-    """Revogar o treino não tira a transferência (LGPD.md §3): o paciente
-    continua atendido pelo sistema, só sai do dataset de treino."""
+def test_o_vigente_nao_depende_da_ordem_em_que_os_eventos_chegam():
+    """A leitura dos eventos não garante ordem entre eles. Em qualquer ordem,
+    o resultado tem de ser o mesmo."""
     eventos = [
         _evento(FINALIDADE_TREINO, ACAO_CONCEDIDO, "2026-10-10T12:00:00+00:00"),
-        _evento(FINALIDADE_TRANSFERENCIA, ACAO_CONCEDIDO, "2026-10-10T12:00:00+00:00"),
         _evento(FINALIDADE_TREINO, ACAO_REVOGADO, "2026-10-11T12:00:00+00:00"),
-    ]
-
-    assert tem_consentimento(eventos, FINALIDADE_TRANSFERENCIA)
-    assert not tem_consentimento(eventos, FINALIDADE_TREINO)
-
-
-def test_o_vigente_nao_depende_da_ordem_em_que_os_eventos_chegam():
-    """A leitura em lote do export não garante ordem entre os eventos de um
-    paciente. Em qualquer ordem, o resultado tem de ser o mesmo."""
-    eventos = [
-        _evento(FINALIDADE_TRANSFERENCIA, ACAO_CONCEDIDO, "2026-10-10T12:00:00+00:00"),
-        _evento(FINALIDADE_TRANSFERENCIA, ACAO_REVOGADO, "2026-10-11T12:00:00+00:00"),
-        _evento(FINALIDADE_TREINO, ACAO_REVOGADO, "2026-10-10T12:00:00+00:00"),
         _evento(FINALIDADE_TREINO, ACAO_CONCEDIDO, "2026-10-12T08:00:00+00:00"),
     ]
     for ordem in itertools.permutations(eventos):
-        vigentes = consentimentos_vigentes(ordem)
-        assert vigentes[FINALIDADE_TRANSFERENCIA] is None
-        assert vigentes[FINALIDADE_TREINO] is not None
+        vigente = consentimentos_vigentes(ordem)[FINALIDADE_TREINO]
+        assert vigente is not None
+        assert vigente["registrado_em"].startswith("2026-10-12")
 
 
 def test_offsets_diferentes_sao_comparados_pelo_instante():
@@ -153,7 +147,7 @@ def test_fracao_de_segundo_cortada_pelo_postgrest_e_aceita():
     assert consentimentos_vigentes([concessao])[FINALIDADE_TREINO] == concessao
 
 
-# --- coleta na tela de agendamento (Passo 8.6, peça 3) --------------------------
+# --- coleta na tela de agendamento (ADR-010) --------------------------------------
 
 _TODAS_MARCADAS = dict.fromkeys(FINALIDADES, True)
 _NENHUM_VIGENTE = dict.fromkeys(FINALIDADES)
@@ -172,11 +166,7 @@ def test_paciente_novo_que_marca_tudo_concede_tudo_na_ordem_das_finalidades():
 def test_caixa_desmarcada_sem_consentimento_vigente_nao_grava_nada():
     """Recusa de quem nunca consentiu não é evento: ausência de evento já é
     ausência de consentimento."""
-    marcadas = {FINALIDADE_TRANSFERENCIA: True, FINALIDADE_TREINO: False}
-
-    assert decisoes_de_consentimento(_NENHUM_VIGENTE, marcadas) == [
-        (FINALIDADE_TRANSFERENCIA, ACAO_CONCEDIDO)
-    ]
+    assert decisoes_de_consentimento(_NENHUM_VIGENTE, {FINALIDADE_TREINO: False}) == []
 
 
 def test_consentimento_vigente_na_versao_atual_e_caixa_marcada_nao_repete_o_evento():
@@ -215,10 +205,10 @@ def test_finalidade_ausente_das_caixas_conta_como_desmarcada():
 
 
 def test_caixa_de_finalidade_desconhecida_e_erro():
-    """Mesma regra de `tem_consentimento`: uma chave errada ("treinos") ou o
-    lembrete, que não é finalidade de consentimento, não pode virar "caixa
-    desmarcada" e revogar em silêncio."""
-    for chave in ("treinos", "lembrete"):
+    """Mesma regra de `tem_consentimento`: uma chave errada ("treinos"), o
+    lembrete ou a transferência, que não são finalidade de consentimento, não
+    podem virar "caixa desmarcada" e revogar em silêncio."""
+    for chave in ("treinos", "lembrete", "transferencia_internacional"):
         with pytest.raises(ValueError):
             decisoes_de_consentimento(_NENHUM_VIGENTE, {chave: True})
 
@@ -241,8 +231,12 @@ def test_consentido_por_segue_a_idade_no_dia_do_consentimento(data_nascimento, e
 # sha256 dos textos de cada versão do termo. Mudou um texto? Suba VERSAO_TERMO e
 # acrescente a versão nova aqui -- nunca troque o hash de uma versão existente:
 # eventos já gravados com ela apontariam para um texto que o paciente não leu.
+#
+# A versão 2026-10-10 nunca foi publicada: o hash dela foi trocado quando o
+# termo da transferência saiu e o do treino ganhou o aviso do exterior (ADR-010),
+# e de novo quando o termo do treino foi encurtado.
 _HASH_DOS_TEXTOS_POR_VERSAO = {
-    "2026-10-10": "f576ccea2b336173ce00eddad4b46f22135860314a535d99680dec1d5f9df2e1",
+    "2026-10-10": "702b048bda4ebf5e068f91fdb8605e95358bb0e54b59330ab10635a2a7e85744",
 }
 
 

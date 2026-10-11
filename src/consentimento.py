@@ -1,25 +1,28 @@
 """
-SaúdeJá — regras do consentimento (ADR-009), sem banco.
+SaúdeJá — regras do consentimento do treino (ADR-009, ADR-010), sem banco.
 
-O consentimento é registrado em `eventos_consentimento`, só de inserção
-(migration `20261010000000_consentimento_e_pedidos.sql`): cada concessão ou
-revogação é um evento, e o consentimento vigente é o último evento de cada
-finalidade. Este módulo calcula o vigente a partir dos eventos já lidos, para
-que a mesma regra sirva à consulta de um paciente (`repositories.
-eventos_consentimento_do_paciente`) e ao lote do export de treino.
+Só uma finalidade depende de consentimento: o uso dos desfechos reais para
+aprimorar o modelo (art. 11, I), de que a SaúdeJá é controladora. O
+agendamento, a predição e o lembrete fazem parte do serviço da clínica (art.
+7º, V; art. 11, II, f) e não dependem de consentimento nenhum: recusar o treino
+não impede o agendamento.
 
-Duas finalidades dependem de consentimento: o treino com desfechos reais
-(art. 11, I) e a transferência internacional (art. 33, VIII). O lembrete por
-SMS **não**: só leva telefone, data e hora, e se apoia na execução do contrato
-do paciente com a clínica (art. 7º, V; LGPD.md, seção 3), sem caixa na tela e
-sem filtro no job D-2.
+O consentimento é registrado em `treino.eventos_consentimento`, só de inserção
+(migration `20261011000000_schema_treino.sql`), chaveado pelo pseudônimo do
+titular (`src/pseudonimo.py`): cada concessão ou revogação é um evento, e o
+consentimento vigente é o último evento. Este módulo calcula o vigente a partir
+dos eventos já lidos (`db.repositorio_treino.eventos_do_titular`).
 
 Ausência de evento é ausência de consentimento: o consentimento é manifestação
 afirmativa do titular (LGPD, art. 5º, XII), e o ônus de prová-lo é do
 controlador (art. 8º, § 2º).
 
-O consentimento **não é feature do modelo**: entra como filtro do export de
-treino, nunca como coluna do dataset.
+O consentimento **não é feature do modelo**: decide se a consulta entra na base
+de treino, nunca vira coluna do dataset.
+
+A caixa de **ciência** da Política de privacidade e dos Termos de uso, antes do
+formulário, não é consentimento: é informação (art. 9º). Ela fica em
+`documentos_legais`.
 """
 import re
 from collections.abc import Iterable, Mapping
@@ -29,8 +32,7 @@ from typing import Any
 from features import calcular_idade
 
 FINALIDADE_TREINO = "treino"
-FINALIDADE_TRANSFERENCIA = "transferencia_internacional"
-FINALIDADES = (FINALIDADE_TREINO, FINALIDADE_TRANSFERENCIA)
+FINALIDADES = (FINALIDADE_TREINO,)
 
 ACAO_CONCEDIDO = "concedido"
 ACAO_REVOGADO = "revogado"
@@ -44,7 +46,7 @@ CONSENTIDO_POR = (CONSENTIDO_POR_TITULAR, CONSENTIDO_POR_RESPONSAVEL)
 # Criança, para o ECA (art. 2º), é quem tem até 12 anos incompletos, e o
 # art. 14, § 1º, da LGPD exige o consentimento de um dos pais ou do responsável
 # só para ela. Adolescente consente como titular. A regra precisa de validação
-# jurídica (Passo 8.6, pendências).
+# jurídica (LGPD.md, subseção 9.2, item 17).
 IDADE_MINIMA_PARA_CONSENTIR = 12
 
 # Versão do texto dos termos exibidos na tela de agendamento (abaixo). Muda
@@ -54,50 +56,24 @@ IDADE_MINIMA_PARA_CONSENTIR = 12
 # mudar sem a versão mudar junto.
 VERSAO_TERMO = "2026-10-10"
 
-# --- Textos dos termos, versão VERSAO_TERMO -------------------------------------
-# São a prova do que o paciente leu: o evento guarda só a versão, e é esta
-# versão que diz qual texto estava na tela. Linguagem simples, sem jargão
-# técnico (revisão de UX, P1), e em nome do paciente ou do responsável legal.
-
-# Informação prévia da transferência (LGPD.md, subseção 4.2, alínea b): países,
-# provedores, dados e finalidade de cada um, e a ausência das cláusulas-padrão.
-INFORMACAO_TRANSFERENCIA = (
-    "**Os dados deste cadastro são processados fora do Brasil.** Eles ficam "
-    "guardados no Brasil, mas dois fornecedores os processam em servidores "
-    "fora do país, em geral nos Estados Unidos:\n\n"
-    "- **Hugging Face**: hospeda esta tela e a tela da equipe da clínica. Recebe "
-    "tudo o que for digitado aqui (nome, CPF antes de virar código, telefone, "
-    "data de nascimento, sexo e dados da consulta) para fazer o agendamento.\n"
-    "- **GitHub**: todo dia, calcula quais consultas a clínica deve confirmar "
-    "com antecedência e envia o lembrete. Recebe data de nascimento, sexo, "
-    "dados da consulta, histórico de comparecimento e telefone. Se o "
-    "aprimoramento do sistema for autorizado, recebe também o resultado das "
-    "consultas e o código gerado a partir do CPF. Nunca recebe nome nem CPF.\n\n"
-    "Os dois não guardam os dados depois do processamento. Eles não adotaram "
-    "as cláusulas-padrão aprovadas pela Autoridade Nacional de Proteção de "
-    "Dados (ANPD), por isso o processamento fora do Brasil só acontece com "
-    "autorização (LGPD, art. 33, VIII).\n\n"
-    "Sem essa autorização, não é possível agendar por esta tela: a clínica faz "
-    "o agendamento por telefone ou no balcão, e o atendimento não é afetado. "
-    "Quem autorizar e mudar de ideia depois pede à clínica, e o cadastro neste "
-    "sistema é eliminado."
-)
-TERMO_TRANSFERENCIA = (
-    "Eu, paciente ou responsável legal, autorizo o processamento dos dados deste "
-    "cadastro fora do Brasil, pelo Hugging Face e pelo GitHub, como descrito acima."
-)
+# --- Texto do termo, versão VERSAO_TERMO ---------------------------------------
+# É a prova do que o paciente leu: o evento guarda só a versão, e é esta versão
+# que diz qual texto estava na tela. Linguagem simples, sem jargão técnico
+# (revisão de UX, P1). Curto, a pedido da autora (2026-10-10): o detalhe --
+# base separada, provedor, país, efeito da caixa desmarcada, agendamento de
+# criança -- está nos Termos de uso, seções 2 e 5, e na Política.
+#
+# Uma caixa só para o treino, com o processamento fora do Brasil em destaque no
+# próprio termo (decisão D3 do ADR-010): o re-treino roda no GitHub, fora do
+# país, e só recebe dados de quem marcou esta caixa. Precisa de validação
+# jurídica quanto ao "distinguindo claramente" do art. 33, VIII.
 TERMO_TREINO = (
-    "Eu, paciente ou responsável legal, autorizo o uso do resultado das consultas "
-    "do paciente (se compareceu ou faltou) e dos dados da consulta, sem nome, "
-    "telefone nem CPF, para aprimorar o sistema que ajuda clínicas a confirmar "
-    "consultas. Esse aprimoramento é feito pelo SaúdeJá e beneficia também "
-    "outras clínicas que usam o sistema."
+    "Autorizo o SaúdeJá a usar os dados das consultas do paciente, incluindo se "
+    "ele compareceu ou faltou, para melhorar o sistema de lembretes. Nome, "
+    "telefone e CPF não são usados. **Esse uso é feito fora do Brasil.** Posso "
+    "cancelar a autorização quando quiser, e recusar não impede o agendamento."
 )
-TEXTOS_DO_TERMO = (INFORMACAO_TRANSFERENCIA, TERMO_TRANSFERENCIA, TERMO_TREINO)
-
-# Prazo em que a prova sobrevive à eliminação do paciente (ADR-009). O mesmo
-# valor está fixo no trigger da migration, que recusa apagar antes dele.
-RETENCAO_PROVA_APOS_ELIMINACAO_DIAS = 365
+TEXTOS_DO_TERMO = (TERMO_TREINO,)
 
 Evento = Mapping[str, Any]
 
@@ -150,7 +126,7 @@ def _instante(registrado_em: str) -> datetime:
 
 
 def tem_consentimento(eventos: Iterable[Evento], finalidade: str) -> bool:
-    """Atalho para os filtros do job D-2 e do export."""
+    """Atalho para a etapa de treino do agendamento e para os testes."""
     if finalidade not in FINALIDADES:
         raise ValueError(f"finalidade desconhecida: {finalidade!r}")
     return consentimentos_vigentes(eventos)[finalidade] is not None

@@ -429,18 +429,30 @@ def test_marca_fora_do_dominio_faz_round_trip_ate_a_fila(db):
 
 
 @pytest.mark.integracao
-def test_conta_consultas_passadas_ainda_sem_desfecho(db):
-    """Completude de rótulo do re-treino: só conta consulta de
-    antes de hoje ainda `agendado` -- a de hoje ainda pode receber desfecho, e
-    a que já tem desfecho não é lacuna."""
+def test_sincronizacao_do_treino_le_so_o_que_tem_desfecho_ou_lembrete(db, monkeypatch):
+    """Origem da sincronização diária do job D-2 (ADR-010): o agendamento ainda
+    sem desfecho e sem lembrete não tem nada a levar; a consulta fora da janela
+    também não. A paginação é exercitada com uma página de 1 linha."""
     import db.repositories as repositories
 
-    _criar_paciente_e_agendamento(repositories, dias=-3, id_externo="EXT-ROT-1")
-    _, com_desfecho = _criar_paciente_e_agendamento(repositories, dias=-2, id_externo="EXT-ROT-2")
-    repositories.atualizar_status_agendamento(com_desfecho["id"], "concluido")
-    _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-ROT-3")
+    monkeypatch.setattr(repositories, "_PAGINA", 1)
+    _criar_paciente_e_agendamento(repositories, dias=-3, id_externo="EXT-SYNC-1")  # sem nada
+    _, com_desfecho = _criar_paciente_e_agendamento(repositories, dias=-2, id_externo="EXT-SYNC-2")
+    repositories.atualizar_status_agendamento(com_desfecho["id"], "no_show")
+    _, lembrado = _criar_paciente_e_agendamento(repositories, dias=1, id_externo="EXT-SYNC-3")
+    repositories.marcar_lembrete_enviado(lembrado["id"])
+    _, antigo = _criar_paciente_e_agendamento(repositories, dias=-10, id_externo="EXT-SYNC-4")
+    repositories.atualizar_status_agendamento(antigo["id"], "concluido")
 
-    assert repositories.contar_consultas_sem_desfecho(hoje_na_clinica()) == 1
+    desde = datetime.combine(
+        hoje_na_clinica() - timedelta(days=5), HORA_DA_CONSULTA, tzinfo=fuso_da_clinica()
+    )
+    linhas = {linha["id"]: linha for linha in repositories.buscar_desfechos_para_treino(desde)}
+
+    assert set(linhas) == {com_desfecho["id"], lembrado["id"]}
+    assert linhas[com_desfecho["id"]]["status"] == "no_show"
+    assert linhas[lembrado["id"]]["lembrete_enviado"] is True
+    assert set(linhas[lembrado["id"]]) == {"id", "status", "lembrete_enviado"}
 
 
 @pytest.mark.integracao
@@ -463,7 +475,8 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
         data_consulta=data_consulta,
         hora_consulta=HORA_DA_CONSULTA,
         nome_completo="Daniela Reis",
-        consentimentos={"transferencia_internacional": True},
+        consentimentos={"treino": False},
+        versao_documentos="politica 0.2; termos 0.1",
     )
 
     item = next(
@@ -479,22 +492,35 @@ def test_cadastro_pela_ui_grava_no_fuso_certo_e_deriva_a_antecedencia(db):
     paciente = db.table("pacientes").select("*").execute().data[0]
     assert "cpf" not in paciente
     agendamento = (
-        db.table("agendamentos").select("dias_entre_agendamento_consulta").execute().data[0]
+        db.table("agendamentos")
+        .select("dias_entre_agendamento_consulta, versao_documentos")
+        .execute()
+        .data[0]
     )
     assert agendamento["dias_entre_agendamento_consulta"] == (
         data_consulta - hoje_na_clinica()
     ).days
+    # A ciência dos documentos fica no agendamento como prova (ADR-010).
+    assert agendamento["versao_documentos"] == "politica 0.2; termos 0.1"
 
 
 @pytest.mark.integracao
-def test_cadastro_pela_ui_grava_e_revoga_consentimento_so_quando_o_estado_muda(db):
-    """Passo 8.6, peça 3: o primeiro agendamento concede o que foi marcado; o
-    segundo, com o treino desmarcado, revoga só o treino e não repete a
-    transferência, que continua vigente na mesma versão."""
+def test_cadastro_pela_ui_leva_ao_treino_so_quem_consente_e_revoga_ao_desmarcar(
+    db, monkeypatch
+):
+    """ADR-010, de ponta a ponta: o primeiro agendamento, com a caixa marcada,
+    grava o consentimento e a linha no schema `treino`; o segundo, desmarcado,
+    revoga e abre o pedido de purga. Os dois agendamentos existem no banco da
+    clínica, com ou sem treino. Chave do pseudônimo aleatória por execução:
+    os eventos são só de inserção e sobreviveriam a uma execução anterior."""
+    import uuid
+
     import consentimento
-    import db.repositories as repositories
+    import db.repositorio_treino as repositorio_treino
+    import pseudonimo
     from ui import logic
 
+    monkeypatch.setenv(pseudonimo.VARIAVEL_CHAVE, uuid.uuid4().hex)
     data_consulta = agenda_clinica.proximo_dia_valido(hoje_na_clinica() + timedelta(days=30))
     campos = {
         "cpf": "111.444.777-35",
@@ -506,33 +532,33 @@ def test_cadastro_pela_ui_grava_e_revoga_consentimento_so_quando_o_estado_muda(d
         "data_consulta": data_consulta,
         "hora_consulta": HORA_DA_CONSULTA,
         "nome_completo": "Paciente Criança",
+        "versao_documentos": "politica 0.2; termos 0.1",
     }
-    tudo = dict.fromkeys(consentimento.FINALIDADES, True)
-    primeiro = logic.cadastrar_paciente_e_agendamento(**campos, consentimentos=tudo)
-    logic.cadastrar_paciente_e_agendamento(
-        **campos, consentimentos={**tudo, consentimento.FINALIDADE_TREINO: False}
-    )
+    primeiro = logic.cadastrar_paciente_e_agendamento(**campos, consentimentos={"treino": True})
+    segundo = logic.cadastrar_paciente_e_agendamento(**campos, consentimentos={"treino": False})
 
-    eventos = (
-        db.table("eventos_consentimento")
-        .select("finalidade, acao, canal, consentido_por, registrado_por, versao_termo")
-        .eq("id_paciente", primeiro["id_paciente"])
-        .order("registrado_em")
-        .execute()
-        .data
-    )
-    # Os dois primeiros saem do mesmo insert, com o mesmo `now()`: a ordem
-    # entre eles não é garantida.
-    pares = [(e["finalidade"], e["acao"]) for e in eventos]
-    assert set(pares[:2]) == {(f, "concedido") for f in consentimento.FINALIDADES}
-    assert pares[2:] == [(consentimento.FINALIDADE_TREINO, "revogado")]
-    assert {e["canal"] for e in eventos} == {"autoagendamento"}
-    assert {e["consentido_por"] for e in eventos} == {"responsavel_legal"}
-    assert {e["registrado_por"] for e in eventos} == {None}
+    assert not primeiro["falha_no_treino"] and not segundo["falha_no_treino"]
+    agendamentos = db.table("agendamentos").select("id").execute().data
+    assert {a["id"] for a in agendamentos} == {primeiro["id"], segundo["id"]}
+
+    id_titular = pseudonimo.id_titular(campos["cpf"])
+    eventos = repositorio_treino.eventos_do_titular(id_titular)
+    assert [e["acao"] for e in eventos] == ["concedido", "revogado"]
     assert {e["versao_termo"] for e in eventos} == {consentimento.VERSAO_TERMO}
-    lidos = repositories.eventos_consentimento_do_paciente(primeiro["id_paciente"])
-    assert not consentimento.tem_consentimento(lidos, consentimento.FINALIDADE_TREINO)
-    assert consentimento.tem_consentimento(lidos, consentimento.FINALIDADE_TRANSFERENCIA)
+    pedidos = [p for p in repositorio_treino.pedidos_pendentes() if p["id_titular"] == id_titular]
+    assert [(p["tipo"], p["canal"]) for p in pedidos] == [("revogacao", "autoagendamento")]
+
+    # Só a consulta autorizada chegou ao treino: o desfecho dela sincroniza, o
+    # da segunda não tem linha para onde ir.
+    itens = [
+        {"id_consulta": pseudonimo.id_consulta(a["id"]), "status": "no_show",
+         "lembrete_enviado": False}
+        for a in (primeiro, segundo)
+    ]
+    assert repositorio_treino.sincronizar_desfechos(itens) == 1
+    assert repositorio_treino.eliminar_titular(id_titular) == 1
+    for pedido in pedidos:
+        repositorio_treino.marcar_pedido_executado(pedido["id"])
 
 
 # --- login do funcionário contra o Supabase Auth local (architecture.md §7) ---
@@ -655,220 +681,43 @@ def test_canario_revertido_faz_round_trip_e_a_primeira_gravacao_vale(db):
         db.table("canarios_revertidos").delete().eq("model_version", "canario-teste-int").execute()
 
 
-# --- consentimento e pedidos do titular (ADR-009) ------------------------------
+# --- pedidos do titular sobre os dados da clínica (ADR-009) --------------------
 
 
-def _criar_paciente_com_consentimento(repositories, id_externo):
-    paciente = repositories.inserir_paciente(
+def _criar_paciente(repositories, id_externo):
+    return repositories.inserir_paciente(
         id_paciente_externo=id_externo,
         data_nascimento=DATA_NASCIMENTO_PADRAO,
         sexo="F",
         telefone=TELEFONE_PADRAO,
     )
-    eventos = repositories.registrar_consentimentos(
-        id_paciente=paciente["id"],
-        decisoes=[("treino", "concedido"), ("transferencia_internacional", "concedido")],
-        versao_termo="teste-int",
-        canal="autoagendamento",
-        consentido_por="titular",
-    )
-    return paciente, eventos
 
 
 @pytest.mark.integracao
-def test_eventos_de_consentimento_fazem_round_trip_e_o_vigente_e_o_ultimo(db):
-    import consentimento
-    import db.repositories as repositories
-
-    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-1")
-    assert len(eventos) == 2
-    assert eventos[0]["registrado_por"] is None  # autoagendamento
-
-    repositories.registrar_consentimentos(
-        id_paciente=paciente["id"],
-        decisoes=[("treino", "revogado")],
-        versao_termo="teste-int",
-        canal="clinica",
-        consentido_por="titular",
-    )
-
-    lidos = repositories.eventos_consentimento_do_paciente(paciente["id"])
-    assert [e["acao"] for e in lidos if e["finalidade"] == "treino"] == [
-        "concedido",
-        "revogado",
-    ]
-    assert not consentimento.tem_consentimento(lidos, "treino")
-    assert consentimento.tem_consentimento(lidos, "transferencia_internacional")
-
-
-@pytest.mark.integracao
-def test_lembrete_nao_e_finalidade_nem_tipo_de_pedido_no_banco(db):
-    """O lembrete se apoia na execução do contrato com a clínica (art. 7º, V;
-    LGPD.md §3): o banco recusa evento de consentimento e pedido de revogação
-    do lembrete, para que ninguém volte a registrar um consentimento que não
-    é a base do tratamento."""
+def test_banco_da_clinica_nao_tem_consentimento_nem_pedido_de_treino(db):
+    """O consentimento do treino é da SaúdeJá e fica no schema `treino`
+    (ADR-010): o banco da clínica não tem a tabela de eventos e recusa o tipo
+    de pedido do treino, para que ninguém volte a registrá-los aqui."""
     from postgrest.exceptions import APIError
 
     import db.repositories as repositories
 
-    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-consent-lembrete")
-    with pytest.raises(APIError, match="finalidade_check"):
-        repositories.registrar_consentimentos(
-            paciente["id"], [("lembrete", "concedido")], "teste-int", "clinica", "titular"
-        )
-    with pytest.raises(APIError, match="tipo_check"):
-        db.table("pedidos_titular").insert(
-            {"id_paciente": paciente["id"], "tipo": "revogacao_lembrete"}
-        ).execute()
-
-
-@pytest.mark.integracao
-def test_eventos_de_consentimento_recusam_update_e_delete(db):
-    """Só de inserção no banco, não por convenção: a chave secreta ignora RLS,
-    mas não o trigger. Corrigir um evento apagaria a prova (art. 8º, § 2º)."""
-    import db.repositories as repositories
-
-    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-2")
-    id_evento = eventos[0]["id"]
-
-    with pytest.raises(Exception, match="so' de insercao"):
-        db.table("eventos_consentimento").update({"acao": "revogado"}).eq("id", id_evento).execute()
-    with pytest.raises(Exception, match="365 dias"):
-        db.table("eventos_consentimento").delete().eq("id", id_evento).execute()
-
-    acoes = [e["acao"] for e in repositories.eventos_consentimento_do_paciente(paciente["id"])]
-    assert acoes == ["concedido", "concedido"]
-
-
-def _evento_cru(id_paciente, **extra):
-    """Linha de evento inserida direto na tabela, sem o repositório: é como um
-    bug no código chegaria ao banco, e o trigger é a guarda."""
-    return {
-        "id_paciente": id_paciente,
-        "finalidade": "treino",
-        "acao": "concedido",
-        "versao_termo": "teste-int",
-        "canal": "autoagendamento",
-        "consentido_por": "titular",
-        **extra,
-    }
-
-
-@pytest.mark.integracao
-def test_insercao_grava_o_hash_do_paciente_e_o_relogio_do_banco(db):
-    """O hash e a data enviados pelo cliente são ignorados: a prova não pode
-    pertencer a outro titular nem ter a data escolhida por quem grava -- o
-    vigente é decidido por `registrado_em`."""
-    from datetime import timezone
-
-    import db.repositories as repositories
-
-    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-4")
-    assert all(e["id_paciente_externo"] == "hash-consent-4" for e in eventos)
-
-    linha = (
-        db.table("eventos_consentimento")
-        .insert(
-            _evento_cru(
-                paciente["id"],
-                id_paciente_externo="hash-de-outra-pessoa",
-                registrado_em="1999-01-01T00:00:00+00:00",
-            )
-        )
-        .execute()
-        .data[0]
-    )
-    assert linha["id_paciente_externo"] == "hash-consent-4"
-    registrado_em = repositories.ler_timestamptz(linha["registrado_em"])
-    assert abs(registrado_em - datetime.now(timezone.utc)) < timedelta(minutes=5)
-
-
-@pytest.mark.integracao
-def test_insercao_recusa_evento_sem_paciente_ou_ja_eliminado(db):
-    """Sem paciente, o evento nunca seria apagável (a purga depende de
-    `eliminado_em`); com `eliminado_em` retroativo, seria apagável na hora."""
-    import db.repositories as repositories
-
-    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-consent-5")
-
-    with pytest.raises(Exception, match="evento sem paciente"):
-        db.table("eventos_consentimento").insert(_evento_cru(None)).execute()
-    with pytest.raises(Exception, match="gravado pelo trigger"):
-        db.table("eventos_consentimento").insert(
-            _evento_cru(paciente["id"], eliminado_em="2000-01-01T00:00:00+00:00")
-        ).execute()
-    with pytest.raises(Exception, match="paciente inexistente"):
-        db.table("eventos_consentimento").insert(
-            _evento_cru("00000000-0000-0000-0000-000000000000")
-        ).execute()
-
-
-@pytest.mark.integracao
-def test_desvincular_a_prova_com_o_paciente_cadastrado_e_recusado(db):
-    """O `set null` só é aceito vindo da eliminação: o mesmo update feito pelo
-    código desvincularia a prova e iniciaria a contagem dos 365 dias com o
-    paciente ainda cadastrado."""
-    import db.repositories as repositories
-
-    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-6")
-
-    with pytest.raises(Exception, match="so' de insercao"):
-        db.table("eventos_consentimento").update({"id_paciente": None}).eq(
-            "id", eventos[0]["id"]
-        ).execute()
-
-    linha = (
-        db.table("eventos_consentimento")
-        .select("id_paciente, eliminado_em")
-        .eq("id", eventos[0]["id"])
-        .execute()
-        .data[0]
-    )
-    assert linha == {"id_paciente": paciente["id"], "eliminado_em": None}
-
-
-@pytest.mark.integracao
-def test_eliminar_o_paciente_mantem_a_prova_sem_vinculo_e_com_data(db):
-    """`on delete set null`, não `cascade` (ADR-009): os eventos sobrevivem à
-    eliminação, sem vínculo com o cadastro, e o trigger grava `eliminado_em`.
-    Antes de 365 dias, nem a purga consegue apagá-los."""
-    from datetime import timezone
-
-    import db.repositories as repositories
-
-    paciente, eventos = _criar_paciente_com_consentimento(repositories, "hash-consent-3")
-    ids = [e["id"] for e in eventos]
-
-    db.table("pacientes").delete().eq("id", paciente["id"]).execute()
-
-    restantes = (
-        db.table("eventos_consentimento")
-        .select("id, id_paciente, id_paciente_externo, eliminado_em")
-        .in_("id", ids)
-        .execute()
-        .data
-    )
-    assert len(restantes) == 2
-    assert all(r["id_paciente"] is None for r in restantes)
-    assert all(r["id_paciente_externo"] == "hash-consent-3" for r in restantes)
-    assert all(r["eliminado_em"] is not None for r in restantes)
-
-    # A purga de hoje não alcança uma eliminação de agora.
-    assert repositories.purgar_provas_de_consentimento_expiradas(datetime.now(timezone.utc)) == 0
-    # E nem com o relógio do chamador adiantado: o trigger compara com o now()
-    # do banco e recusaria o delete inteiro.
-    with pytest.raises(Exception, match="365 dias"):
-        repositories.purgar_provas_de_consentimento_expiradas(
-            datetime.now(timezone.utc) + timedelta(days=400)
-        )
+    paciente = _criar_paciente(repositories, "hash-sem-consent")
+    with pytest.raises(APIError):
+        db.table("eventos_consentimento").select("id").execute()
+    for tipo in ("revogacao_treino", "revogacao", "revogacao_lembrete"):
+        with pytest.raises(APIError, match="tipo_check"):
+            db.table("pedidos_titular").insert(
+                {"id_paciente": paciente["id"], "tipo": tipo}
+            ).execute()
 
 
 @pytest.mark.integracao
 def test_pedido_do_titular_percorre_as_situacoes_e_perde_o_vinculo_ao_executar(db):
     import db.repositories as repositories
 
-    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-1")
-    pedido = repositories.registrar_pedido(paciente["id"], "revogacao_treino")
+    paciente = _criar_paciente(repositories, "hash-pedido-1")
+    pedido = repositories.registrar_pedido(paciente["id"], "revisao_decisao")
     assert pedido["situacao"] == "pendente"
 
     # Executar sem a clínica confirmar não muda nada.
@@ -892,7 +741,7 @@ def test_pedido_executado_com_vinculo_e_recusado_pelo_banco(db):
     """O check da migration é a guarda, não a função do repositório."""
     import db.repositories as repositories
 
-    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-2")
+    paciente = _criar_paciente(repositories, "hash-pedido-2")
     pedido = repositories.registrar_pedido(paciente["id"], "eliminacao")
     assert repositories.confirmar_pedido(pedido["id"])
 
@@ -907,11 +756,11 @@ def test_pedido_executado_com_vinculo_e_recusado_pelo_banco(db):
 def test_eliminacao_anula_o_vinculo_do_pedido_sem_executa_lo(db):
     """O `set null` também age nos pedidos. Um pedido confirmado cujo paciente
     já foi eliminado fica sem vínculo e ainda na fila do workflow de purga, que
-    precisa tratá-lo como atendido (peça 6)."""
+    precisa tratá-lo como atendido."""
     import db.repositories as repositories
 
-    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-3")
-    pedido = repositories.registrar_pedido(paciente["id"], "revogacao_treino")
+    paciente = _criar_paciente(repositories, "hash-pedido-3")
+    pedido = repositories.registrar_pedido(paciente["id"], "revisao_decisao")
     assert repositories.confirmar_pedido(pedido["id"])
 
     db.table("pacientes").delete().eq("id", paciente["id"]).execute()
@@ -931,14 +780,14 @@ def test_datas_do_pedido_sao_do_relogio_do_banco(db):
 
     import db.repositories as repositories
 
-    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-4")
+    paciente = _criar_paciente(repositories, "hash-pedido-4")
     antiga = "1999-01-01T00:00:00+00:00"
     pedido = (
         db.table("pedidos_titular")
         .insert(
             {
                 "id_paciente": paciente["id"],
-                "tipo": "revogacao_treino",
+                "tipo": "revisao_decisao",
                 "criado_em": antiga,
                 "confirmado_em": antiga,
             }
@@ -968,8 +817,8 @@ def test_datas_do_pedido_sao_do_relogio_do_banco(db):
 def test_pedido_so_anda_pelas_transicoes_previstas(db):
     import db.repositories as repositories
 
-    paciente, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-5")
-    outro, _ = _criar_paciente_com_consentimento(repositories, "hash-pedido-6")
+    paciente = _criar_paciente(repositories, "hash-pedido-5")
+    outro = _criar_paciente(repositories, "hash-pedido-6")
 
     with pytest.raises(Exception, match="nasce pendente"):
         db.table("pedidos_titular").insert(
@@ -978,7 +827,7 @@ def test_pedido_so_anda_pelas_transicoes_previstas(db):
     with pytest.raises(Exception, match="pedido sem paciente"):
         db.table("pedidos_titular").insert({"id_paciente": None, "tipo": "eliminacao"}).execute()
 
-    pedido = repositories.registrar_pedido(paciente["id"], "revogacao_treino")
+    pedido = repositories.registrar_pedido(paciente["id"], "revisao_decisao")
 
     def atualizar(campos):
         db.table("pedidos_titular").update(campos).eq("id", pedido["id"]).execute()
@@ -1007,3 +856,42 @@ def test_tipo_de_pedido_desconhecido_e_recusado_antes_do_banco():
 
     with pytest.raises(ValueError):
         repositories.registrar_pedido("00000000-0000-0000-0000-000000000000", "apagar")
+
+
+@pytest.mark.integracao
+def test_eliminar_paciente_leva_agendamentos_pelo_cascade_e_e_idempotente(db):
+    """Eliminação da clínica (workflow de purga): só o banco da clínica, pelo
+    uuid; a base de treino é outra controladora (ADR-010)."""
+    import db.repositories as repositories
+
+    paciente, agendamento = _criar_paciente_e_agendamento(
+        repositories, dias=5, id_externo="EXT-ELIM-1"
+    )
+
+    assert repositories.eliminar_paciente(paciente["id"]) == 1
+    assert repositories.eliminar_paciente(paciente["id"]) == 0
+    restantes = db.table("agendamentos").select("id").eq("id", agendamento["id"]).execute().data
+    assert restantes == []
+
+
+@pytest.mark.integracao
+def test_pedido_pela_aba_da_equipe_usa_o_codigo_do_agendamento(db):
+    """A equipe registra o pedido pelo código da Fila do dia; a lista de
+    pedidos em aberto não traz o vínculo com o paciente."""
+    import db.repositories as repositories
+    from ui import logic
+
+    paciente, agendamento = _criar_paciente_e_agendamento(
+        repositories, dias=3, id_externo="EXT-PEDIDO-UI"
+    )
+
+    assert repositories.paciente_do_agendamento(agendamento["id"]) == paciente["id"]
+    antes = {p["id"] for p in repositories.pedidos_abertos()}
+    logic.registrar_pedido_da_clinica(agendamento["id"], "revisao_decisao")
+    [aberto] = [p for p in repositories.pedidos_abertos() if p["id"] not in antes]
+    assert set(aberto) == {"id", "tipo", "situacao", "criado_em", "confirmado_em"}
+
+    assert logic.decidir_pedido_da_clinica(aberto["id"], "confirmar")
+    assert logic.decidir_pedido_da_clinica(aberto["id"], "concluir")
+    assert aberto["id"] not in {p["id"] for p in repositories.pedidos_abertos()}
+    db.table("pedidos_titular").delete().eq("id", aberto["id"]).execute()

@@ -32,6 +32,7 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import consentimento  # noqa: E402
+import documentos_legais  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
 from ui import logic  # noqa: E402
 
@@ -57,8 +58,9 @@ PERFIS = [PERFIL_PACIENTE, PERFIL_FUNCIONARIO]
 # produção é lido (ADR-006). A explicação de cada paciente continua no
 # detalhe da linha da Fila do dia.
 ABA_FILA = "Fila do dia"
+ABA_PEDIDOS = "Pedidos do titular"
 ABA_TIME_TECNICO = "Time técnico"
-ABAS_FUNCIONARIO = [ABA_FILA, ABA_TIME_TECNICO]
+ABAS_FUNCIONARIO = [ABA_FILA, ABA_PEDIDOS, ABA_TIME_TECNICO]
 SUBABAS_TIME_TECNICO = ["Observabilidade", "Testar predição", "Explicabilidade"]
 ABA_DEV = "Dev: disparo manual"  # subaba do Time técnico, só com APP_ENV=dev
 
@@ -68,7 +70,17 @@ CHAVE_FUNCIONARIO = "funcionario"
 CHAVE_AVISO_LOGIN = "aviso_login"
 CHAVE_AGENDAMENTO_CONFIRMADO = "agendamento_confirmado"
 CHAVE_AVISO_DESFECHO = "aviso_desfecho"
-CHAVE_CONSENTIMENTO_TRANSFERENCIA = "consentimento_transferencia"
+CHAVE_AVISO_PEDIDO = "aviso_pedido"
+# Ciência da Política de privacidade e dos Termos de uso (ADR-010, decisão D2).
+# A caixa é um widget, e o Streamlit descarta o estado de widget que deixa de
+# ser desenhado: abrir a Política e voltar desmarcaria a caixa. Por isso o
+# valor é espelhado numa chave própria (CHAVE_CIENCIA) e a caixa é recriada a
+# partir dela. CHAVE_CIENCIA_CONFIRMADA guarda a versão dos documentos no
+# clique em "Continuar", e é ela que vai para o agendamento.
+CHAVE_CIENCIA = "ciencia_documentos"
+CHAVE_CAIXA_CIENCIA = "caixa_ciencia_documentos"
+CHAVE_CIENCIA_CONFIRMADA = "ciencia_confirmada"
+CHAVE_DOCUMENTO_ABERTO = "documento_legal_aberto"
 
 # Tudo que pertence a quem está logado sai junto com a sessão: sem isso, a
 # última predição (com a explicação dela) ficaria na aba "Explicabilidade" para
@@ -78,6 +90,7 @@ CHAVES_DA_SESSAO_DO_FUNCIONARIO = (
     CHAVE_RESULTADO,
     CHAVE_PAYLOAD,
     CHAVE_AVISO_DESFECHO,
+    CHAVE_AVISO_PEDIDO,
 )
 
 
@@ -601,11 +614,98 @@ def _aba_dev():
 
 
 def _visao_funcionario():
-    fila, time_tecnico = st.tabs(ABAS_FUNCIONARIO)
+    fila, pedidos, time_tecnico = st.tabs(ABAS_FUNCIONARIO)
     with fila:
         _aba_fila_do_dia()
+    with pedidos:
+        _aba_pedidos()
     with time_tecnico:
         _aba_time_tecnico()
+
+
+def _aba_pedidos():
+    """Pedidos do titular (art. 18 e art. 20). Os dados da clínica são da
+    clínica: ela registra, confirma ou recusa, e o workflow de purga executa a
+    eliminação confirmada. Os dados de aprimoramento são da SaúdeJá (ADR-010):
+    a clínica só encaminha o pedido, pelo CPF, sem saber se havia dado."""
+    st.subheader("Pedidos do titular")
+    aviso = st.session_state.pop(CHAVE_AVISO_PEDIDO, None)
+    if aviso:
+        st.warning(aviso)
+    st.caption(
+        "Confirme a identidade de quem pede (CPF e data de nascimento) antes de "
+        "registrar. O prazo de resposta é de 15 dias."
+    )
+
+    with st.form("form_pedido_clinica", clear_on_submit=True):
+        st.markdown("**Novo pedido sobre os dados da clínica**")
+        codigo = st.text_input(
+            "Código do agendamento", help="Em \"Detalhes técnicos\" da linha, na Fila do dia."
+        )
+        tipo = st.selectbox(
+            "Tipo",
+            options=list(logic.ROTULOS_TIPO_PEDIDO),
+            format_func=logic.ROTULOS_TIPO_PEDIDO.get,
+        )
+        tambem_treino = st.checkbox(
+            "O paciente também pede a eliminação dos dados de aprimoramento do sistema"
+        )
+        cpf = st.text_input(
+            "CPF do paciente (só para encaminhar ao SaúdeJá; não é guardado)",
+            placeholder="000.000.000-00",
+        )
+        registrar = st.form_submit_button("Registrar pedido")
+    if registrar:
+        try:
+            logic.registrar_pedido_da_clinica(codigo, tipo)
+            if tambem_treino:
+                logic.encaminhar_pedido_ao_treino(cpf)
+        except (logic.ErroPedido, logic.ErroPersistencia) as exc:
+            st.warning(str(exc))
+        else:
+            mensagem = "Pedido registrado."
+            if tambem_treino:
+                mensagem += " O pedido de aprimoramento foi encaminhado ao SaúdeJá."
+            st.success(mensagem)
+
+    st.markdown("**Pedidos em aberto**")
+    try:
+        pedidos = logic.listar_pedidos_da_clinica()
+    except logic.ErroPersistencia as exc:
+        st.error(str(exc))
+        return
+    if not pedidos:
+        st.caption("Nenhum pedido em aberto.")
+        return
+    for pedido in pedidos:
+        col_info, col_acoes = st.columns([3, 2])
+        col_info.markdown(
+            f"{logic.ROTULOS_TIPO_PEDIDO.get(pedido['tipo'], pedido['tipo'])} -- "
+            f"{logic.ROTULOS_SITUACAO_PEDIDO.get(pedido['situacao'], pedido['situacao'])} "
+            f"(desde {pedido['criado_em'][:10]})"
+        )
+        if pedido["situacao"] == "pendente":
+            acoes = [("confirmar", "Confirmar"), ("recusar", "Recusar")]
+        elif pedido["tipo"] == "revisao_decisao":
+            acoes = [("concluir", "Concluir revisão")]
+        else:
+            acoes = []  # eliminação confirmada: o workflow de purga executa
+        for coluna, (decisao, rotulo) in zip(col_acoes.columns(2), acoes, strict=False):
+            coluna.button(
+                rotulo,
+                key=f"pedido_{decisao}_{pedido['id']}",
+                on_click=_decidir_pedido,
+                args=(pedido["id"], decisao),
+            )
+
+
+def _decidir_pedido(id_pedido: str, decisao: str):
+    # Callback: uma exceção aqui derrubaria a tela com traceback. O aviso vai
+    # para a sessão e aparece no topo da aba na mesma execução.
+    try:
+        logic.decidir_pedido_da_clinica(id_pedido, decisao)
+    except logic.ErroPersistencia as exc:
+        st.session_state[CHAVE_AVISO_PEDIDO] = str(exc)
 
 
 def _aba_time_tecnico():
@@ -634,10 +734,75 @@ def _aba_time_tecnico():
 
 def _novo_agendamento():
     st.session_state.pop(CHAVE_AGENDAMENTO_CONFIRMADO, None)
-    # O consentimento é de quem agenda, e o próximo agendamento no mesmo
-    # navegador pode ser de outra pessoa (o tablet da recepção, a mãe que
-    # agenda para os dois filhos): a caixa volta desmarcada.
-    st.session_state.pop(CHAVE_CONSENTIMENTO_TRANSFERENCIA, None)
+    # A ciência é de quem agenda, e o próximo agendamento no mesmo navegador
+    # pode ser de outra pessoa (o tablet da recepção, a mãe que agenda para os
+    # dois filhos): a caixa volta desmarcada e o "Continuar", bloqueado.
+    for chave in (CHAVE_CIENCIA, CHAVE_CAIXA_CIENCIA, CHAVE_CIENCIA_CONFIRMADA):
+        st.session_state.pop(chave, None)
+
+
+def _abrir_documento(documento: str):
+    st.session_state[CHAVE_DOCUMENTO_ABERTO] = documento
+
+
+def _fechar_documento():
+    st.session_state.pop(CHAVE_DOCUMENTO_ABERTO, None)
+
+
+def _espelhar_ciencia():
+    st.session_state[CHAVE_CIENCIA] = st.session_state[CHAVE_CAIXA_CIENCIA]
+
+
+def _confirmar_ciencia():
+    st.session_state[CHAVE_CIENCIA_CONFIRMADA] = documentos_legais.versao()
+
+
+def _tela_documento(documento: str):
+    """Política de privacidade ou Termos de uso, numa tela própria: o texto
+    longo saiu da tela de agendamento, que mostra só os links (decisão D2)."""
+    st.button(
+        "Voltar ao agendamento",
+        key="voltar_documento_topo",
+        icon=":material/arrow_back:",
+        on_click=_fechar_documento,
+    )
+    st.markdown(documentos_legais.texto_para_tela(documento))
+    st.button("Voltar ao agendamento", key="voltar_documento_fim", on_click=_fechar_documento)
+
+
+def _etapa_ciencia():
+    """Antes de qualquer campo: os campos de um `st.form` só chegam ao
+    servidor no envio, e esta tela roda fora do Brasil. A ciência não é
+    consentimento -- não há escolha sobre o uso dos dados --, é a garantia de
+    que a informação do art. 9º, com o processamento no exterior em destaque
+    (§ 3º), foi apresentada antes de o paciente digitar qualquer coisa."""
+    st.caption(
+        "Seus dados são usados para o seu atendimento nesta clínica e, só com a "
+        "sua autorização, para aprimorar o sistema. O CPF não é armazenado."
+    )
+    st.markdown(
+        "**Os dados digitados nesta tela são processados fora do Brasil.** "
+        "Os detalhes estão na Política de privacidade e nos Termos de uso."
+    )
+    col_politica, col_termos = st.columns(2)
+    for coluna, documento in (
+        (col_politica, documentos_legais.POLITICA),
+        (col_termos, documentos_legais.TERMOS),
+    ):
+        coluna.button(
+            documentos_legais.TITULOS[documento],
+            key=f"abrir_{documento}",
+            type="tertiary",
+            icon=":material/description:",
+            on_click=_abrir_documento,
+            args=(documento,),
+        )
+    if CHAVE_CAIXA_CIENCIA not in st.session_state:
+        st.session_state[CHAVE_CAIXA_CIENCIA] = st.session_state.get(CHAVE_CIENCIA, False)
+    ciente = st.checkbox(
+        documentos_legais.TEXTO_CIENCIA, key=CHAVE_CAIXA_CIENCIA, on_change=_espelhar_ciencia
+    )
+    st.button("Continuar", type="primary", disabled=not ciente, on_click=_confirmar_ciencia)
 
 
 def _mostrar_confirmacao(mensagem: str):
@@ -649,6 +814,11 @@ def _mostrar_confirmacao(mensagem: str):
 
 
 def _visao_paciente():
+    documento = st.session_state.get(CHAVE_DOCUMENTO_ABERTO)
+    if documento is not None:
+        _tela_documento(documento)
+        return
+
     st.subheader("Cadastro e agendamento")
 
     # Confirmação no lugar do formulário: com o form ainda preenchido na tela,
@@ -656,6 +826,10 @@ def _visao_paciente():
     confirmacao = st.session_state.get(CHAVE_AGENDAMENTO_CONFIRMADO)
     if confirmacao is not None:
         _mostrar_confirmacao(confirmacao)
+        return
+
+    if not st.session_state.get(CHAVE_CIENCIA_CONFIRMADA):
+        _etapa_ciencia()
         return
 
     # Num st.empty() para sumir na mesma execução do agendamento bem-sucedido,
@@ -671,7 +845,7 @@ def _visao_paciente():
     # logic.cadastrar_paciente_e_agendamento, a única porta para o banco, e
     # devolve todos os problemas de uma vez.
     try:
-        logic.cadastrar_paciente_e_agendamento(**campos)
+        resultado = logic.cadastrar_paciente_e_agendamento(**campos)
     except logic.ErroValidacaoCadastro as exc:
         st.warning(
             "Corrija os campos abaixo para concluir o agendamento:\n\n"
@@ -688,66 +862,28 @@ def _visao_paciente():
         f"Agendamento confirmado para {campos['data_consulta']:%d/%m/%Y} às "
         f"{campos['hora_consulta'].strftime('%H:%M')}."
     )
+    # A etapa de treino não derruba o agendamento (ADR-010), mas o paciente
+    # precisa saber que a escolha dele não ficou registrada.
+    if resultado.get("falha_no_treino"):
+        if campos["consentimentos"].get(consentimento.FINALIDADE_TREINO):
+            mensagem += (
+                "\n\nNão foi possível registrar a autorização de aprimoramento; "
+                "você pode autorizar no próximo agendamento."
+            )
+        else:
+            mensagem += (
+                "\n\nSe você tinha autorizado o aprimoramento antes e quer retirar a "
+                "autorização, peça à clínica."
+            )
     st.session_state[CHAVE_AGENDAMENTO_CONFIRMADO] = mensagem
     area_do_formulario.empty()
     _mostrar_confirmacao(mensagem)
 
 
 def _formulario_paciente() -> tuple[dict, bool]:
-    """Desenha o aviso de privacidade, a autorização da transferência
-    internacional e o formulário; devolve os campos já no formato de
-    logic.cadastrar_paciente_e_agendamento e se houve envio. Sem a
-    autorização, nenhum campo é desenhado e não há envio."""
-    # Transparência em linguagem simples (LGPD art. 9º). O detalhe técnico
-    # do mesmo compromisso -- CPF só como hash (docs/architecture.md §4.1),
-    # nome para a fila do dia (ADR-007), telefone para o lembrete, nada disso
-    # em log, dataset de treino, API pública ou LLM -- está em docs/LGPD/LGPD.md.
-    st.caption(
-        "Seus dados são usados para o seu atendimento nesta clínica e, só com a "
-        "sua autorização, para aprimorar o sistema. O CPF não é armazenado."
-    )
-    with st.expander("Como usamos seus dados"):
-        st.markdown(
-            "- **CPF**: serve só para identificar você no cadastro. Ele não é "
-            "guardado -- guardamos apenas um código gerado a partir dele.\n"
-            "- **Nome e telefone**: ficam guardados para a equipe chamar você "
-            "no atendimento e entrar em contato sobre a consulta.\n"
-            "- **Data de nascimento, sexo, especialidade e distância**, junto "
-            "com o seu histórico de comparecimento nesta clínica, ajudam a "
-            "equipe a decidir quais consultas confirmar com antecedência.\n"
-            "- **Lembrete por SMS**: faz parte do atendimento. A clínica pode "
-            "enviar um lembrete para o telefone informado, só com a data e a hora "
-            "da consulta, sem a especialidade. Se não quiser receber, avise a "
-            "clínica.\n"
-            "- **Aprimoramento do sistema**: só com a sua autorização, o SaúdeJá "
-            "usa o resultado das consultas (comparecimento ou falta), sem nome, "
-            "telefone nem CPF.\n"
-            "- **Fora do Brasil**: os dados ficam guardados no Brasil, mas são "
-            "processados nos Estados Unidos pelo Hugging Face e pelo GitHub, como "
-            "descrito na autorização abaixo.\n"
-            "- Nome, telefone e CPF não entram em registros técnicos.\n\n"
-            "Para retirar a autorização de aprimoramento, pedir a eliminação dos "
-            "seus dados ou tirar dúvidas, fale com a clínica."
-        )
-
-    # Fora do st.form e antes de qualquer campo (LGPD.md, subseção 4.2, alínea
-    # c): esta tela roda no Space, nos Estados Unidos, e um campo só chega ao
-    # servidor quando o form é enviado. Com os campos escondidos até a caixa
-    # ser marcada, nenhum dado do cadastro sai do Brasil antes do
-    # consentimento do art. 33, VIII. A data da consulta também fica depois:
-    # é o primeiro campo do cadastro, mesmo estando fora do form.
-    with st.container(border=True):
-        st.markdown(consentimento.INFORMACAO_TRANSFERENCIA)
-        autorizou_transferencia = st.checkbox(
-            consentimento.TERMO_TRANSFERENCIA, key=CHAVE_CONSENTIMENTO_TRANSFERENCIA
-        )
-    if not autorizou_transferencia:
-        st.info(
-            "Marque a autorização acima para preencher o cadastro. Se preferir não "
-            "autorizar, agende com a clínica, por telefone ou no balcão."
-        )
-        return {}, False
-
+    """Desenha o formulário, depois da ciência dos documentos; devolve os
+    campos já no formato de logic.cadastrar_paciente_e_agendamento e se houve
+    envio."""
     especialidades = logic.listar_especialidades()
 
     # Fora do st.form: precisa reagir de imediato à data escolhida para
@@ -812,19 +948,16 @@ def _formulario_paciente() -> tuple[dict, bool]:
         )
 
         # Caixa própria, nunca pré-marcada (art. 8º, § 4º: autorização genérica
-        # é nula). O lembrete não tem caixa: é parte do atendimento contratado
-        # com a clínica (art. 7º, V; LGPD.md, seção 3). A tela não sabe quem é o
-        # paciente antes do envio, então não tem como mostrar o que ele já
-        # autorizou -- e mostrar revelaria a quem digitasse um CPF alheio. Por
-        # isso a caixa desmarcada é a decisão de agora: revoga o que estava
-        # vigente, e a legenda avisa.
+        # é nula), e a única do formulário: o agendamento e o lembrete são parte
+        # do atendimento da clínica (art. 7º, V; LGPD.md, seção 3). A tela não
+        # sabe quem é o paciente antes do envio, então não tem como mostrar o
+        # que ele já autorizou -- e mostrar revelaria a quem digitasse um CPF
+        # alheio. Por isso a caixa desmarcada é a decisão de agora: revoga o que
+        # estava vigente. Sem legenda na tela (decisão da autora, 2026-10-10): o
+        # termo já diz que recusar não impede o agendamento, e o efeito da caixa
+        # desmarcada e a regra do agendamento de criança estão nos Termos de
+        # uso, seções 2 e 5, que o paciente declarou conhecer.
         st.markdown("**Autorização opcional**")
-        st.caption(
-            "Recusar não impede o agendamento. A caixa começa sempre desmarcada: "
-            "a cada agendamento, marque-a se quiser manter a autorização. "
-            "Agendamento de criança (menos de 12 anos): quem decide é um dos pais "
-            "ou o responsável legal, e o telefone deve ser o dele."
-        )
         autorizou_treino = st.checkbox(consentimento.TERMO_TREINO, value=False)
 
         enviado = st.form_submit_button("Agendar", type="primary")
@@ -839,10 +972,8 @@ def _formulario_paciente() -> tuple[dict, bool]:
         "data_consulta": data_consulta,
         "hora_consulta": hora_consulta,
         "nome_completo": nome_completo,
-        "consentimentos": {
-            consentimento.FINALIDADE_TRANSFERENCIA: autorizou_transferencia,
-            consentimento.FINALIDADE_TREINO: autorizou_treino,
-        },
+        "consentimentos": {consentimento.FINALIDADE_TREINO: autorizou_treino},
+        "versao_documentos": st.session_state.get(CHAVE_CIENCIA_CONFIRMADA),
     }
     return campos, enviado
 

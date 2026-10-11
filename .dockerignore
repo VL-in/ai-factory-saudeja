@@ -13,7 +13,13 @@ data/*
 build/
 .mypy_cache/
 .deepeval/
-docs/
+# docs/ fica fora, menos os dois textos que a tela de agendamento exibe
+# (ADR-010; infra/deploy/dockerfile os copia).
+docs/*
+!docs/LGPD/
+docs/LGPD/*
+!docs/LGPD/POLITICA-DE-PRIVACIDADE.md
+!docs/LGPD/TERMOS-DE-USO.md
 notebooks/
 .venv/
 venv/

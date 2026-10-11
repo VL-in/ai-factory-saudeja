@@ -605,7 +605,7 @@ def test_canario_e_encerrado_sempre_por_pr_nunca_por_push_em_main():
 _SECRETS_DE_AMBIENTE = re.compile(
     r"secrets\.(SUPABASE_URL|SUPABASE_SECRET_KEY|SUPABASE_DB_PASSWORD|SUPABASE_PROJECT_REF"
     r"|SUPABASE_ACCESS_TOKEN|INFOBIP_\w+|HF_TOKEN|HEALTHCHECKS_\w+"
-    r"|AZURE_STORAGE_CONNECTION_STRING_ESCRITA)\b"
+    r"|AZURE_STORAGE_CONNECTION_STRING_ESCRITA|AZURE_STORAGE_CONNECTION_STRING_EXCLUSAO)\b"
 )
 
 
@@ -623,6 +623,10 @@ def test_jobs_com_secret_de_ambiente_declaram_o_environment():
             assert ambiente, f"{arquivo.name}::{nome} lê secret de ambiente sem environment"
             if arquivo.name == "deploy.yml":
                 assert ambiente == "${{ github.ref_name == 'main' && 'production' || 'dev' }}"
+            elif arquivo.name == "lgpd.yml":
+                # A credencial de exclusão fica num environment só dela,
+                # restrito a `main` (ADR-009).
+                assert ambiente == {"name": "lgpd", "deployment": False}
             else:
                 assert ambiente == {"name": "production", "deployment": False}, (
                     f"{arquivo.name}::{nome}"
@@ -728,3 +732,71 @@ def test_prs_automaticos_pedem_revisao_sem_arriscar_o_ci():
         assert linhas[i + 1].strip().startswith("||"), (
             f"{nome}: pedido de revisão não pode falhar o passo"
         )
+
+
+# --- fronteira da base de treino (ADR-010) ---------------------------------------
+
+
+def _modulos_importados(caminho: Path) -> set[str]:
+    arvore = ast.parse(caminho.read_text(encoding="utf-8"))
+    nomes: set[str] = set()
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.Import):
+            nomes |= {alias.name for alias in no.names}
+        elif isinstance(no, ast.ImportFrom) and no.module:
+            nomes.add(no.module)
+            nomes |= {f"{no.module}.{alias.name}" for alias in no.names}
+    return nomes
+
+
+def test_export_de_treino_le_so_a_base_de_treino():
+    """O re-treino roda fora do Brasil com a mesma chave do banco da clínica
+    (decisão D1 do ADR-010): a fronteira que impede o dataset de receber dado
+    de quem não consentiu é o export só importar `db.repositorio_treino`."""
+    importados = _modulos_importados(REPO_ROOT / "src" / "export_treino.py")
+
+    assert "db.repositorio_treino" in importados
+    assert not {"db.repositories", "db.client"} & importados
+
+
+def test_schema_treino_so_e_acessado_por_rpc():
+    """O schema `treino` não é exposto ao PostgREST e o pseudônimo nunca vai
+    na URL: nenhum código chama `.schema(...)`, e `repositorio_treino` não
+    monta consulta com `.table(...)`."""
+    diretos = [
+        str(arquivo.relative_to(REPO_ROOT))
+        for arquivo in sorted((REPO_ROOT / "src").rglob("*.py"))
+        if ".schema(" in arquivo.read_text(encoding="utf-8")
+    ]
+    assert diretos == []
+    repositorio = (REPO_ROOT / "src" / "db" / "repositorio_treino.py").read_text(encoding="utf-8")
+    assert ".table(" not in repositorio
+
+
+def test_chave_do_pseudonimo_fica_fora_do_re_treino_e_do_canario():
+    """Quem recebe pseudônimos prontos não precisa recalculá-los a partir de
+    um CPF: a chave fica só no Space, no job D-2 e no .env do encarregado."""
+    for workflow in ("retrain.yml", "canario.yml", "ci.yml"):
+        texto = (WORKFLOWS / workflow).read_text(encoding="utf-8")
+        assert "secrets.TREINO_CHAVE_PSEUDONIMO" not in texto, workflow
+    job_d2 = (WORKFLOWS / "job_d2.yml").read_text(encoding="utf-8")
+    assert "secrets.TREINO_CHAVE_PSEUDONIMO" in job_d2
+
+
+def test_so_o_workflow_de_purga_apaga_e_sem_input_que_identifique_o_titular():
+    """ADR-009: a SAS de exclusão fica só no `lgpd.yml`, num environment
+    próprio, num job que só roda em `main`. O disparo manual não tem input: o
+    repositório é público, e um identificador apareceria na página do run."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        texto = arquivo.read_text(encoding="utf-8")
+        assert ("secrets.AZURE_STORAGE_CONNECTION_STRING_EXCLUSAO" in texto) == (
+            arquivo.name == "lgpd.yml"
+        ), arquivo.name
+    lgpd = yaml.safe_load((WORKFLOWS / "lgpd.yml").read_text(encoding="utf-8"))
+    gatilhos = lgpd[True]  # o PyYAML lê a chave `on` como booleano
+    assert not (gatilhos.get("workflow_dispatch") or {}).get("inputs")
+    [job] = lgpd["jobs"].values()
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert lgpd["permissions"] == {"contents": "read"}
+    passos = " ".join(p.get("run", "") for p in job["steps"])
+    assert "dvc gc" not in passos
