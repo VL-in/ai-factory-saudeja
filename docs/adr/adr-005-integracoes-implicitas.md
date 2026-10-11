@@ -84,3 +84,7 @@ A revisão das transferências internacionais ([`LGPD.md`](../LGPD/LGPD.md) §4.
 - A conta do Chile nunca guardou dado de titular: o dataset de treino só teve uma versão no histórico, igual à semente sintética. As chaves dela foram rotacionadas; a exclusão da conta está pendente.
 
 **O que continua fora do Brasil**: o processamento. O re-treino lê o dataset no runner do GitHub, e o job D-2 e o Space seguem como nas emendas anteriores. A base para eles passa a ser o consentimento do art. 33, VIII ([`LGPD.md`](../LGPD/LGPD.md) §4.2). A frase para o pitch muda para: **os dados são armazenados no Brasil e processados fora dele.**
+
+### Emenda (2026-10-11) — mecanismo do processamento fora do Brasil
+
+A emenda de 2026-10-09 registrou o consentimento do art. 33, VIII, como base do processamento no runner do GitHub e no Space. O [ADR-010](adr-010-base-de-treino-separada.md) superou isso em 2026-10-10: o agendamento não depende de consentimento, e a tela pede só a ciência da Política de privacidade e dos Termos de uso. A ciência informa o processamento fora do Brasil (art. 9º, § 3º), mas não é o consentimento do art. 33, VIII. O mecanismo do art. 33 para os dados da clínica, no Space e no job D-2, fica em aberto e bloqueia a operação com paciente real ([`LGPD.md`](../LGPD/LGPD.md) §4.2 e §9.5). O re-treino lê só a base de treino, coberta pelo consentimento do treino, com o processamento no exterior em destaque no termo.

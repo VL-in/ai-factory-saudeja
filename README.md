@@ -150,7 +150,6 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 | Política de privacidade e Termos de uso públicos | Rascunhos em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [`docs/LGPD/TERMOS-DE-USO.md`](docs/LGPD/TERMOS-DE-USO.md), já exibidos na tela, com as condições para publicar |
 | Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
 | Contrato do SaaS em que a clínica aprova os elementos essenciais propostos pela SaúdeJá | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
-| Encarregado de dados real (o `dpo@saudeja.com.br` é fictício) | [`LGPD.md` §11](docs/LGPD/LGPD.md) |
 
 Metas de serviço relacionadas: [`docs/SLO.md`](docs/SLO.md) (§6, zero dado pessoal em log) e [`docs/SLA.md`](docs/SLA.md) (§6, comunicação de incidente).
 

@@ -144,8 +144,8 @@ Se não ficar satisfeito com a resposta, você pode reclamar à Autoridade Nacio
 
 ## 9 ENCARREGADO DE DADOS (DPO)
 
-- **Nome:** [NOME DO ENCARREGADO]
-- **E-mail:** [E-MAIL REAL DO ENCARREGADO]
+- **Nome:** Vanessa Lin
+- **E-mail:** v.lin@gmail.com
 
 ## 10 SEGURANÇA
 
@@ -193,8 +193,7 @@ CONDIÇÕES PARA PUBLICAR (remover este bloco ao publicar):
 1. Coleta e registro do consentimento do aprimoramento do modelo na tela de agendamento, na base de treino separada (ADR-010). Sem isso, a linha "Seu consentimento" da seção 3 não é verdadeira.
 2. Workflow de purga do ADR-009 implementado. Sem isso, os prazos do conjunto de treino na seção 7 não são cumpridos.
 3. Remote do DVC migrado para Brazil South (LGPD.md, subseção 4.3); mecanismo do art. 33 para o processamento da aplicação e do job diário fora do Brasil definido (LGPD.md, subseção 4.2): a ciência registrada antes do formulário informa, mas não é esse mecanismo; local de processamento da Infobip confirmado (seção 5).
-4. Encarregado com nome e e-mail reais (seção 9).
-5. Procedimento de revisão (PROCEDIMENTO-REVISAO.md) acordado em contrato com a clínica, incluindo o prazo de apoio da SaúdeJá (seção 4).
-6. Termos de uso (TERMOS-DE-USO.md) e esta política aprovados pela clínica no contrato do SaaS (LGPD.md, Quadro 1A).
-7. Validação jurídica.
+4. Procedimento de revisão (PROCEDIMENTO-REVISAO.md) acordado em contrato com a clínica, incluindo o prazo de apoio da SaúdeJá (seção 4).
+5. Termos de uso (TERMOS-DE-USO.md) e esta política aprovados pela clínica no contrato do SaaS (LGPD.md, Quadro 1A).
+6. Validação jurídica.
 -->

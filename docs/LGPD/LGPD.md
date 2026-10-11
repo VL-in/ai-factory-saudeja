@@ -3,22 +3,22 @@
 # Declaração estruturada no formato lgpd.md (spec 1.0). O corpo abaixo é a análise
 # completa; estes campos a resumem e precisam ser mantidos em sincronia com ela.
 spec: "1.0"
-atualizado: "2026-10-10"
+atualizado: "2026-10-11"
 expira: "2027-04-09"
 status: "em-adequação"
 controlador:
   nome: "SaúdeJá Tecnologia em Saúde S.A."
-  contato: "dpo@saudeja.com.br"
+  contato: "v.lin@gmail.com"
 encarregado:
   nome: "Encarregado de Dados (DPO) da SaúdeJá — Vanessa Lin"
   contato: "v.lin@gmail.com"
 direitos:
-  canal: "dpo@saudeja.com.br"
+  canal: "v.lin@gmail.com"
   prazo: 15
 politica:
   url: "https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/LGPD/LGPD.md"
   idioma: "pt-br"
-  atualizada: "2026-10-09"
+  atualizada: "2026-10-10"
 bases_legais:
   - finalidade: "Identificação do paciente e execução do agendamento (em nome da clínica-cliente, controladora)"
     base: "execução de contrato"
@@ -547,8 +547,8 @@ Para investigar, a SaúdeJá tem `eventos_app` (90 dias, sobrevive ao restart do
 
 ## 11 CONTATO
 
-- **Encarregado de Dados (DPO):** `dpo@saudeja.com.br`. O endereço é fictício, porque a SaúdeJá é a empresa fictícia do [BRIEFING](../BRIEFING.md). Substituir por um contato real antes de qualquer uso externo.
-- **Responsável técnico:** Vanessa Hoysan Lin (ML Engineer, time de Produto).
+- **Encarregado de Dados (DPO):** Vanessa Lin, `v.lin@gmail.com`. É também o canal dos titulares (frontmatter, `direitos.canal`) e o da Política de privacidade (seção 9).
+- **Responsável técnico:** Vanessa Lin (ML Engineer, time de Produto), `v.lin@gmail.com`.
 
 ## 12 REVISÃO
 
@@ -584,6 +584,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 10/10/2026 | 1, 9.3 | Elementos essenciais propostos pela SaúdeJá e aprovados pela clínica (Quadro 1A, guia da ANPD); retenção dos dados derivados deixa de ser "fixada pela SaúdeJá"; treino compartilhado sem controladoria conjunta; risco 27 |
 | 10/10/2026 | Frontmatter, 2, 3, 4.2, 5, 6, 9.2, 9.4 | Lembrete passa do consentimento (art. 7º, I) à execução do contrato do paciente com a clínica (art. 7º, V); `data_hora_agendada` reclassificada como dado pessoal comum quando tratada sem a especialidade; consentimento restrito ao treino e à transferência internacional; Infobip candidata ao art. 33, IX; oposição ao lembrete pela clínica; itens 13 e 14 encerrados; riscos 28 e 29 |
 | 10/10/2026 | Frontmatter, 1, 1A, 2, 3, 4, 4.2, 5, 5.1, 6, 7, 8.1, 9, 9.5 | Agendamento sem consentimento e base de treino separada, controlada pela SaúdeJá ([ADR-010](../adr/adr-010-base-de-treino-separada.md)): schema `treino` fechado, pseudônimo HMAC com chave secreta, export só da base de treino, sincronização diária do desfecho, caixa de ciência da política e dos termos no lugar do consentimento da transferência, workflow de purga implementado; itens 4, 19 e 20 encerrados; riscos 30 a 34 |
+| 11/10/2026 | Frontmatter, 11 | Contato do controlador, canal dos titulares e encarregado padronizados (Vanessa Lin, `v.lin@gmail.com`); data de atualização da política corrigida para a revisão 0.2 |
 
 Fonte: elaboração própria (2026).
 
