@@ -19,8 +19,8 @@ O no-show custa em média **R$ 180 por consulta perdida** e a taxa nacional gira
 
 | Ambiente | Endereço |
 |---|---|
-| Produção (Hugging Face Space) | _no ar desde a v2.0.0; o endereço entra aqui depois que o UptimeRobot estiver monitorando a produção_ |
-| Desenvolvimento (Hugging Face Space) | _uso interno; o id do Space fica na variável `HF_SPACE_ID` do environment `dev`_ |
+| Produção (Hugging Face Space) | <https://vl-in-saudeja-prod.hf.space> |
+| Desenvolvimento (Hugging Face Space) | <https://vl-in-saudeja-dev.hf.space> (uso interno, para validar antes de `main`) |
 
 O Space publica só a interface Streamlit (porta 7860). A API FastAPI roda no mesmo container, mas não fica exposta publicamente. A visão **Paciente** é aberta; a visão **Funcionário** exige uma conta criada pelo administrador (ver [Criar conta de funcionário](#criar-conta-de-funcionário)).
 
@@ -377,7 +377,14 @@ Toda falha de workflow manda e-mail pelo GitHub. Cada workflow agendado também 
 | `retrain.yml` | `HEALTHCHECKS_RETRAIN_URL` | Gate bloqueou (1), sem dado novo (2), pipeline falhou (3) ou canário em observação (4) |
 | `alerta_observabilidade.yml` | `HEALTHCHECKS_ALERTA_URL` | Limite violado nas últimas 24h (erros, cobertura de explicação, latência) ou banco ilegível |
 
-Os números do dia a dia ficam na aba "Time técnico → Observabilidade" da visão Funcionário. A disponibilidade do Space é medida de fora, pelo UptimeRobot em `/health`.
+Os números do dia a dia ficam na aba "Time técnico → Observabilidade" da visão Funcionário. A disponibilidade do Space é medida de fora, pelo UptimeRobot:
+
+| Monitor | URL | Intervalo | Alerta |
+|---|---|---|---|
+| `SaudeJa prod` | `https://vl-in-saudeja-prod.hf.space/_stcore/health` | 5 min | e-mail da mantenedora; é a medida do [SLO §1.1](docs/SLO.md#11-disponibilidade-da-interface) |
+| `SaudeJa dev` | `https://vl-in-saudeja-dev.hf.space/_stcore/health` | 5 min | nenhum; só histórico, sem SLO |
+
+Os dois são monitores HTTP(s) que esperam status 2xx. A sonda bate em `/_stcore/health`, e não em `/health`: o Space publica só a porta do Streamlit, e nela qualquer caminho desconhecido devolve 200 com o HTML da página, mesmo com a interface quebrada. `/_stcore/health` é respondido pelo servidor do Streamlit e é o mesmo critério do smoke do deploy (`scripts/smoke_deploy.py space`). Com uma batida a cada 5 minutos o Space não fica ocioso tempo bastante para hibernar.
 
 ### Rollback
 

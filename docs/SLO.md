@@ -21,7 +21,7 @@ Service Level Objectives (SLOs) são as metas técnicas internas, mensuráveis, 
 
 | Métrica | Alvo | Observação |
 |---|---|---|
-| Uptime mensal da interface (fila do dia, cadastro) | ≥ 99.0% | Sonda externa no Space (UptimeRobot em `/health`, ligada com o deploy). Orçamento de US$ 100/mês (BRIEFING.md) exclui redundância; o Space free hiberna, e o cold start é risco conhecido. |
+| Uptime mensal da interface (fila do dia, cadastro) | ≥ 99.0% | Sonda externa no Space de produção (UptimeRobot em `/_stcore/health`, a cada 5 min — `/health` é a API, que não é pública; ver a emenda de 2026-10-11 no [ADR-006](adr/adr-006-observabilidade.md)). Orçamento de US$ 100/mês (BRIEFING.md) exclui redundância; o Space free hiberna, e o cold start é risco conhecido. |
 
 ## 2. Latência
 

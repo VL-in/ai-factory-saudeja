@@ -118,6 +118,7 @@ flowchart TB
     MLOps["Time MLOps"]
     Infobip["<b>Infobip</b><br/>SMS — sistema externo"]
     Healthchecks["<b>Healthchecks</b><br/>monitor de cron — sistema externo"]
+    UptimeRobot["<b>UptimeRobot</b><br/>sonda de disponibilidade — sistema externo"]
 
     subgraph SaudeJa["Saúde Já - limite do sistema"]
         direction TB
@@ -174,6 +175,7 @@ flowchart TB
 
     alerta -->|"lê eventos_app e predições<br/>das últimas 24h"| DB
     jobd2 & gate & canario & alerta -->|"ping de sucesso ou /fail"| Healthchecks
+    UptimeRobot -->|"HTTPS /_stcore/health, a cada 5 min"| web
 
     MLOps -->|"aprova o PR"| Runner
 ```
