@@ -77,8 +77,12 @@ def test_documento_desconhecido_e_erro():
 # versão. Mudou um texto? Suba o campo "Versão" do documento e acrescente a
 # versão nova aqui -- nunca troque o hash de uma versão existente: agendamentos
 # já gravados com ela apontariam para um texto que o paciente não viu.
+#
+# Exceção única: o hash de "politica 0.2; termos 0.1" foi trocado em 2026-10-11
+# (contato do encarregado na seção 9 da Política) porque a versão ainda não
+# tinha chegado a nenhum Space -- nenhum agendamento a gravou.
 _HASH_POR_VERSAO = {
-    "politica 0.2; termos 0.1": "3262fc43bbd9fbbe3ef08d6a82193f365a4a22bbdc350c9d772a6cad9f5aeaca",
+    "politica 0.2; termos 0.1": "538d2c1131b81907c5aa1921d4cf1ae132384041267806bfbb7562f7d44a3f65",
 }
 
 

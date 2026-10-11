@@ -320,7 +320,7 @@ def _mostrar_aviso_desfecho():
         st.error(mensagem)
 
 
-CANAL_REVISAO_SAUDEJA = "dpo@saudeja.com.br"
+CANAL_REVISAO_SAUDEJA = "v.lin@gmail.com"
 
 
 def _orientacao_revisao_de_decisao():
