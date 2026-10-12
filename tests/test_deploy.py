@@ -173,6 +173,13 @@ MODULOS_DO_PACOTE = {
     "ruff": ["ruff"],
     "mypy": ["mypy"],
     "types-pyyaml": [],
+    # Namespace `opentelemetry` compartilhado com o opentelemetry-sdk que o
+    # mlflow já puxa: bloquear pelo nome de topo quebraria o mlflow nos jobs
+    # sem api.txt/ui.txt. Ausência dos pacotes não é erro: o import em
+    # src/telemetria.py é tardio e cai em no-op (tests/test_telemetria.py).
+    "opentelemetry-sdk": [],
+    "opentelemetry-exporter-otlp-proto-http": [],
+    "opentelemetry-instrumentation-logging": [],
 }
 
 # Imports tardios que o comando do workflow de fato executa (a importação do

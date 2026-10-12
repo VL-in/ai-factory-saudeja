@@ -33,6 +33,7 @@ import streamlit as st  # noqa: E402
 
 import consentimento  # noqa: E402
 import documentos_legais  # noqa: E402
+import telemetria  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
 from ui import logic  # noqa: E402
 
@@ -40,7 +41,10 @@ from ui import logic  # noqa: E402
 # este script inteiro a cada interação, e já instalou os handlers dele antes de
 # chegar aqui. `configurar_logging` é idempotente -- não duplica handler nem
 # linha -- e a cada rerun reaplica o filtro de redação em handler que tenha
-# aparecido no meio do caminho.
+# aparecido no meio do caminho. A telemetria vem antes, pelo mesmo motivo do
+# `lifespan` da API, e também é idempotente: um exportador por processo, não
+# um por clique.
+telemetria.configurar_telemetria(telemetria.SERVICO_UI)
 configurar_logging()
 
 # 'dev' como default: em produção a imagem do Space define APP_ENV=prod

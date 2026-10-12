@@ -26,6 +26,7 @@ from fastapi import FastAPI, HTTPException, Request  # noqa: E402
 
 import inference  # noqa: E402
 import observabilidade  # noqa: E402
+import telemetria  # noqa: E402
 from config_projeto import caminho_de_env  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
@@ -54,6 +55,11 @@ async def lifespan(app: FastAPI):
     # `propagate=False`, e é aqui que eles recebem o filtro de redação de PII.
     # Configurar depois do primeiro request deixaria o log de acesso inicial --
     # que carrega o IP do cliente -- passar sem redação.
+    #
+    # A telemetria vem antes do logging: o handler OTLP que ela pendura na raiz
+    # e no `uvicorn.access` também recebe o filtro no passeio de
+    # `configurar_logging` (além do que já nasce com ele).
+    telemetria.configurar_telemetria(telemetria.SERVICO_API)
     configurar_logging()
 
     # Carregado uma vez no startup, não por request -- crítico para o SLO

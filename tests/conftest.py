@@ -9,6 +9,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import observabilidade
+import telemetria
 
 _HORAS_DA_GRADE = (8, 9, 10, 11, 13, 14, 15, 16, 17)
 
@@ -33,6 +34,23 @@ def observabilidade_sem_destino_real():
     yield
     observabilidade.flush(timeout=2)
     observabilidade.definir_escritor(_descartar_evento)
+
+
+@pytest.fixture(autouse=True)
+def telemetria_sem_exportar(monkeypatch):
+    """Nenhum teste exporta telemetria para o Grafana Cloud (Passo 8.9).
+
+    Mesmo motivo da fixture de cima: `config_projeto` carrega o `.env` local
+    no import, e o `.env` de quem desenvolve pode ter o endpoint OTLP real.
+    Sem endpoint, `configurar_telemetria` é no-op; quem precisa observar o que
+    sairia (tests/test_telemetria.py) define o endpoint e troca os exportadores
+    por exportadores em memória. O teardown devolve o módulo ao estado inicial.
+    """
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_HEADERS", raising=False)
+    telemetria._reiniciar()
+    yield
+    telemetria._reiniciar()
 
 
 @pytest.fixture

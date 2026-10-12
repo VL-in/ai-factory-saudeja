@@ -57,6 +57,7 @@ import db.repositorio_treino as repositorio_treino  # noqa: E402
 import inference  # noqa: E402
 import observabilidade  # noqa: E402
 import pseudonimo  # noqa: E402
+import telemetria  # noqa: E402
 from config_projeto import (  # noqa: E402
     caminho_de_env,
     hoje_na_clinica,
@@ -645,7 +646,9 @@ def main(argv: list[str] | None = None) -> int:
     # Antes de tudo (blindagem LGPD do log): o job é o único processo que toca telefone de
     # paciente (`enviar_lembrete`), então nenhuma linha dele pode sair antes de
     # o filtro de redação estar instalado -- e o log do Actions deste
-    # repositório é público: o filtro é a última barreira.
+    # repositório é público: o filtro é a última barreira. A telemetria vem
+    # antes, para o handler OTLP também passar pelo filtro.
+    telemetria.configurar_telemetria(telemetria.SERVICO_JOB_D2)
     configurar_logging()
     model_version = pre_checagem()
     # Depois da pré-checagem do campeão (sem campeão válido não há fila) e
@@ -706,6 +709,10 @@ def main(argv: list[str] | None = None) -> int:
         model_version,
         canario_version=preparacao.contexto.model_version if preparacao.contexto else None,
     )
+    # Por último, depois da linha de resumo: o lote pendente de logs e spans
+    # morreria com o processo. Numa saída antecipada (exceção, `sys.exit` da
+    # pré-checagem), quem esvazia é o `shutdown` que o SDK registra no atexit.
+    telemetria.forcar_envio()
     return SAIDA_FALHA if falhas else SAIDA_OK
 
 
