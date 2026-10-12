@@ -273,6 +273,10 @@ def _processar_fila(
             # fica restrita àquela linha. Antes só KeyError/Especialidade eram
             # capturadas, e um TypeError abortava o resto da fila.
             _registrar_quarentena(agendamento, exc, braco.model_version, resultado)
+            telemetria.contar(
+                "saudeja_job_d2_agendamentos_total",
+                {"resultado": "quarentena", "braco": braco.nome},
+            )
             if contadores is not None:
                 contadores["quarentena"] += 1
             _enviar_lembrete(agendamento, cliente, resultado, STATUS_ENVIADO_SEM_PREDICAO)
@@ -288,6 +292,14 @@ def _processar_fila(
             origem=observabilidade.ORIGEM_JOB,
             duracao_ms=round((time.perf_counter() - inicio) * 1000),
             model_version=braco.model_version,
+            detalhe={"braco": braco.nome},
+        )
+        # Só a fila real do job: a predição de teste da UI deformaria a
+        # distribuição que serve de sinal de drift.
+        telemetria.registrar(
+            "saudeja_predicao_probabilidade",
+            probabilidade,
+            {"model_version": braco.model_version, "braco": braco.nome},
         )
 
         repositories.gravar_predicao(
@@ -301,6 +313,14 @@ def _processar_fila(
         )
         resultado["predicoes_gravadas"] += 1
         resultado["fora_do_dominio"] += int(linha.fora_do_dominio)
+        # Exclusivos: predito dentro do domínio do treino, ou fora dele.
+        telemetria.contar(
+            "saudeja_job_d2_agendamentos_total",
+            {
+                "resultado": "fora_do_dominio" if linha.fora_do_dominio else "predito",
+                "braco": braco.nome,
+            },
+        )
         if contadores is not None:
             contadores["predicoes_gravadas"] += 1
             contadores["disparos_por_risco"] += classe_prevista
@@ -313,6 +333,7 @@ def _processar_fila(
                 canal=cliente.canal,
                 status_envio="nao_enviado",
             )
+            telemetria.contar("saudeja_sms_total", {"status_envio": "nao_enviado"})
 
     observado["detalhe"].update(
         {
@@ -320,6 +341,7 @@ def _processar_fila(
             "quarentena": resultado["quarentena"],
             "mensagens_disparadas": resultado["mensagens_disparadas"],
             "lembretes_sem_predicao": resultado["lembretes_sem_predicao"],
+            "falhas_de_envio": resultado["falhas_de_envio"],
             "erros": len(resultado["erros"]),
         }
     )
@@ -418,10 +440,21 @@ def _enviar_lembrete(
         repositories.registrar_mensagem(
             id_agendamento=agendamento["id"], canal=canal, status_envio="falha_envio"
         )
+        # Até o Passo 8.9 a falha de envio era só aviso no run. Agora é evento
+        # `erro` (alerta P2), com a classe da exceção e nunca o motivo: o de
+        # `ErroEnvioInfobip` pode trazer o messageId e o status do provedor.
+        observabilidade.registrar_evento(
+            tipo=observabilidade.TIPO_ERRO,
+            status=observabilidade.STATUS_ERRO,
+            origem=observabilidade.ORIGEM_JOB,
+            detalhe={"rota": "enviar_lembrete", "excecao": exc.__class__.__name__},
+        )
+        telemetria.contar("saudeja_sms_total", {"status_envio": "falha_envio"})
         return
     repositories.registrar_mensagem(
         id_agendamento=agendamento["id"], canal=canal, status_envio=status
     )
+    telemetria.contar("saudeja_sms_total", {"status_envio": status})
     repositories.marcar_lembrete_enviado(agendamento["id"])
     resultado["mensagens_disparadas"] += 1
     if status == STATUS_ENVIADO_SEM_PREDICAO:

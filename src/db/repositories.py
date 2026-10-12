@@ -426,24 +426,28 @@ def inserir_evento_app(
     return _primeira(resposta.data)
 
 
-def buscar_eventos_app(desde: datetime, limite: int = 5000) -> list[Linha]:
+def buscar_eventos_app(
+    desde: datetime, limite: int = 5000, tipos: tuple[str, ...] | None = None
+) -> list[Linha]:
     """Eventos a partir de `desde`, mais recentes primeiro.
 
     `limite` é explícito porque a agregação (p95) é feita em Python sobre estas
     linhas -- o PostgREST não expõe `percentile_cont`. Quem chama compara
     `len(...)` com o limite para saber se a janela foi truncada: um p95
     calculado sobre uma fatia silenciosamente cortada mentiria, e é justamente
-    um número que vai para o pitch (SLO §2)."""
+    um número que vai para o pitch (SLO §2).
+
+    `tipos` filtra no banco, antes do limite: os eventos `acao_ui` (um por
+    interação na UI) não podem ocupar as linhas que o p95 das predições usa."""
     client = obter_client()
-    return _linhas(
+    consulta = (
         client.table("eventos_app")
         .select("criado_em, tipo, origem, duracao_ms, status, model_version, detalhe")
         .gte("criado_em", desde.isoformat())
-        .order("criado_em", desc=True)
-        .limit(limite)
-        .execute()
-        .data
     )
+    if tipos is not None:
+        consulta = consulta.in_("tipo", list(tipos))
+    return _linhas(consulta.order("criado_em", desc=True).limit(limite).execute().data)
 
 
 def ultimo_evento_app(tipo: str, status: str | None = None) -> Linha | None:

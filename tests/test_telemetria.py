@@ -289,3 +289,116 @@ def test_ponto_de_entrada_configura_telemetria_antes_do_logging(arquivo):
 def test_job_esvazia_o_lote_no_fim():
     ordem = _ordem_das_chamadas(REPO_ROOT / "src/jobs/inferencia_diaria.py")
     assert ordem[-1] == "forcar_envio"
+
+
+# --- métricas e spans (P2) ------------------------------------------------------
+
+
+def test_primitivas_sao_no_op_com_a_telemetria_desligada():
+    telemetria.contar("saudeja_acao_total", {"acao": "login"})
+    telemetria.registrar("saudeja_acao_duracao_ms", 12, {"acao": "login"})
+    with telemetria.span("login", {"acao": "login"}):
+        pass
+
+
+def test_contador_e_histograma_chegam_com_os_atributos_permitidos(telemetria_em_memoria):
+    telemetria.contar(
+        "saudeja_acao_total",
+        {"acao": "carregar_fila", "status": "ok", "id_agendamento": "550e8400", "excecao": None},
+    )
+    telemetria.registrar("saudeja_acao_duracao_ms", 42, {"acao": "carregar_fila"})
+
+    assert telemetria_em_memoria.pontos("saudeja_acao_total") == [
+        ({"acao": "carregar_fila", "status": "ok"}, 1)
+    ]
+    assert telemetria_em_memoria.pontos("saudeja_acao_duracao_ms") == [
+        ({"acao": "carregar_fila"}, 1)
+    ]
+
+
+def test_metrica_fora_do_catalogo_ou_com_tipo_trocado_e_ignorada(telemetria_em_memoria):
+    telemetria.contar("saudeja_inventada_total", {"acao": "x"})
+    telemetria.registrar("saudeja_acao_total", 3, {"acao": "x"})
+    assert telemetria_em_memoria.pontos("saudeja_inventada_total") == []
+    assert telemetria_em_memoria.pontos("saudeja_acao_total") == []
+
+
+def test_histograma_de_probabilidade_usa_faixas_de_0_1(telemetria_em_memoria):
+    telemetria.registrar("saudeja_predicao_probabilidade", 0.35, {"braco": "campeao"})
+    dados = telemetria_em_memoria.leitor.get_metrics_data()
+    (metrica,) = [
+        m
+        for r in dados.resource_metrics
+        for e in r.scope_metrics
+        for m in e.metrics
+        if m.name == "saudeja_predicao_probabilidade"
+    ]
+    (ponto,) = metrica.data.data_points
+    assert list(ponto.explicit_bounds) == list(telemetria.BUCKETS_DE_PROBABILIDADE)
+
+
+def test_span_com_erro_leva_so_a_classe_da_excecao(telemetria_em_memoria):
+    with pytest.raises(RuntimeError), telemetria.span("carregar_fila", {"acao": "carregar_fila"}):
+        raise RuntimeError(f"PostgREST ecoou {TELEFONE}")
+
+    (span,) = telemetria_em_memoria.spans()
+    assert span.status.status_code.name == "ERROR"
+    assert span.status.description == "RuntimeError"
+    assert span.attributes["excecao"] == "RuntimeError"
+    assert span.events == ()  # sem record_exception: a mensagem não sai
+    assert TELEFONE not in str(dict(span.attributes))
+
+
+def test_span_de_recusa_nao_e_erro(telemetria_em_memoria):
+    with pytest.raises(KeyError), telemetria.span("login", recusas=(KeyError,)):
+        raise KeyError("senha")
+
+    (span,) = telemetria_em_memoria.spans()
+    assert span.status.status_code.name != "ERROR"
+    assert span.attributes["excecao"] == "KeyError"
+
+
+def test_atributos_permitidos_nao_tem_identificador():
+    """Cardinalidade fechada: identificador de agendamento, paciente, sessão
+    ou trace como atributo de métrica abriria uma série por valor (limite de
+    10 mil séries no plano gratuito) e carregaria dado pessoal."""
+    proibidos = ("id", "sess", "trace", "span", "paciente", "telefone", "email", "nome", "cpf")
+    for chave in telemetria.ATRIBUTOS_PERMITIDOS:
+        assert not any(p in chave.split("_") or chave.startswith(p) for p in proibidos), chave
+
+
+def _chamadas_de_telemetria():
+    for arquivo in (REPO_ROOT / "src").rglob("*.py"):
+        if arquivo.name == "telemetria.py":
+            continue
+        for no in ast.walk(ast.parse(arquivo.read_text(encoding="utf-8"))):
+            if (
+                isinstance(no, ast.Call)
+                and isinstance(no.func, ast.Attribute)
+                and isinstance(no.func.value, ast.Name)
+                and no.func.value.id == "telemetria"
+                and no.func.attr in {"contar", "registrar", "span"}
+            ):
+                yield arquivo.name, no
+
+
+def test_chamadas_de_src_usam_metricas_e_atributos_do_catalogo():
+    """Guarda estática: em runtime, nome ou chave fora do catálogo é
+    descartado em silêncio (não pode derrubar a ação), então o erro de
+    digitação só aparece aqui."""
+    vistas = 0
+    for arquivo, chamada in _chamadas_de_telemetria():
+        vistas += 1
+        if chamada.func.attr != "span":
+            nome = chamada.args[0]
+            assert isinstance(nome, ast.Constant) and nome.value in telemetria.METRICAS, (
+                f"{arquivo}:{chamada.lineno}: métrica fora do catálogo"
+            )
+        for argumento in chamada.args[1:]:
+            if isinstance(argumento, ast.Dict):
+                chaves = {k.value for k in argumento.keys if isinstance(k, ast.Constant)}
+                assert chaves <= telemetria.ATRIBUTOS_PERMITIDOS, (
+                    f"{arquivo}:{chamada.lineno}: atributo fora da allowlist: "
+                    f"{chaves - telemetria.ATRIBUTOS_PERMITIDOS}"
+                )
+    assert vistas > 0

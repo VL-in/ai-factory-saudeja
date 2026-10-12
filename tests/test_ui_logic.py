@@ -18,6 +18,7 @@ from supabase_auth.errors import AuthApiError, AuthRetryableError
 
 import db.repositories as repositories
 import inference
+import observabilidade
 from api.main import app
 from api.schemas import PacienteConsultaIn
 from ui import logic
@@ -1159,3 +1160,93 @@ def test_encaminhar_ao_treino_recusa_cpf_invalido():
 def test_decisao_desconhecida_e_erro():
     with pytest.raises(ValueError):
         logic.decidir_pedido_da_clinica("p1", "apagar")
+
+
+# --- observabilidade das ações da UI (Passo 8.9) ----------------------------------
+
+
+def test_falha_de_banco_na_ui_deixa_evento_de_erro_e_acao_com_erro(
+    monkeypatch, eventos_capturados
+):
+    """Até o Passo 8.9 a falha virava só a mensagem na tela: sem log nem
+    evento, o alerta diário não a via."""
+
+    def _indisponivel(_dia):
+        raise _ErroDeSchema("08006", "falhou para 5511987654321")
+
+    monkeypatch.setattr(logic.repositories, "buscar_fila_do_dia", _indisponivel)
+
+    with pytest.raises(logic.ErroPersistencia):
+        logic.buscar_fila_do_dia(date(2026, 9, 28))
+
+    observabilidade.flush()
+    por_tipo = {e["tipo"]: e for e in eventos_capturados}
+    assert por_tipo["erro"]["detalhe"] == {"rota": "fila_do_dia", "excecao": "_ErroDeSchema"}
+    assert por_tipo["acao_ui"]["status"] == "erro"
+    assert por_tipo["acao_ui"]["detalhe"] == {
+        "acao": "carregar_fila",
+        "excecao": "ErroPersistencia",
+    }
+    assert "5511987654321" not in str(eventos_capturados)
+
+
+def test_login_recusado_e_recusa_sem_o_email(eventos_capturados):
+    erro = AuthApiError("Invalid login credentials", 400, "invalid_credentials")
+
+    with pytest.raises(logic.ErroCredenciais):
+        _autenticar_com_erro(erro)
+
+    observabilidade.flush()
+    (evento,) = eventos_capturados
+    assert evento["status"] == observabilidade.STATUS_RECUSADO
+    assert evento["detalhe"] == {"acao": "login", "excecao": "ErroCredenciais"}
+    assert "clinica.test" not in str(evento)
+
+
+def test_login_com_autenticacao_fora_do_ar_e_erro(eventos_capturados):
+    with pytest.raises(logic.ErroAutenticacaoIndisponivel):
+        _autenticar_com_erro(AuthRetryableError("timeout", 503))
+
+    observabilidade.flush()
+    (evento,) = eventos_capturados
+    assert evento["status"] == observabilidade.STATUS_ERRO
+    assert evento["detalhe"]["excecao"] == "ErroAutenticacaoIndisponivel"
+
+
+def test_cadastro_invalido_e_recusa_nao_erro(eventos_capturados):
+    with pytest.raises(logic.ErroValidacaoCadastro):
+        logic.cadastrar_paciente_e_agendamento(
+            cpf="123",
+            telefone="",
+            data_nascimento=None,
+            sexo="F",
+            especialidade="cardiologia",
+            distancia_km=1.0,
+            data_consulta=date(2026, 10, 20),
+            hora_consulta=None,
+            **SO_CIENCIA,
+        )
+
+    observabilidade.flush()
+    assert [(e["detalhe"]["acao"], e["status"]) for e in eventos_capturados] == [
+        ("cadastro", "recusado")
+    ]
+
+
+def test_aba_de_observabilidade_le_so_os_tipos_do_slo(monkeypatch):
+    """`acao_ui` sai a cada interação; sem o filtro, ocuparia o limite de
+    linhas da janela e truncaria o p95 das predições."""
+    chamadas = []
+
+    def _buscar(desde, limite, tipos=None):
+        chamadas.append(tipos)
+        return []
+
+    monkeypatch.setattr(logic.repositories, "buscar_eventos_app", _buscar)
+    monkeypatch.setattr(logic.repositories, "contar_predicoes_e_explicacoes", lambda d: (0, 0))
+    monkeypatch.setattr(logic.repositories, "ultimo_evento_app", lambda *a, **k: None)
+
+    logic.resumo_observabilidade(24)
+
+    assert chamadas == [observabilidade.TIPOS_DO_SLO]
+    assert observabilidade.TIPO_ACAO_UI not in observabilidade.TIPOS_DO_SLO

@@ -335,7 +335,21 @@ class ItemFila:
 _CODIGOS_DE_SCHEMA_DESATUALIZADO = frozenset({"42703", "42P01"})
 
 
-def _relatar_falha_persistencia(exc: Exception, acao: str) -> NoReturn:
+def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoReturn:
+    """Traduz a falha do banco na mensagem que a tela mostra -- e, antes,
+    deixa rastro dela (Passo 8.9): até aqui a falha virava só a mensagem
+    amigável, sem log nem evento, e o alerta diário não tinha como vê-la.
+
+    `rota` é o rótulo fixo da operação. Só ele e o **nome da classe** da
+    exceção vão para o log e para `eventos_app`: a mensagem de um erro do
+    PostgREST pode ecoar o valor de uma coluna."""
+    excecao = type(exc).__name__
+    logger.warning("falha de persistência na UI", extra={"rota": rota, "excecao": excecao})
+    observabilidade.registrar_evento(
+        observabilidade.TIPO_ERRO,
+        status=observabilidade.STATUS_ERRO,
+        detalhe={"rota": rota, "excecao": excecao},
+    )
     if isinstance(exc, ConfiguracaoSupabaseAusente):
         raise ErroPersistencia(str(exc)) from exc
     if getattr(exc, "code", None) in _CODIGOS_DE_SCHEMA_DESATUALIZADO:
@@ -355,13 +369,25 @@ def _relatar_falha_persistencia(exc: Exception, acao: str) -> NoReturn:
     raise ErroPersistencia(f"{acao}: {exc}") from exc
 
 
+def _acao_ui(acao: str, *recusas: type[BaseException]):
+    """Mede uma ação da interface de ponta a ponta (latência, volume e
+    desfecho), em `eventos_app` e no Grafana (Passo 8.9). `recusas` são as
+    exceções que significam "o sistema funcionou e recusou" (senha errada,
+    formulário inválido): viram `recusado`, não `erro`, e não entram na taxa
+    de erro que alerta a mantenedora."""
+    return observabilidade.medir(
+        observabilidade.TIPO_ACAO_UI, detalhe={"acao": acao}, recusas=recusas
+    )
+
+
+@_acao_ui("carregar_fila")
 def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
     """Fila do dia ordenada por risco (probabilidade desc, ver
     repositories.buscar_fila_do_dia)."""
     try:
         linhas = repositories.buscar_fila_do_dia(dia or hoje_na_clinica())
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao consultar a fila do dia")
+        _relatar_falha_persistencia(exc, "Falha ao consultar a fila do dia", rota="fila_do_dia")
 
     itens = []
     for linha in linhas:
@@ -464,6 +490,7 @@ def pode_registrar_desfecho(data_hora_agendada: datetime, hoje: date | None = No
     )
 
 
+@_acao_ui("registrar_desfecho", ErroDesfechoForaDePrazo)
 def atualizar_status_agendamento(
     id_agendamento: str, status: str, data_hora_agendada: datetime | None = None
 ) -> None:
@@ -482,7 +509,9 @@ def atualizar_status_agendamento(
             "O desfecho só pode ser registrado no dia da consulta ou depois."
         ) from exc
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao registrar desfecho do agendamento")
+        _relatar_falha_persistencia(
+            exc, "Falha ao registrar desfecho do agendamento", rota="desfecho"
+        )
 
 
 def resumo_da_fila(itens: list[ItemFila]) -> dict:
@@ -693,6 +722,7 @@ MENSAGEM_SEM_CIENCIA = (
 )
 
 
+@_acao_ui("cadastro", ErroValidacaoCadastro)
 def cadastrar_paciente_e_agendamento(
     cpf: str,
     telefone: str,
@@ -785,7 +815,7 @@ def cadastrar_paciente_e_agendamento(
             versao_documentos=versao_documentos,
         )
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao cadastrar paciente/agendamento")
+        _relatar_falha_persistencia(exc, "Falha ao cadastrar paciente/agendamento", rota="cadastro")
 
     # Daqui em diante o agendamento está confirmado.
     treino_ok = registrar_no_treino(
@@ -891,6 +921,7 @@ ROTULOS_SITUACAO_PEDIDO = {
 }
 
 
+@_acao_ui("registrar_pedido", ErroPedido)
 def registrar_pedido_da_clinica(codigo_agendamento: str, tipo: str) -> None:
     """Pedido sobre os dados da clínica, pelo código do agendamento que a
     "Fila do dia" mostra: a equipe nunca procura o paciente por CPF ou nome
@@ -907,9 +938,10 @@ def registrar_pedido_da_clinica(codigo_agendamento: str, tipo: str) -> None:
     except ErroPedido:
         raise
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao registrar o pedido")
+        _relatar_falha_persistencia(exc, "Falha ao registrar o pedido", rota="registrar_pedido")
 
 
+@_acao_ui("encaminhar_pedido", ErroPedido)
 def encaminhar_pedido_ao_treino(cpf: str) -> None:
     """Pedido de eliminação dos dados de aprimoramento, encaminhado pela
     clínica à SaúdeJá, que é a controladora da base de treino (ADR-010). O
@@ -921,16 +953,20 @@ def encaminhar_pedido_ao_treino(cpf: str) -> None:
     try:
         repositorio_treino.registrar_pedido(pseudonimo.id_titular(cpf), "eliminacao", "clinica")
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao encaminhar o pedido ao SaúdeJá")
+        _relatar_falha_persistencia(
+            exc, "Falha ao encaminhar o pedido ao SaúdeJá", rota="encaminhar_pedido"
+        )
 
 
+@_acao_ui("listar_pedidos")
 def listar_pedidos_da_clinica() -> list[dict]:
     try:
         return repositories.pedidos_abertos()
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao listar os pedidos")
+        _relatar_falha_persistencia(exc, "Falha ao listar os pedidos", rota="listar_pedidos")
 
 
+@_acao_ui("decidir_pedido")
 def decidir_pedido_da_clinica(id_pedido: str, decisao: str) -> bool:
     """`confirmar` (pendente -> confirmado; a eliminação confirmada é
     executada pelo workflow de purga), `recusar` (pendente -> recusado) ou
@@ -946,7 +982,7 @@ def decidir_pedido_da_clinica(id_pedido: str, decisao: str) -> bool:
     try:
         return acoes[decisao](id_pedido)
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao atualizar o pedido")
+        _relatar_falha_persistencia(exc, "Falha ao atualizar o pedido", rota="decidir_pedido")
 
 
 def disparar_job_diario(dia: date | None = None) -> dict:
@@ -957,7 +993,9 @@ def disparar_job_diario(dia: date | None = None) -> dict:
     try:
         return job_inferencia_diaria.processar_dia(dia)
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao rodar o job de inferência diária")
+        _relatar_falha_persistencia(
+            exc, "Falha ao rodar o job de inferência diária", rota="job_manual"
+        )
 
 
 def obter_cliente(backend: str | None = None):
@@ -977,6 +1015,7 @@ def obter_cliente(backend: str | None = None):
 LIMITE_EVENTOS_OBSERVABILIDADE = 5000
 
 
+@_acao_ui("observabilidade")
 def resumo_observabilidade(janela_horas: int = 24) -> dict:
     """Números do SLO §2/§4/§5 lidos de `eventos_app`/`predicoes` (ADR-006)
     -- é daqui que sai a aba "Observabilidade" e, na validação final para o
@@ -989,13 +1028,17 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
     janela foi cortada do que publicar um número errado no pitch."""
     desde = observabilidade.inicio_da_janela(janela_horas)
     try:
-        eventos = repositories.buscar_eventos_app(desde, limite=LIMITE_EVENTOS_OBSERVABILIDADE)
+        eventos = repositories.buscar_eventos_app(
+            desde, limite=LIMITE_EVENTOS_OBSERVABILIDADE, tipos=observabilidade.TIPOS_DO_SLO
+        )
         total_predicoes, com_explicacao = repositories.contar_predicoes_e_explicacoes(desde)
         ultimo_job = repositories.ultimo_evento_app(
             observabilidade.TIPO_JOB_D2, status=observabilidade.STATUS_OK
         )
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao consultar a observabilidade")
+        _relatar_falha_persistencia(
+            exc, "Falha ao consultar a observabilidade", rota="observabilidade"
+        )
 
     predicoes = [e for e in eventos if e["tipo"] == observabilidade.TIPO_PREDICAO]
     latencias = [e["duracao_ms"] for e in predicoes if e["duracao_ms"] is not None]
@@ -1098,6 +1141,7 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
     return ErroCredenciais(MENSAGEM_CREDENCIAIS_INVALIDAS)
 
 
+@_acao_ui("login", ErroCredenciais)
 def autenticar_funcionario(
     email: str, senha: str, criar_client=None, agora: datetime | None = None
 ) -> SessaoFuncionario:

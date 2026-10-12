@@ -17,6 +17,7 @@ O que se trava aqui:
 """
 import pytest
 
+import observabilidade
 from jobs import inferencia_diaria as job
 
 
@@ -319,3 +320,45 @@ def test_resumo_mostra_a_sincronizacao_do_treino(tmp_path, monkeypatch):
     job._publicar_resumo(_resultado(sincronizados_treino=3), [], [], "abc123")
 
     assert "| sincronizados_treino | 3 |" in destino.read_text(encoding="utf-8")
+
+
+# --- observabilidade do job (Passo 8.9) --------------------------------------
+
+
+def test_falha_de_envio_vira_evento_de_erro_so_com_a_classe(
+    repositorio, eventos_capturados, telemetria_em_memoria
+):
+    """Até o Passo 8.9 a falha de envio era só aviso no run, e não alertava."""
+    repositorio([_agendamento("a01", pacientes={"sexo": "F"})], threshold=1.01)
+    job.processar_dia(cliente_mensageria=_Espiao())
+
+    observabilidade.flush()
+    erros = [e for e in eventos_capturados if e["tipo"] == "erro"]
+    assert {"rota": "enviar_lembrete", "excecao": "KeyError"} in [e["detalhe"] for e in erros]
+    (job_d2,) = [e for e in eventos_capturados if e["tipo"] == "job_d2"]
+    assert job_d2["detalhe"]["falhas_de_envio"] == 1
+    assert ({"status_envio": "falha_envio"}, 1) in telemetria_em_memoria.pontos(
+        "saudeja_sms_total"
+    )
+
+
+def test_job_mede_resultado_probabilidade_e_envio_por_braco(repositorio, telemetria_em_memoria):
+    repositorio(
+        [
+            _agendamento("a01"),
+            _agendamento("a02", distancia_km=120),
+            _agendamento("a03", distancia_km=None),
+        ],
+        threshold=0.0,
+    )
+    job.processar_dia(cliente_mensageria=_Espiao())
+
+    resultados = {
+        atributos["resultado"]: valor
+        for atributos, valor in telemetria_em_memoria.pontos("saudeja_job_d2_agendamentos_total")
+    }
+    assert resultados == {"predito": 1, "fora_do_dominio": 1, "quarentena": 1}
+    ((atributos, medicoes),) = telemetria_em_memoria.pontos("saudeja_predicao_probabilidade")
+    assert atributos["braco"] == "campeao" and medicoes == 2
+    envios = {a["status_envio"]: v for a, v in telemetria_em_memoria.pontos("saudeja_sms_total")}
+    assert envios == {"enviado": 2, job.STATUS_ENVIADO_SEM_PREDICAO: 1}

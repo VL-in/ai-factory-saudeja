@@ -89,7 +89,9 @@ def medir(janela_horas: int = 24) -> Medicoes:
     import db.repositories as repositories
 
     desde = observabilidade.inicio_da_janela(janela_horas)
-    eventos = repositories.buscar_eventos_app(desde, limite=LIMITE_EVENTOS)
+    eventos = repositories.buscar_eventos_app(
+        desde, limite=LIMITE_EVENTOS, tipos=observabilidade.TIPOS_DO_SLO
+    )
     gravadas, com_explicacao = repositories.contar_predicoes_e_explicacoes(desde)
     return medicoes_dos_eventos(eventos, janela_horas, gravadas, com_explicacao)
 
