@@ -61,6 +61,10 @@ async def lifespan(app: FastAPI):
     # `configurar_logging` (além do que já nasce com ele).
     telemetria.configurar_telemetria(telemetria.SERVICO_API)
     configurar_logging()
+    # Span por request e `http.server.request.duration` (P3); no-op com a
+    # telemetria desligada. O `registrar_latencia` abaixo roda dentro do span do
+    # request, e o evento de `/predict` leva o trace_id como `id_execucao`.
+    telemetria.instrumentar_fastapi(app)
 
     # Carregado uma vez no startup, não por request -- crítico para o SLO
     # de latência p95<2s (recarregar o LightGBM/SHAP explainer a cada

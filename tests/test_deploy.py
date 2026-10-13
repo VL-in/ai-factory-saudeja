@@ -180,6 +180,8 @@ MODULOS_DO_PACOTE = {
     "opentelemetry-sdk": [],
     "opentelemetry-exporter-otlp-proto-http": [],
     "opentelemetry-instrumentation-logging": [],
+    "opentelemetry-instrumentation-fastapi": [],
+    "opentelemetry-instrumentation-httpx": [],
 }
 
 # Imports tardios que o comando do workflow de fato executa (a importação do

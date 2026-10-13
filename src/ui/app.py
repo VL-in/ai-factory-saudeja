@@ -21,6 +21,7 @@ funcionário se cria com `python scripts/criar_funcionario.py`.
 """
 import os
 import sys
+import uuid
 from datetime import date, time
 from pathlib import Path
 
@@ -46,6 +47,19 @@ from ui import logic  # noqa: E402
 # um por clique.
 telemetria.configurar_telemetria(telemetria.SERVICO_UI)
 configurar_logging()
+
+CHAVE_SESSAO_TELEMETRIA = "_telemetria_sessao"
+
+
+def _id_da_sessao() -> str:
+    """`session.id` dos spans (P3 do Passo 8.9): aleatório, criado na primeira
+    ação da aba do navegador, sem ligação com o e-mail de quem fez login. Lido
+    do `session_state` porque as ações em callback (`on_click`) rodam antes do
+    corpo do script."""
+    return st.session_state.setdefault(CHAVE_SESSAO_TELEMETRIA, uuid.uuid4().hex)
+
+
+telemetria.definir_sessao(_id_da_sessao)
 
 # 'dev' como default: em produção a imagem do Space define APP_ENV=prod
 # explicitamente, e rodar local não exige configurar nada para ver

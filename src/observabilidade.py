@@ -26,7 +26,8 @@ Três propriedades que o resto do módulo existe para garantir:
    isso dentro de um jsonb.
 
 Desde o Passo 8.9, cada evento também vira métrica e cada `medir` abre um
-span no Grafana Cloud (`src/telemetria.py`, no-op sem endpoint OTLP).
+span no Grafana Cloud (`src/telemetria.py`, no-op sem endpoint OTLP), e o
+`detalhe` ganha o `id_execucao` que liga a linha ao trace ou ao run do job.
 `eventos_app` continua sendo a fonte de verdade de longo prazo.
 
 O import de `db.repositories` é **tardio, dentro do worker**, de propósito: a
@@ -172,6 +173,14 @@ def registrar_evento(
         _registrar_metricas(tipo, status, origem, duracao_ms, model_version, detalhe or {})
     if not ativa() or _indisponivel_no_processo:
         return False
+
+    # Correlação (P3 do Passo 8.9): o trace da ação ou da requisição, ou o run
+    # do Actions no job. Quem já trouxe um `id_execucao` próprio fica com ele.
+    if not (detalhe or {}).get("id_execucao"):
+        with suppress(Exception):
+            execucao = telemetria.id_execucao()
+            if execucao:
+                detalhe = {**(detalhe or {}), "id_execucao": execucao}
 
     evento = {
         "tipo": tipo,

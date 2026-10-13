@@ -199,7 +199,8 @@ def _processar_fila(
     de negócio dentro de um `with`. `observado` é o dicionário cedido por
     `observabilidade.medir`: o que for escrito em `observado["detalhe"]` vira
     o `detalhe` do evento `job_d2` gravado ao final."""
-    pendentes = repositories.buscar_agendamentos_d2_pendentes(data_referencia)
+    with telemetria.span("buscar_fila"):
+        pendentes = repositories.buscar_agendamentos_d2_pendentes(data_referencia)
 
     resultado: dict[str, Any] = {
         "agendamentos_encontrados": len(pendentes),
@@ -259,14 +260,22 @@ def _processar_fila(
         if contadores is not None:
             contadores["agendamentos"] += 1
 
+        # Spans por agendamento (P3), com o uuid interno como identificador de
+        # span -- nunca como atributo de métrica.
+        identificadores = {"id_agendamento": agendamento.get("id")}
         inicio = time.perf_counter()
         try:
-            linha = contrato_features.validar_payload(
-                _payload_de_agendamento(agendamento), braco.mapa_especialidade
-            )
-            X = inference.construir_features(linha.valores, braco.mapa_especialidade)
-            probabilidade = float(inference.predizer(braco.model, X)[0])
-            contribuicoes = explicar(braco.explainer, X)
+            with telemetria.span(
+                "predizer",
+                {"braco": braco.nome, "model_version": braco.model_version},
+                identificadores=identificadores,
+            ):
+                linha = contrato_features.validar_payload(
+                    _payload_de_agendamento(agendamento), braco.mapa_especialidade
+                )
+                X = inference.construir_features(linha.valores, braco.mapa_especialidade)
+                probabilidade = float(inference.predizer(braco.model, X)[0])
+                contribuicoes = explicar(braco.explainer, X)
         except Exception as exc:
             # Quarentena: QUALQUER falha ao predizer uma linha (regra de
             # negócio do contrato, especialidade fora do mapa, nulo inesperado)
@@ -302,15 +311,16 @@ def _processar_fila(
             {"model_version": braco.model_version, "braco": braco.nome},
         )
 
-        repositories.gravar_predicao(
-            id_agendamento=agendamento["id"],
-            probabilidade=probabilidade,
-            classe_prevista=classe_prevista,
-            threshold_usado=threshold,
-            explicacao_shap=contribuicoes,
-            model_version=braco.model_version,
-            fora_do_dominio=linha.fora_do_dominio,
-        )
+        with telemetria.span("gravar", identificadores=identificadores):
+            repositories.gravar_predicao(
+                id_agendamento=agendamento["id"],
+                probabilidade=probabilidade,
+                classe_prevista=classe_prevista,
+                threshold_usado=threshold,
+                explicacao_shap=contribuicoes,
+                model_version=braco.model_version,
+                fora_do_dominio=linha.fora_do_dominio,
+            )
         resultado["predicoes_gravadas"] += 1
         resultado["fora_do_dominio"] += int(linha.fora_do_dominio)
         # Exclusivos: predito dentro do domínio do treino, ou fora dele.
@@ -421,10 +431,17 @@ def _enviar_lembrete(
     reenvio na janela de três dias do job."""
     canal = cliente_mensageria.canal
     try:
-        telefone = agendamento["pacientes"]["telefone"]
-        cliente_mensageria.enviar_lembrete(
-            telefone=telefone, mensagem=_mensagem_de_lembrete(agendamento)
-        )
+        # O span cobre só o envio: falha marca o span com a classe da exceção
+        # (o motivo da Infobip nunca entra), e a chamada HTTP vira filho dele.
+        with telemetria.span(
+            "enviar_lembrete",
+            {"status_envio": status},
+            identificadores={"id_agendamento": agendamento.get("id")},
+        ):
+            telefone = agendamento["pacientes"]["telefone"]
+            cliente_mensageria.enviar_lembrete(
+                telefone=telefone, mensagem=_mensagem_de_lembrete(agendamento)
+            )
     except (ErroEnvioInfobip, KeyError, TypeError) as exc:
         # Falha de envio de UM paciente (número inválido, sandbox recusou,
         # Infobip fora do ar, paciente sem telefone no embed) não pode travar
@@ -674,25 +691,23 @@ def _linhas_do_canario(resultado: dict[str, Any], canario_version: str | None) -
     return [*linhas, ""]
 
 
-def main(argv: list[str] | None = None) -> int:
-    argparse.ArgumentParser(description="Job de inferência diária D-2").parse_args(argv)
-    # Antes de tudo (blindagem LGPD do log): o job é o único processo que toca telefone de
-    # paciente (`enviar_lembrete`), então nenhuma linha dele pode sair antes de
-    # o filtro de redação estar instalado -- e o log do Actions deste
-    # repositório é público: o filtro é a última barreira. A telemetria vem
-    # antes, para o handler OTLP também passar pelo filtro.
-    telemetria.configurar_telemetria(telemetria.SERVICO_JOB_D2)
-    configurar_logging()
-    model_version = pre_checagem()
+def _executar() -> int:
+    """O caminho agendado, depois da configuração de telemetria e logging.
+    Separado de `main` para rodar inteiro dentro do span raiz da execução."""
+    with telemetria.span("pre_checagem"):
+        model_version = pre_checagem()
     # Depois da pré-checagem do campeão (sem campeão válido não há fila) e
     # antes de qualquer SMS. Nunca levanta: um canário com problema vira falha
     # do run e a fila vai 100% para o campeão.
-    preparacao = canario.preparar_para_job(model_version, params=inference.PARAMS)
+    with telemetria.span("canario"):
+        preparacao = canario.preparar_para_job(model_version, params=inference.PARAMS)
     resultado = processar_dia(contexto_canario=preparacao.contexto)
-    purgados = purgar_eventos_antigos()
-    derivados_purgados = purgar_dados_derivados_antigos()
+    with telemetria.span("purgar"):
+        purgados = purgar_eventos_antigos()
+        derivados_purgados = purgar_dados_derivados_antigos()
     # Depois da fila: o `lembrete_enviado` de hoje já vai junto.
-    sincronizados_treino = sincronizar_treino()
+    with telemetria.span("sincronizar_treino"):
+        sincronizados_treino = sincronizar_treino()
     # Processo curto: sem o flush, os eventos enfileirados morreriam junto com
     # o processo antes de o worker daemon gravá-los (ver observabilidade.flush).
     observabilidade.flush()
@@ -742,11 +757,30 @@ def main(argv: list[str] | None = None) -> int:
         model_version,
         canario_version=preparacao.contexto.model_version if preparacao.contexto else None,
     )
+    return SAIDA_FALHA if falhas else SAIDA_OK
+
+
+def main(argv: list[str] | None = None) -> int:
+    argparse.ArgumentParser(description="Job de inferência diária D-2").parse_args(argv)
+    # Antes de tudo (blindagem LGPD do log): o job é o único processo que toca telefone de
+    # paciente (`enviar_lembrete`), então nenhuma linha dele pode sair antes de
+    # o filtro de redação estar instalado -- e o log do Actions deste
+    # repositório é público: o filtro é a última barreira. A telemetria vem
+    # antes, para o handler OTLP também passar pelo filtro.
+    telemetria.configurar_telemetria(telemetria.SERVICO_JOB_D2)
+    configurar_logging()
+    # Span raiz da execução (P3): pré-checagem, canário, a fila (`job_d2`, com
+    # `buscar_fila`, `predizer`, `gravar` e `enviar_lembrete`), purgas e
+    # sincronização viram um trace só, marcado com o run do Actions.
+    with telemetria.span(
+        "execucao_job_d2", identificadores={"id_execucao": telemetria.id_execucao()}
+    ):
+        codigo = _executar()
     # Por último, depois da linha de resumo: o lote pendente de logs e spans
     # morreria com o processo. Numa saída antecipada (exceção, `sys.exit` da
     # pré-checagem), quem esvazia é o `shutdown` que o SDK registra no atexit.
     telemetria.forcar_envio()
-    return SAIDA_FALHA if falhas else SAIDA_OK
+    return codigo
 
 
 if __name__ == "__main__":

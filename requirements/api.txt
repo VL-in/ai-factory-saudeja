@@ -17,3 +17,8 @@ httpx==0.28.1
 opentelemetry-sdk==1.44.0
 opentelemetry-exporter-otlp-proto-http==1.44.0
 opentelemetry-instrumentation-logging==0.65b0
+# Tracing automático (P3 do Passo 8.9): span por chamada httpx (Supabase,
+# Infobip, UI -> API com traceparent) e por request do FastAPI. Os spans saem
+# sanitizados por src/telemetria.py (URL sem query string, sem IP).
+opentelemetry-instrumentation-fastapi==0.65b0
+opentelemetry-instrumentation-httpx==0.65b0

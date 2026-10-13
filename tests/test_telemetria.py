@@ -10,6 +10,10 @@ Três coisas são provadas aqui:
    (`uvicorn.access`). O Loki é a primeira cópia de log que não é efêmera.
 3. **Os pontos de entrada chamam a telemetria antes do logging**, e o job
    esvazia o lote no fim.
+4. **Tracing (P3)**: os spans da instrumentação automática (httpx, FastAPI)
+   saem sem query string, sem IP e sem a mensagem da exceção; identificadores
+   vão ao span e nunca à métrica; `id_execucao` liga `eventos_app` ao trace ou
+   ao run do Actions.
 """
 import ast
 import io
@@ -401,4 +405,246 @@ def test_chamadas_de_src_usam_metricas_e_atributos_do_catalogo():
                     f"{arquivo}:{chamada.lineno}: atributo fora da allowlist: "
                     f"{chaves - telemetria.ATRIBUTOS_PERMITIDOS}"
                 )
+        for palavra in chamada.keywords:
+            if palavra.arg == "identificadores" and isinstance(palavra.value, ast.Dict):
+                chaves = {k.value for k in palavra.value.keys if isinstance(k, ast.Constant)}
+                assert chaves <= telemetria.IDENTIFICADORES_DE_SPAN, (
+                    f"{arquivo}:{chamada.lineno}: identificador fora da allowlist: "
+                    f"{chaves - telemetria.IDENTIFICADORES_DE_SPAN}"
+                )
     assert vistas > 0
+
+
+# --- tracing (P3) ---------------------------------------------------------------
+
+
+def _todo_o_span(span) -> str:
+    """Tudo o que sai num span, como texto, para procurar vazamento."""
+    return " ".join(
+        [
+            span.name,
+            str(dict(span.attributes)),
+            str(span.status.description),
+            *(f"{e.name} {dict(e.attributes or {})}" for e in span.events),
+        ]
+    )
+
+
+@pytest.fixture
+def servidor_http():
+    """Servidor HTTP local de verdade: a instrumentação do httpx envolve o
+    transporte real (`HTTPTransport`), que um `MockTransport` não usa."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Responde(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"[]")
+
+        def log_message(self, *args):
+            pass
+
+    servidor = ThreadingHTTPServer(("127.0.0.1", 0), _Responde)
+    fio = threading.Thread(target=servidor.serve_forever, daemon=True)
+    fio.start()
+    yield f"http://127.0.0.1:{servidor.server_address[1]}"
+    servidor.shutdown()
+
+
+def test_span_do_httpx_sai_sem_a_query_string_do_postgrest(telemetria_em_memoria, servidor_http):
+    """A query do PostgREST carrega o VALOR do filtro: `?telefone=eq....`."""
+    import httpx
+
+    url = f"{servidor_http}/rest/v1/pacientes?telefone=eq.{TELEFONE}&select=id"
+    with telemetria.span("carregar_fila", {"acao": "carregar_fila"}), httpx.Client() as cliente:
+        cliente.get(url, headers={"apikey": "segredo-do-supabase"})
+
+    spans = telemetria_em_memoria.spans()
+    (filho,) = [s for s in spans if s.name == "GET"]
+    (pai,) = [s for s in spans if s.name == "carregar_fila"]
+    assert filho.parent.span_id == pai.context.span_id
+    assert filho.attributes["url.full"] == f"{servidor_http}/rest/v1/pacientes"
+    assert TELEFONE not in _todo_o_span(filho)
+    assert "segredo-do-supabase" not in _todo_o_span(filho)
+
+
+def test_span_do_fastapi_sai_sem_mensagem_da_excecao_nem_ip(telemetria_em_memoria):
+    """O FastAPI grava a mensagem da exceção (evento e descrição do status) e o
+    IP de quem chamou: tudo isso some antes de sair do processo."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    app = FastAPI()
+
+    @app.get("/quebra")
+    def quebra():
+        raise RuntimeError(f"PostgREST ecoou {TELEFONE}")
+
+    @app.get("/health")
+    def health():
+        return {"ok": True}
+
+    assert telemetria.instrumentar_fastapi(app)
+    try:
+        with TestClient(app, raise_server_exceptions=False) as cliente:
+            cliente.get(f"/quebra?telefone={TELEFONE}")
+            cliente.get("/health")
+    finally:
+        FastAPIInstrumentor.uninstrument_app(app)
+
+    (servidor,) = telemetria_em_memoria.spans()  # /health fica fora do tracing
+    assert servidor.name == "GET /quebra"
+    assert servidor.status.status_code.name == "ERROR"
+    assert servidor.status.description == "RuntimeError"
+    assert TELEFONE not in _todo_o_span(servidor)
+    assert "client.address" not in servidor.attributes
+    assert "user_agent.original" not in servidor.attributes
+    assert all(set(e.attributes or {}) <= {"exception.type"} for e in servidor.events)
+
+
+def test_fastapi_nao_e_instrumentado_com_a_telemetria_desligada():
+    from fastapi import FastAPI
+
+    assert telemetria.instrumentar_fastapi(FastAPI()) is False
+
+
+def test_sanitizacao_de_url_tira_consulta_fragmento_e_credencial():
+    assert (
+        telemetria.url_sem_consulta("https://u:s@abc.supabase.co:8443/rest/v1/x?a=eq.1#f")
+        == "https://abc.supabase.co:8443/rest/v1/x"
+    )
+    assert telemetria.sanitizar_atributos(
+        {"http.target": "/predict?cpf=12345678900", "url.query": "cpf=1", "http.route": "/predict"}
+    ) == {"http.target": "/predict", "http.route": "/predict"}
+
+
+def test_identificadores_vao_ao_span_e_nunca_a_metrica(telemetria_em_memoria):
+    with telemetria.span(
+        "predizer",
+        {"braco": "campeao", "id_agendamento": "nao-pela-allowlist-de-metrica"},
+        identificadores={"id_agendamento": "550e8400-e29b", "telefone": TELEFONE},
+    ):
+        telemetria.contar(
+            "saudeja_job_d2_agendamentos_total",
+            {"resultado": "predito", "id_agendamento": "550e8400-e29b"},
+        )
+
+    (span,) = telemetria_em_memoria.spans()
+    assert span.attributes["id_agendamento"] == "550e8400-e29b"
+    assert TELEFONE not in _todo_o_span(span)
+    assert telemetria_em_memoria.pontos("saudeja_job_d2_agendamentos_total") == [
+        ({"resultado": "predito"}, 1)
+    ]
+
+
+def test_identificadores_de_span_nao_tem_dado_pessoal():
+    proibidos = ("paciente", "telefone", "email", "nome", "cpf", "funcionario")
+    for chave in telemetria.IDENTIFICADORES_DE_SPAN:
+        assert not any(p in chave for p in proibidos), chave
+    assert not telemetria.IDENTIFICADORES_DE_SPAN & telemetria.ATRIBUTOS_PERMITIDOS
+
+
+def test_session_id_vem_do_provedor_e_provedor_quebrado_nao_derruba(telemetria_em_memoria):
+    telemetria.definir_sessao(lambda: "a1b2c3")
+    with telemetria.span("login", {"acao": "login"}):
+        pass
+
+    def _quebrado():
+        raise RuntimeError("sem ScriptRunContext")
+
+    telemetria.definir_sessao(_quebrado)
+    with telemetria.span("login", {"acao": "login"}):
+        pass
+
+    primeiro, segundo = telemetria_em_memoria.spans()
+    assert primeiro.attributes["session.id"] == "a1b2c3"
+    assert "session.id" not in segundo.attributes
+
+
+def test_id_execucao_e_o_trace_dentro_do_span_e_nada_fora(telemetria_em_memoria):
+    assert telemetria.id_execucao() is None
+    with telemetria.span("carregar_fila"):
+        dentro = telemetria.id_execucao()
+    (span,) = telemetria_em_memoria.spans()
+    assert dentro == f"{span.context.trace_id:032x}"
+
+
+def test_id_execucao_do_job_e_o_run_do_actions_mesmo_sem_telemetria(monkeypatch):
+    """Sem Grafana, a linha de `eventos_app` do job ainda aponta para o run."""
+    monkeypatch.setenv("GITHUB_RUN_ID", "18432112345")
+    assert telemetria.configurar_telemetria(telemetria.SERVICO_JOB_D2) is False
+    assert telemetria.id_execucao() == "18432112345"
+
+
+def test_job_vira_um_trace_com_as_etapas(monkeypatch, telemetria_em_memoria):
+    """Span raiz da execução com pré-checagem, canário, a fila (`job_d2` com
+    `buscar_fila`, `predizer`, `gravar`, `enviar_lembrete`), purga e
+    sincronização -- e o run do Actions no span raiz."""
+    from jobs import inferencia_diaria as job
+
+    class _Preparacao:
+        def __init__(self):
+            self.contexto = None
+            self.falhas = []
+            self.avisos = []
+
+    agendamento = {
+        "id": "a01",
+        "especialidade": "cardiologia",
+        "distancia_km": 5.5,
+        "data_hora_agendada": "2026-10-02T13:00:00+00:00",
+        "dias_entre_agendamento_consulta": 14,
+        "historico_noshow": 1,
+        "pacientes": {"data_nascimento": "1980-01-01", "sexo": "F", "telefone": TELEFONE},
+    }
+
+    class _Mensageria:
+        canal = "espiao"
+
+        def enviar_lembrete(self, telefone, mensagem):
+            pass
+
+    monkeypatch.setenv("GITHUB_RUN_ID", "18432112345")
+    monkeypatch.setattr(job, "configurar_logging", lambda: None)
+    monkeypatch.setattr(job, "pre_checagem", lambda: "v1")
+    monkeypatch.setattr(job.canario, "preparar_para_job", lambda *a, **k: _Preparacao())
+    monkeypatch.setattr(job, "obter_cliente_mensageria", _Mensageria)
+    monkeypatch.setattr(job, "purgar_eventos_antigos", lambda: 0)
+    monkeypatch.setattr(job, "purgar_dados_derivados_antigos", lambda: {})
+    monkeypatch.setattr(job, "sincronizar_treino", lambda: 0)
+    monkeypatch.setattr(
+        job.repositories, "buscar_agendamentos_d2_pendentes", lambda data: [agendamento]
+    )
+    for nome in ("gravar_predicao", "registrar_mensagem", "marcar_lembrete_enviado"):
+        monkeypatch.setattr(job.repositories, nome, lambda *a, **k: None)
+    monkeypatch.setitem(job.inference.PARAMS, "decision", {"threshold": 0.0})
+
+    assert job.main([]) == job.SAIDA_OK
+
+    spans = {s.name: s for s in telemetria_em_memoria.spans()}
+    raiz = spans["execucao_job_d2"]
+    assert raiz.parent is None
+    assert raiz.attributes["id_execucao"] == "18432112345"
+    for etapa in ("pre_checagem", "canario", "job_d2", "purgar", "sincronizar_treino"):
+        assert spans[etapa].parent.span_id == raiz.context.span_id, etapa
+    for etapa in ("buscar_fila", "predizer", "gravar", "enviar_lembrete"):
+        assert spans[etapa].parent.span_id == spans["job_d2"].context.span_id, etapa
+    assert spans["predizer"].attributes["id_agendamento"] == "a01"
+    assert all(TELEFONE not in _todo_o_span(s) for s in spans.values())
+
+
+def test_probabilidade_so_e_medida_pelo_job():
+    """A predição de teste da UI deformaria a distribuição que serve de sinal
+    de drift: o histograma de probabilidade é só da fila real do job."""
+    arquivos = {
+        arquivo
+        for arquivo, chamada in _chamadas_de_telemetria()
+        if chamada.args
+        and isinstance(chamada.args[0], ast.Constant)
+        and chamada.args[0].value == "saudeja_predicao_probabilidade"
+    }
+    assert arquivos == {"inferencia_diaria.py"}

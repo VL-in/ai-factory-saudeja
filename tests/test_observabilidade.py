@@ -199,11 +199,15 @@ def test_medir_vira_evento_span_e_metricas(eventos_capturados, telemetria_em_mem
     (evento,) = eventos_capturados
     assert evento["tipo"] == "acao_ui"
     assert evento["status"] == "ok"
-    assert evento["detalhe"] == {"acao": "carregar_fila"}
 
     (span,) = telemetria_em_memoria.spans()
     assert span.name == "carregar_fila"
     assert span.attributes["acao"] == "carregar_fila"
+    # P3: a linha de `eventos_app` leva o trace da ação, que liga a tabela ao Tempo.
+    assert evento["detalhe"] == {
+        "acao": "carregar_fila",
+        "id_execucao": f"{span.context.trace_id:032x}",
+    }
 
     assert telemetria_em_memoria.pontos("saudeja_acao_total") == [
         ({"acao": "carregar_fila", "origem": "processo", "status": "ok"}, 1)
@@ -228,7 +232,7 @@ def test_recusa_esperada_nao_e_erro(eventos_capturados, telemetria_em_memoria):
     observabilidade.flush()
     (evento,) = eventos_capturados
     assert evento["status"] == observabilidade.STATUS_RECUSADO
-    assert evento["detalhe"] == {"acao": "login", "excecao": "SenhaErrada"}
+    assert evento["detalhe"].items() >= {"acao": "login", "excecao": "SenhaErrada"}.items()
     (span,) = telemetria_em_memoria.spans()
     assert span.status.status_code.name != "ERROR"
     assert telemetria_em_memoria.pontos("saudeja_acao_total") == [
@@ -346,6 +350,39 @@ def test_predict_registra_evento_de_latencia(eventos_capturados):
     assert evento["duracao_ms"] >= 0
     assert evento["model_version"]
     assert evento["detalhe"] == {"rota": "/predict", "status_http": 200}
+
+
+def test_predict_com_telemetria_vira_span_e_o_evento_leva_o_trace(
+    eventos_capturados, telemetria_em_memoria
+):
+    """P3 do Passo 8.9: o `lifespan` instrumenta o FastAPI, o request vira um
+    span de servidor, e a linha de `eventos_app` aponta para ele pelo
+    `id_execucao` -- é a ponte entre a tabela (90 dias) e o Tempo (14 dias)."""
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    from api.main import app
+
+    _, mapa_especialidade = inference.carregar_modelo(MODEL_PATH)
+    payload = {
+        "idade": 45,
+        "sexo": "F",
+        "especialidade": sorted(mapa_especialidade)[0],
+        "distancia_km": 5.5,
+        "dias_entre_agendamento_consulta": 14,
+        "historico_noshow": 1,
+        "data_hora_agendada": "2026-01-05T09:00:00",
+    }
+    try:
+        with TestClient(app) as client:
+            assert client.post("/predict", json=payload).status_code == 200
+    finally:
+        FastAPIInstrumentor.uninstrument_app(app)
+    observabilidade.flush()
+
+    (servidor,) = [s for s in telemetria_em_memoria.spans() if s.name == "POST /predict"]
+    evento = next(e for e in eventos_capturados if e["origem"] == observabilidade.ORIGEM_API)
+    assert evento["detalhe"]["id_execucao"] == f"{servidor.context.trace_id:032x}"
+    assert telemetria_em_memoria.pontos("http.server.request.duration")
 
 
 def test_health_nao_gera_evento(eventos_capturados):

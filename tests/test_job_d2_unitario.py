@@ -334,7 +334,10 @@ def test_falha_de_envio_vira_evento_de_erro_so_com_a_classe(
 
     observabilidade.flush()
     erros = [e for e in eventos_capturados if e["tipo"] == "erro"]
-    assert {"rota": "enviar_lembrete", "excecao": "KeyError"} in [e["detalhe"] for e in erros]
+    sem_correlacao = [
+        {k: v for k, v in e["detalhe"].items() if k != "id_execucao"} for e in erros
+    ]
+    assert {"rota": "enviar_lembrete", "excecao": "KeyError"} in sem_correlacao
     (job_d2,) = [e for e in eventos_capturados if e["tipo"] == "job_d2"]
     assert job_d2["detalhe"]["falhas_de_envio"] == 1
     assert ({"status_envio": "falha_envio"}, 1) in telemetria_em_memoria.pontos(
