@@ -591,6 +591,24 @@ def test_job_d2_nao_morre_se_o_modelo_do_canario_nao_baixar():
     assert "||" in texto.splitlines()[linha] or seguinte.strip().startswith("||")
 
 
+def test_job_d2_em_dev_e_so_por_dispatch_do_branch_dev_com_sms_em_stub():
+    """O disparo de dev (Passo 8.9) não pode mudar nada em produção: o cron e
+    o dispatch sem escolha caem em `production`, e o caminho de dev só sai do
+    branch dev, com SMS em stub qualquer que seja a variável do environment."""
+    workflow = yaml.safe_load((WORKFLOWS / "job_d2.yml").read_text(encoding="utf-8"))
+    entrada = workflow[True]["workflow_dispatch"]["inputs"]["ambiente"]
+    assert entrada["default"] == "production"
+    assert set(entrada["options"]) == {"production", "dev"}
+    job = workflow["jobs"]["job-d2"]
+    assert job["environment"]["name"] == "${{ inputs.ambiente || 'production' }}"
+    assert job["env"]["MESSAGING_PROVIDER"].startswith("${{ inputs.ambiente == 'dev' && 'stub'")
+    assert job["env"]["APP_ENV"] == "${{ inputs.ambiente == 'dev' && 'dev' || 'prod' }}"
+    (guarda,) = [p for p in job["steps"] if p.get("if", "").startswith("inputs.ambiente == 'dev'")]
+    assert "github.ref != 'refs/heads/dev'" in guarda["if"]
+    assert "exit 1" in guarda["run"]
+    assert job["steps"].index(guarda) == 0  # antes de qualquer acesso a banco
+
+
 def test_canario_e_encerrado_sempre_por_pr_nunca_por_push_em_main():
     texto = (WORKFLOWS / "canario.yml").read_text(encoding="utf-8")
     assert "gh pr create" in texto
@@ -627,6 +645,13 @@ def test_jobs_com_secret_de_ambiente_declaram_o_environment():
                 # A credencial de exclusão fica num environment só dela,
                 # restrito a `main` (ADR-009).
                 assert ambiente == {"name": "lgpd", "deployment": False}
+            elif arquivo.name == "job_d2.yml":
+                # Cron sempre em production; dev só por dispatch explícito
+                # (ver test_job_d2_em_dev_e_so_por_dispatch_do_branch_dev...).
+                assert ambiente == {
+                    "name": "${{ inputs.ambiente || 'production' }}",
+                    "deployment": False,
+                }
             else:
                 assert ambiente == {"name": "production", "deployment": False}, (
                     f"{arquivo.name}::{nome}"

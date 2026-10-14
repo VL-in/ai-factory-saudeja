@@ -575,9 +575,28 @@ def test_id_execucao_e_o_trace_dentro_do_span_e_nada_fora(telemetria_em_memoria)
 
 def test_id_execucao_do_job_e_o_run_do_actions_mesmo_sem_telemetria(monkeypatch):
     """Sem Grafana, a linha de `eventos_app` do job ainda aponta para o run."""
-    monkeypatch.setenv("GITHUB_RUN_ID", "18432112345")
+    monkeypatch.setenv("GITHUB_RUN_ID", "38445347614")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
     assert telemetria.configurar_telemetria(telemetria.SERVICO_JOB_D2) is False
-    assert telemetria.id_execucao() == "18432112345"
+    assert telemetria.id_execucao() == "gh-38445347614-2"
+
+
+def test_id_do_run_sem_tentativa_e_a_primeira(monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ID", "38445347614")
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
+    assert telemetria.id_do_run() == "gh-38445347614-1"
+    monkeypatch.delenv("GITHUB_RUN_ID")
+    assert telemetria.id_do_run() is None
+
+
+def test_id_do_run_passa_intacto_pelo_filtro_de_pii(monkeypatch):
+    """O run id cru (11 dígitos) é redigido como telefone/CPF; o formato
+    `gh-<run>-<tentativa>` passa intacto, sem exceção no filtro."""
+    monkeypatch.setenv("GITHUB_RUN_ID", "38445347614")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    assert MARCADOR in logging_config.redigir('"id_execucao": "38445347614"')
+    linha = f'"id_execucao": "{telemetria.id_do_run()}"'
+    assert logging_config.redigir(linha) == linha
 
 
 def test_job_vira_um_trace_com_as_etapas(monkeypatch, telemetria_em_memoria):
@@ -608,7 +627,8 @@ def test_job_vira_um_trace_com_as_etapas(monkeypatch, telemetria_em_memoria):
         def enviar_lembrete(self, telefone, mensagem):
             pass
 
-    monkeypatch.setenv("GITHUB_RUN_ID", "18432112345")
+    monkeypatch.setenv("GITHUB_RUN_ID", "38445347614")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setattr(job, "configurar_logging", lambda: None)
     monkeypatch.setattr(job, "pre_checagem", lambda: "v1")
     monkeypatch.setattr(job.canario, "preparar_para_job", lambda *a, **k: _Preparacao())
@@ -628,7 +648,7 @@ def test_job_vira_um_trace_com_as_etapas(monkeypatch, telemetria_em_memoria):
     spans = {s.name: s for s in telemetria_em_memoria.spans()}
     raiz = spans["execucao_job_d2"]
     assert raiz.parent is None
-    assert raiz.attributes["id_execucao"] == "18432112345"
+    assert raiz.attributes["id_execucao"] == "gh-38445347614-1"
     for etapa in ("pre_checagem", "canario", "job_d2", "purgar", "sincronizar_treino"):
         assert spans[etapa].parent.span_id == raiz.context.span_id, etapa
     for etapa in ("buscar_fila", "predizer", "gravar", "enviar_lembrete"):
@@ -648,3 +668,29 @@ def test_probabilidade_so_e_medida_pelo_job():
         and chamada.args[0].value == "saudeja_predicao_probabilidade"
     }
     assert arquivos == {"inferencia_diaria.py"}
+
+
+def test_resumo_do_job_no_log_leva_o_id_execucao_intacto(monkeypatch, caplog):
+    from jobs import inferencia_diaria as job
+
+    monkeypatch.setenv("GITHUB_RUN_ID", "38445347614")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    telemetria.configurar_telemetria(telemetria.SERVICO_JOB_D2)
+    monkeypatch.setattr(job, "pre_checagem", lambda: "v1")
+    monkeypatch.setattr(
+        job.canario,
+        "preparar_para_job",
+        lambda *a, **k: type("P", (), {"contexto": None, "falhas": [], "avisos": []})(),
+    )
+    monkeypatch.setattr(
+        job.repositories, "buscar_agendamentos_d2_pendentes", lambda data: []
+    )
+    monkeypatch.setattr(job, "purgar_eventos_antigos", lambda: 0)
+    monkeypatch.setattr(job, "purgar_dados_derivados_antigos", lambda: {})
+    monkeypatch.setattr(job, "sincronizar_treino", lambda: 0)
+    filtro = logging_config.FiltroRedacaoPII()
+    with caplog.at_level(logging.INFO):
+        job._executar()
+    (resumo,) = [r for r in caplog.records if r.getMessage() == "job D-2 concluído"]
+    filtro.filter(resumo)
+    assert resumo.id_execucao == "gh-38445347614-1"

@@ -743,6 +743,9 @@ def _executar() -> int:
                 )
             },
             "erros": len(resultado["erros"]),
+            # `gh-<run>-<tentativa>`: liga esta linha à de `eventos_app` e ao
+            # trace, e passa intacto pelo filtro de PII (telemetria.id_do_run).
+            "id_execucao": telemetria.id_execucao(),
             "eventos_purgados": purgados,
             "derivados_purgados": derivados_purgados,
             "sincronizados_treino": sincronizados_treino,

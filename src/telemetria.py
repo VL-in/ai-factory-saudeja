@@ -61,6 +61,8 @@ SERVICO_JOB_D2 = "saudeja-job-d2"
 SERVICOS = frozenset({SERVICO_UI, SERVICO_API, SERVICO_JOB_D2})
 
 VERSAO_DESCONHECIDA = "desconhecida"
+# `id_execucao` do job: `gh-<run_id>-<tentativa>` (ver `id_do_run`).
+PREFIXO_RUN = "gh-"
 
 # Buckets explícitos para os histogramas de latência (`saudeja_*_duracao_ms`):
 # a predição aquecida leva ~10 ms e a primeira de um processo ~1,4 s, e os
@@ -219,7 +221,7 @@ def configurar_telemetria(servico: str) -> bool:
         raise ValueError(f"serviço desconhecido para a telemetria: {servico!r}")
     with _trava:
         if servico == SERVICO_JOB_D2:
-            _id_execucao_do_processo = (os.environ.get("GITHUB_RUN_ID") or "").strip() or None
+            _id_execucao_do_processo = id_do_run()
         if _decidido:
             if _handler is not None:
                 _pendurar_handler(_handler)
@@ -317,15 +319,26 @@ def _sessao_atual() -> str | None:
         return None
 
 
-def id_execucao() -> str | None:
-    """O que liga `eventos_app`, Loki e Tempo (P3): o `GITHUB_RUN_ID` no job;
-    na UI e na API, o trace_id do span corrente (32 hex). `None` sem os dois --
-    telemetria desligada fora do Actions, ou evento registrado fora de span.
+def id_do_run() -> str | None:
+    """`gh-<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>`, ou `None` fora do Actions.
 
-    Não vai para o log de stdout de propósito: o log exportado ao Loki já leva o
-    trace_id pelo próprio handler do OTel, e um `GITHUB_RUN_ID` (10 a 11
-    dígitos) solto no log seria redigido pelo `FiltroRedacaoPII` como CPF ou
-    telefone -- e dispararia a regra de PII do Loki."""
+    O prefixo não é enfeite. O `GITHUB_RUN_ID` tem 10 a 11 dígitos, e solto num
+    log o `FiltroRedacaoPII` o redigiria como CPF ou telefone (e a regra de
+    PII do Loki dispararia). Com o hífen antes dos dígitos, a sequência não
+    casa -- a mesma fronteira que já protege o último grupo de um uuid --, e o
+    filtro continua sem exceção nenhuma. A tentativa separa o re-run do run
+    original, que têm o mesmo `GITHUB_RUN_ID`."""
+    run = (os.environ.get("GITHUB_RUN_ID") or "").strip()
+    if not run:
+        return None
+    tentativa = (os.environ.get("GITHUB_RUN_ATTEMPT") or "").strip() or "1"
+    return f"{PREFIXO_RUN}{run}-{tentativa}"
+
+
+def id_execucao() -> str | None:
+    """O que liga `eventos_app`, Loki e Tempo (P3): `id_do_run()` no job; na
+    UI e na API, o trace_id do span corrente (32 hex). `None` sem os dois --
+    telemetria desligada fora do Actions, ou evento registrado fora de span."""
     if _id_execucao_do_processo:
         return _id_execucao_do_processo
     if not _ativa_no_processo:

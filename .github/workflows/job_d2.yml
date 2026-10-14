@@ -20,6 +20,19 @@ on:
     # Workflow agendado so' roda a partir do branch padrao.
     - cron: "17 11 * * *"
   workflow_dispatch:
+    inputs:
+      ambiente:
+        # Disparo manual em dev (Passo 8.9, P3): roda o caminho agendado
+        # inteiro (pre-checagem, canario, fila, purgas, sincronizacao) contra o
+        # Supabase de dev, com SMS em stub. So' para verificar mudancas antes
+        # de producao. O agendamento nao tem inputs e cai sempre em production;
+        # o dispatch, sem escolha, tambem. Quem garante o branch e' a politica
+        # de cada environment: `dev` so' aceita o branch dev, `production` so'
+        # aceita main.
+        description: "Ambiente (dev: branch dev, Supabase de dev, SMS em stub)"
+        type: choice
+        options: [production, dev]
+        default: production
 
 permissions:
   contents: read
@@ -28,7 +41,9 @@ concurrency:
   # OBRIGATORIO: buscar_agendamentos_d2_pendentes so' e' idempotente em
   # sequencia (filtra quem ja' tem predicao/lembrete). Cron e dispatch
   # simultaneos veriam a mesma fila e mandariam SMS em dobro.
-  group: job-d2
+  # Um grupo por ambiente: dev e producao tem bancos separados, e um disparo
+  # de dev nao pode ficar na fila atras do cron de producao.
+  group: job-d2-${{ inputs.ambiente || 'production' }}
   cancel-in-progress: false
 
 jobs:
@@ -40,8 +55,12 @@ jobs:
     # secrets, mas nao entra no historico de deploys -- la' so' fica o deploy.yml.
     # Por isso o environment de producao nao pode ter revisor obrigatorio: o
     # revisor valeria tambem aqui e pararia o job agendado esperando aprovacao.
+    #
+    # `inputs.ambiente` vazio (cron) = production. Em dev, o environment `dev`
+    # precisa de SUPABASE_URL e SUPABASE_SECRET_KEY do projeto de dev; nao
+    # tem Infobip nem Healthchecks, e os passos abaixo nao dependem deles.
     environment:
-      name: production
+      name: ${{ inputs.ambiente || 'production' }}
       deployment: false
     env:
       # Modelo: o mesmo remote do deploy, com SAS so' de leitura.
@@ -55,17 +74,33 @@ jobs:
       # nao depende dela.
       TREINO_CHAVE_PSEUDONIMO: ${{ secrets.TREINO_CHAVE_PSEUDONIMO }}
       # Variavel, nao secret, e sem default aqui: ver o passo de checagem.
-      MESSAGING_PROVIDER: ${{ vars.MESSAGING_PROVIDER }}
+      # Em dev e' sempre stub, qualquer que seja a variavel: o disparo de dev
+      # nao manda SMS pago, nem por engano de configuracao.
+      MESSAGING_PROVIDER: ${{ inputs.ambiente == 'dev' && 'stub' || vars.MESSAGING_PROVIDER }}
       INFOBIP_BASE_URL: ${{ secrets.INFOBIP_BASE_URL }}
       INFOBIP_CHAVE_API: ${{ secrets.INFOBIP_CHAVE_API }}
       INFOBIP_REMETENTE: ${{ vars.INFOBIP_REMETENTE }}
       HEALTHCHECKS_JOB_D2_URL: ${{ secrets.HEALTHCHECKS_JOB_D2_URL }}
-      APP_ENV: prod
+      APP_ENV: ${{ inputs.ambiente == 'dev' && 'dev' || 'prod' }}
+      # Telemetria (Passo 8.9): logs, metricas e traces ao Grafana Cloud, com
+      # `deployment.environment` = APP_ENV. Sem os secrets, o job roda igual e
+      # nao exporta nada.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
       # Rollback manual instantaneo do canario (ADR-008): `true` na variavel
       # do environment `production` faz o job ignorar data/canario/ ja' na proxima execucao,
       # sem PR nem deploy.
       CANARIO_DESLIGADO: ${{ vars.CANARIO_DESLIGADO }}
     steps:
+      - name: Disparo de dev so' a partir do branch dev
+        # Redundante com a politica do environment `dev` de proposito: se
+        # alguem afrouxar a politica, um dispatch de outro branch continua
+        # recusado aqui, antes de qualquer acesso a banco.
+        if: inputs.ambiente == 'dev' && github.ref != 'refs/heads/dev'
+        run: |
+          echo "::error::ambiente=dev so' pode ser disparado a partir do branch dev (ref: $GITHUB_REF)"
+          exit 1
+
       - name: Provedor de mensageria declarado
         # O stub NAO e' um default inofensivo em producao: ele "envia", e o job
         # marca agendamentos.lembrete_enviado -- que o re-treino le como "foi
