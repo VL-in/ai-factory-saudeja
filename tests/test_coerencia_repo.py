@@ -798,14 +798,128 @@ def test_schema_treino_so_e_acessado_por_rpc():
     assert ".table(" not in repositorio
 
 
-def test_chave_do_pseudonimo_fica_fora_do_re_treino_e_do_canario():
+def _textos(no: object) -> list[str]:
+    """Toda string de um YAML já carregado, chaves e valores. Comentário não
+    entra: o `yaml.safe_load` os descarta."""
+    if isinstance(no, str):
+        return [no]
+    if isinstance(no, dict):
+        return [t for chave, valor in no.items() for t in _textos(chave) + _textos(valor)]
+    if isinstance(no, list):
+        return [t for item in no for t in _textos(item)]
+    return []
+
+
+def _texto_do_workflow(arquivo: Path) -> str:
+    return "\n".join(_textos(yaml.safe_load(arquivo.read_text(encoding="utf-8"))))
+
+
+def _fecho_de_imports(entrada: Path) -> set[str]:
+    """Módulos de `src/` alcançados a partir de `entrada`, transitivamente.
+    Os pontos de entrada põem `src/` no sys.path e importam pelo nome curto
+    (`import pseudonimo`, `from db import repositorio_treino`); import de
+    biblioteca não resolve para arquivo e fica de fora."""
+    src = REPO_ROOT / "src"
+    vistos: set[str] = set()
+    pendentes = [entrada]
+    while pendentes:
+        for modulo in _modulos_importados(pendentes.pop()):
+            base = src.joinpath(*modulo.split("."))
+            arquivo = next(
+                (c for c in (base.with_suffix(".py"), base / "__init__.py") if c.is_file()), None
+            )
+            if arquivo and modulo not in vistos:
+                vistos.add(modulo)
+                pendentes.append(arquivo)
+    return vistos
+
+
+_SCRIPT_PYTHON = re.compile(r"\b(?:src|scripts)/[\w/]+\.py\b")
+
+
+def _scripts_rodados_fora_do_job_d2() -> dict[str, set[str]]:
+    """Script Python -> quem o roda: todo workflow menos o `job_d2.yml`, e os
+    stages do `dvc.yaml` (o re-treino e o CI os rodam pelo `dvc repro`)."""
+    rodados: dict[str, set[str]] = {}
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        if arquivo.name != "job_d2.yml":
+            for script in _SCRIPT_PYTHON.findall(_texto_do_workflow(arquivo)):
+                rodados.setdefault(script, set()).add(arquivo.name)
+    stages = yaml.safe_load((REPO_ROOT / "dvc.yaml").read_text(encoding="utf-8"))["stages"]
+    for stage in stages.values():
+        for script in _SCRIPT_PYTHON.findall(stage["cmd"]):
+            rodados.setdefault(script, set()).add("dvc.yaml")
+    return rodados
+
+
+def test_so_o_job_d2_cita_a_chave_do_pseudonimo():
     """Quem recebe pseudônimos prontos não precisa recalculá-los a partir de
-    um CPF: a chave fica só no Space, no job D-2 e no .env do encarregado."""
-    for workflow in ("retrain.yml", "canario.yml", "ci.yml"):
-        texto = (WORKFLOWS / workflow).read_text(encoding="utf-8")
-        assert "secrets.TREINO_CHAVE_PSEUDONIMO" not in texto, workflow
-    job_d2 = (WORKFLOWS / "job_d2.yml").read_text(encoding="utf-8")
-    assert "secrets.TREINO_CHAVE_PSEUDONIMO" in job_d2
+    um CPF: a chave fica só no Space, no job D-2 e no .env do encarregado. O
+    re-treino, o canário e o alerta dividem o environment `production` com o
+    job D-2, então a chave está ao alcance deles. A barreira é nenhum outro
+    workflow pedi-la: lista de permissão, para que um workflow novo também
+    caia aqui. Comentário não conta; a forma do acesso (`secrets.X`,
+    `secrets['X']`, `env.X`) também não."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        assert ("TREINO_CHAVE_PSEUDONIMO" in _texto_do_workflow(arquivo)) == (
+            arquivo.name == "job_d2.yml"
+        ), arquivo.name
+
+
+def test_nenhum_workflow_le_os_secrets_sem_dizer_o_nome():
+    """`toJSON(secrets)` entrega ao passo todos os secrets do environment de
+    uma vez, inclusive a chave do pseudônimo, sem citar nome nenhum; um
+    índice montado (`secrets[format(...)]`) também esconde o nome. Os dois
+    furariam a lista de permissão acima e a de
+    `AZURE_STORAGE_CONNECTION_STRING_EXCLUSAO`."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        texto = _texto_do_workflow(arquivo)
+        assert not re.search(r"\(\s*secrets\s*\)", texto), arquivo.name
+        assert not re.search(r"secrets\s*\[\s*[^'\"\s]", texto), arquivo.name
+
+
+def test_codigo_rodado_fora_do_job_d2_nao_importa_o_pseudonimo():
+    """A outra metade da fronteira: mesmo com a chave no ambiente, nenhum
+    script que o re-treino, o canário, a purga, o alerta, o CI ou o deploy
+    rodam alcança `src/pseudonimo.py`, direta ou indiretamente. Import
+    dinâmico (`importlib`) escaparia; não há nenhum em `src/`."""
+    rodados = _scripts_rodados_fora_do_job_d2()
+
+    assert {"src/export_treino.py", "src/retrain_gate.py", "src/canario.py", "src/train.py"} <= (
+        set(rodados)
+    )
+    alcancam = sorted(
+        f"{script} ({', '.join(sorted(quem))})"
+        for script, quem in rodados.items()
+        if "pseudonimo" in _fecho_de_imports(REPO_ROOT / script)
+    )
+    assert alcancam == []
+    # Controle: o fecho enxerga o pseudônimo onde ele é de fato usado.
+    assert "pseudonimo" in _fecho_de_imports(REPO_ROOT / "src" / "jobs" / "inferencia_diaria.py")
+
+
+def test_janela_de_treino_e_a_mesma_no_export_na_sincronizacao_e_na_purga():
+    """`JANELA_TREINO_DIAS` vale para o export (re-treino), a sincronização
+    (job D-2) e a purga (`lgpd.yml`). Se a sincronização tivesse janela maior
+    que a purga, devolveria à base de treino o que a purga acabou de tirar.
+    Hoje nenhum workflow a define e os três usam o default do código; se um
+    dia for definida, que seja nos três e com o mesmo valor."""
+
+    def definicoes(no: object) -> list[str]:
+        if isinstance(no, dict):
+            proprias = [str(no["JANELA_TREINO_DIAS"])] if "JANELA_TREINO_DIAS" in no else []
+            return proprias + [d for valor in no.values() for d in definicoes(valor)]
+        if isinstance(no, list):
+            return [d for item in no for d in definicoes(item)]
+        return []
+
+    valores = {}
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        if achadas := definicoes(yaml.safe_load(arquivo.read_text(encoding="utf-8"))):
+            valores[arquivo.name] = achadas
+
+    assert set(valores) in (set(), {"retrain.yml", "job_d2.yml", "lgpd.yml"}), valores
+    assert len({v for achadas in valores.values() for v in achadas}) <= 1, valores
 
 
 def test_so_o_workflow_de_purga_apaga_e_sem_input_que_identifique_o_titular():
