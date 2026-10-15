@@ -129,6 +129,11 @@ def test_servico_desconhecido_e_erro_de_programacao():
 
 def test_exportador_que_falha_nao_derruba_o_log(monkeypatch):
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", ENDPOINT_FALSO)
+    # Como na fixture `exportador_de_logs`: o ci.yml exporta
+    # OBSERVABILIDADE_ATIVA=false no workflow inteiro, e sem isto a telemetria
+    # fica desligada no runner e o teste só passa na máquina local.
+    monkeypatch.delenv("OBSERVABILIDADE_ATIVA", raising=False)
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
     monkeypatch.setattr(
         telemetria,
         "_criar_exportadores",
