@@ -4,9 +4,11 @@
 #   - environment `lgpd`, restrito ao branch `main` na configuracao do
 #     environment (Settings -> Environments -> lgpd -> Deployment branches):
 #     codigo de PR nunca chega a' credencial de exclusao;
-#   - SAS propria, AZURE_STORAGE_CONNECTION_STRING_EXCLUSAO, com read, list e
-#     delete (rld), SEM write, assinada com uma chave diferente das outras e
-#     com validade curta: se vazar, nao substitui arquivo nenhum;
+#   - SAS propria, AZURE_STORAGE_CONNECTION_STRING_EXCLUSAO, presa a' stored
+#     access policy `purga-lgpd` do container (rld: read, list e delete, SEM
+#     write, e validade curta) e assinada com a key2. Se vazar, nao substitui
+#     arquivo nenhum, e apagar a policy a revoga sem rotacionar chave nem
+#     derrubar o CI e o re-treino (.env.example, "EXCLUSAO");
 #   - disparo agendado ou manual SEM input: o repositorio e' publico, e um
 #     identificador de titular num input apareceria na pagina do run. O
 #     workflow processa o que estiver pendente no banco.

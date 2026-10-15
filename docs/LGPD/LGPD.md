@@ -3,7 +3,7 @@
 # Declaração estruturada no formato lgpd.md (spec 1.0). O corpo abaixo é a análise
 # completa; estes campos a resumem e precisam ser mantidos em sincronia com ela.
 spec: "1.0"
-atualizado: "2026-10-11"
+atualizado: "2026-10-14"
 expira: "2027-04-09"
 status: "em-adequação"
 controlador:
@@ -503,7 +503,7 @@ Cada item deve constar do slide de risco do pitch.
 
 10. **Log público do job D-2.** O repositório e o log do GitHub Actions são públicos, e o job processa telefone. O filtro de redação (seção 8) passa a ser a última barreira. O job registra só contadores e `id_agendamento`, e o CI varre o log da imagem de deploy. Fica sem mitigação um bug de terceiro que registre o corpo de uma requisição antes de o filtro ser instalado.
 11. **Processamento por mais um operador fora do Brasil**: o runner do GitHub (seção 4).
-12. **Credencial do remote do DVC.** CI, deploy, job D-2, canário e a máquina de quem desenvolve usam SAS só de leitura do container, assinada com a key1. A escrita fica só no re-treino, com SAS assinada com a key2, que cria e grava arquivos mas não apaga. A account key não chega a nenhum workflow nem ao `.env` local, e PR de fork não recebe secrets. Um vazamento da SAS de escrita se resolve rotacionando a key2, sem derrubar a leitura.
+12. **Credencial do remote do DVC.** CI, deploy, job D-2, canário e a máquina de quem desenvolve usam SAS só de leitura do container, assinada com a key1. A escrita fica só no re-treino, com SAS assinada com a key2, que cria e grava arquivos mas não apaga. A account key não chega a nenhum workflow nem ao `.env` local, e PR de fork não recebe secrets. Um vazamento da SAS de escrita se resolve rotacionando a key2, sem derrubar a leitura. A exclusão fica só no workflow de purga, com SAS também assinada com a key2 (a conta só tem duas chaves), mas presa à stored access policy `purga-lgpd` do container: apagar a policy revoga só essa SAS, sem rotacionar chave, e a validade se estende na policy sem trocar o secret.
 
 ### 9.2 Riscos acrescentados pela revisão das bases legais
 
@@ -585,6 +585,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 10/10/2026 | Frontmatter, 2, 3, 4.2, 5, 6, 9.2, 9.4 | Lembrete passa do consentimento (art. 7º, I) à execução do contrato do paciente com a clínica (art. 7º, V); `data_hora_agendada` reclassificada como dado pessoal comum quando tratada sem a especialidade; consentimento restrito ao treino e à transferência internacional; Infobip candidata ao art. 33, IX; oposição ao lembrete pela clínica; itens 13 e 14 encerrados; riscos 28 e 29 |
 | 10/10/2026 | Frontmatter, 1, 1A, 2, 3, 4, 4.2, 5, 5.1, 6, 7, 8.1, 9, 9.5 | Agendamento sem consentimento e base de treino separada, controlada pela SaúdeJá ([ADR-010](../adr/adr-010-base-de-treino-separada.md)): schema `treino` fechado, pseudônimo HMAC com chave secreta, export só da base de treino, sincronização diária do desfecho, caixa de ciência da política e dos termos no lugar do consentimento da transferência, workflow de purga implementado; itens 4, 19 e 20 encerrados; riscos 30 a 34 |
 | 11/10/2026 | Frontmatter, 11 | Contato do controlador, canal dos titulares e encarregado padronizados (Vanessa Lin, `v.lin@gmail.com`); data de atualização da política corrigida para a revisão 0.2 |
+| 14/10/2026 | Frontmatter, 9.1 | SAS de exclusão da purga assinada com a key2 e presa à stored access policy `purga-lgpd`, revogável sem rotacionar chave (item 12) |
 
 Fonte: elaboração própria (2026).
 

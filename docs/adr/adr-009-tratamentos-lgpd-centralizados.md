@@ -1,7 +1,7 @@
 # ADR-009: Workflow único para os tratamentos LGPD, com credencial própria de exclusão e consentimento em tabela de eventos
 
 ## Status
-Aceito — 2026-10-09. Implementado em 2026-10-10, com as mudanças do [ADR-010](adr-010-base-de-treino-separada.md). Complementa a política de retenção do [LGPD.md](../LGPD/LGPD.md) (seção 5) e não altera o [ADR-008](adr-008-canario-do-modelo.md). Emendado em 2026-10-10: o lembrete deixa de depender de consentimento (ver "Emenda de 2026-10-10", no fim). **Parcialmente superado pelo [ADR-010](adr-010-base-de-treino-separada.md)** (ver "Emenda de 2026-10-10 (2)", no fim).
+Aceito — 2026-10-09. Implementado em 2026-10-10, com as mudanças do [ADR-010](adr-010-base-de-treino-separada.md). Complementa a política de retenção do [LGPD.md](../LGPD/LGPD.md) (seção 5) e não altera o [ADR-008](adr-008-canario-do-modelo.md). Emendado em 2026-10-10: o lembrete deixa de depender de consentimento (ver "Emenda de 2026-10-10", no fim). **Parcialmente superado pelo [ADR-010](adr-010-base-de-treino-separada.md)** (ver "Emenda de 2026-10-10 (2)", no fim). Emendado em 2026-10-14: a SAS de exclusão é presa a uma stored access policy (ver "Emenda de 2026-10-14", no fim).
 
 ## Contexto
 A revisão das bases legais do [LGPD.md](../LGPD/LGPD.md) (09/10/2026) criou obrigações que o sistema ainda não cumpre:
@@ -97,3 +97,15 @@ O [ADR-010](adr-010-base-de-treino-separada.md) muda três pontos desta decisão
 - **A eliminação no banco da clínica não depende do DVC**, porque o export lê só o schema `treino`. A ordem "DVC antes do `delete`" passa a valer na base de treino, onde o pedido carrega o pseudônimo até ser executado.
 
 O filtro de consentimento do export foi substituído pela própria base de treino, que só recebe a linha de quem consentiu. O banco recusa a linha sem consentimento vigente.
+
+## Emenda de 2026-10-14: SAS de exclusão presa a uma stored access policy
+
+A conta do Azure tem só duas chaves, e as duas já assinam SAS: a key1 a de leitura, a key2 a de escrita. Não há terceira chave para a de exclusão, e uma SAS avulsa só deixa de valer quando expira ou quando a chave que a assinou é rotacionada. Revogar a exclusão rotacionando uma das duas derrubaria também o CI ou o re-treino.
+
+A SAS de exclusão passa a ser presa à **stored access policy `purga-lgpd`** do container, com `rld` e a data de validade, e assinada com a **key2**. A key1 está em mais lugares (secret de repositório, que o CI de PR usa, e o `.env` de quem desenvolve) e tem mais chance de ser rotacionada.
+
+- **Revogação isolada**: apagar a policy invalida só a SAS da purga, sem rotacionar chave.
+- **Validade renovável sem trocar o secret**: o prazo fica na policy e se estende com `az storage container policy update --expiry`. A validade continua forçando a revisão periódica; o que deixa de existir é a troca do secret a cada renovação.
+- **O que não muda**: rotacionar a key2, por vazamento da SAS de escrita, derruba também a de exclusão, que precisa ser gerada de novo. As permissões (`rld`, sem escrita) e o environment `lgpd`, restrito a `main`, continuam como na decisão.
+
+O passo a passo (CLI e portal) fica no `.env.example`.
