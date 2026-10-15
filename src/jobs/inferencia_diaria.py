@@ -87,6 +87,19 @@ STATUS_ENVIADO_SEM_PREDICAO = "enviado_sem_predicao"
 SAIDA_OK = 0
 SAIDA_FALHA = 1
 
+# Contadores de `processar_dia` que saem no resumo do run e na linha de resumo
+# do log. Só números: a lista `erros` carrega `motivo` por agendamento e fica
+# de fora dos dois (LGPD).
+CONTADORES_DO_RESUMO = (
+    "agendamentos_encontrados",
+    "predicoes_gravadas",
+    "quarentena",
+    "fora_do_dominio",
+    "mensagens_disparadas",
+    "lembretes_sem_predicao",
+    "falhas_de_envio",
+)
+
 
 class ProvedorMensageriaDesconhecido(Exception):
     """MESSAGING_PROVIDER aponta para um provedor sem implementação -- erro
@@ -484,7 +497,7 @@ def purgar_eventos_antigos() -> int:
 
     Roda aqui, pendurada no job que já é diário, em vez de num agendador novo
     (pg_cron/workflow próprio) -- observabilidade não deve adicionar peça de
-    infra a manter, que é o mesmo critério que descartou Grafana/OTel no ADR.
+    infra a manter (ADR-006).
     Falha de purga não derruba o job: perder a limpeza de um dia é irrelevante
     perto de perder a fila de lembretes."""
     try:
@@ -650,18 +663,7 @@ def _publicar_resumo(
         "",
         "| Contador | Valor |",
         "|---|---:|",
-        *(
-            f"| {chave} | {resultado[chave]} |"
-            for chave in (
-                "agendamentos_encontrados",
-                "predicoes_gravadas",
-                "quarentena",
-                "fora_do_dominio",
-                "mensagens_disparadas",
-                "lembretes_sem_predicao",
-                "falhas_de_envio",
-            )
-        ),
+        *(f"| {chave} | {resultado[chave]} |" for chave in CONTADORES_DO_RESUMO),
         f"| sincronizados_treino | {resultado.get('sincronizados_treino', '—')} |",
         "",
         *_linhas_do_canario(resultado, canario_version),
@@ -720,6 +722,7 @@ def _executar() -> int:
             "execução refaz a janela; se repetir, confira TREINO_CHAVE_PSEUDONIMO e o "
             "schema `treino`"
         )
+    canario_version = preparacao.contexto.model_version if preparacao.contexto else None
     if preparacao.contexto is not None:
         falhas += canario.avaliar_execucao(
             preparacao.contexto, resultado.get("por_braco", {}), params=inference.PARAMS
@@ -730,18 +733,7 @@ def _executar() -> int:
     logger.info(
         "job D-2 concluído",
         extra={
-            **{
-                chave: resultado[chave]
-                for chave in (
-                    "agendamentos_encontrados",
-                    "predicoes_gravadas",
-                    "quarentena",
-                    "fora_do_dominio",
-                    "mensagens_disparadas",
-                    "lembretes_sem_predicao",
-                    "falhas_de_envio",
-                )
-            },
+            **{chave: resultado[chave] for chave in CONTADORES_DO_RESUMO},
             "erros": len(resultado["erros"]),
             # `gh-<run>-<tentativa>`: liga esta linha à de `eventos_app` e ao
             # trace, e passa intacto pelo filtro de PII (telemetria.id_do_run).
@@ -749,7 +741,7 @@ def _executar() -> int:
             "eventos_purgados": purgados,
             "derivados_purgados": derivados_purgados,
             "sincronizados_treino": sincronizados_treino,
-            "canario": preparacao.contexto.model_version if preparacao.contexto else None,
+            "canario": canario_version,
             "por_braco": resultado.get("por_braco"),
         },
     )
@@ -758,7 +750,7 @@ def _executar() -> int:
         falhas,
         avisos,
         model_version,
-        canario_version=preparacao.contexto.model_version if preparacao.contexto else None,
+        canario_version=canario_version,
     )
     return SAIDA_FALHA if falhas else SAIDA_OK
 

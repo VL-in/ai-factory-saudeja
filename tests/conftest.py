@@ -77,6 +77,15 @@ def telemetria_sem_exportar(monkeypatch):
     telemetria._reiniciar()
 
 
+@pytest.fixture(autouse=True)
+def canario_sem_desligamento_do_env(monkeypatch):
+    """`CANARIO_DESLIGADO` do `.env` local não vaza para a suíte. Com ela
+    definida, os testes do canário que esperam o braço ligado falhavam na
+    máquina de quem desenvolve e passavam no CI, que não tem `.env`. Quem testa
+    o desligamento define a variável no próprio teste."""
+    monkeypatch.delenv("CANARIO_DESLIGADO", raising=False)
+
+
 class TelemetriaEmMemoria:
     """O que teria saído por OTLP, lido em memória."""
 

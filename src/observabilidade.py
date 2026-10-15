@@ -58,6 +58,10 @@ TIPO_ACAO_UI = "acao_ui"
 # encheriam o limite de linhas da janela, truncando o p95 das predições. Falha
 # de banco na UI chega aos dois como `erro` (`logic._relatar_falha_persistencia`).
 TIPOS_DO_SLO = (TIPO_PREDICAO, TIPO_JOB_D2, TIPO_ERRO)
+# Teto de linhas dessa leitura, o mesmo na aba e no alerta diário. O p95 sai em
+# Python sobre as linhas lidas (`percentil`): janela que bate no teto é
+# marcada como `truncado`, porque o p95 seria só o do trecho mais recente.
+LIMITE_LEITURA_SLO = 5000
 
 ORIGEM_API = "api"
 ORIGEM_PROCESSO = "processo"

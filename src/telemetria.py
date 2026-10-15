@@ -10,7 +10,7 @@ continuam em `src/observabilidade.py`: `registrar_evento` e `medir` alimentam
 `eventos_app` e este destino a partir da mesma chamada. `eventos_app` segue
 sendo a fonte de verdade de longo prazo.
 
-Quatro propriedades que o resto do módulo existe para garantir:
+Cinco propriedades que o resto do módulo existe para garantir:
 
 1. **No-op por padrão.** Sem `OTEL_EXPORTER_OTLP_ENDPOINT`, com
    `OBSERVABILIDADE_ATIVA=false`, com `OTEL_SDK_DISABLED=true` ou sem os
@@ -50,7 +50,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable, Iterator
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from logging_config import FiltroRedacaoPII
@@ -128,9 +128,9 @@ TAMANHO_MAXIMO_ATRIBUTO = 120
 # à execução do job e à sessão do Streamlit. Ficam FORA de
 # `ATRIBUTOS_PERMITIDOS` de propósito -- aquela allowlist vale também para
 # métrica, e um uuid por agendamento lá viraria uma série por agendamento.
-# Nenhum é dado pessoal: `id_agendamento` é uuid interno, `id_execucao` é o
-# `GITHUB_RUN_ID` ou o trace_id, `session.id` é aleatório e não se liga ao
-# e-mail de quem fez login.
+# Nenhum é dado pessoal: `id_agendamento` é uuid interno, `id_execucao` é
+# `gh-<run>-<tentativa>` no job (`id_do_run`) ou o trace_id na UI e na API, e
+# `session.id` é aleatório e não se liga ao e-mail de quem fez login.
 IDENTIFICADORES_DE_SPAN = frozenset({"id_agendamento", "id_execucao", "session.id"})
 
 # Rotas que a instrumentação do FastAPI não rastreia, pelo mesmo motivo que as
@@ -178,9 +178,21 @@ _trava = threading.Lock()
 _decidido = False
 _ativa_no_processo = False
 _handler: logging.Handler | None = None
-_provedores: list[Any] = []
+
+
+class _Provedores(NamedTuple):
+    """Os três provedores do SDK deste processo. Guardados aqui, e não só nos
+    globais do OTel, porque o SDK só aceita definir o global uma vez por
+    processo: depois de `_reiniciar` (testes), o global ainda é o antigo."""
+
+    traces: Any
+    metricas: Any
+    logs: Any
+
+
+_provedores: _Provedores | None = None
 _instrumentos: dict[str, Any] = {}
-# Execução do job no Actions (`GITHUB_RUN_ID`), fixada na configuração do
+# Execução do job no Actions (`gh-<run>-<tentativa>`), fixada na configuração do
 # serviço do job. Vale com a telemetria desligada: liga `eventos_app` ao run
 # mesmo sem Grafana.
 _id_execucao_do_processo: str | None = None
@@ -253,10 +265,10 @@ def forcar_envio(timeout: float = 5.0) -> bool:
     """Esvazia os lotes pendentes. Para processo curto (o job D-2), o
     equivalente a `observabilidade.flush()`: sem isto, o último lote de logs e
     spans morreria com o processo. Nunca levanta."""
-    if not _ativa_no_processo:
+    if not _ativa_no_processo or _provedores is None:
         return True
     tudo_enviado = True
-    for provedor in list(_provedores):
+    for provedor in _provedores:
         try:
             if provedor.force_flush(int(timeout * 1000)) is False:
                 tudo_enviado = False
@@ -282,23 +294,21 @@ def atributos_permitidos(atributos: dict[str, Any] | None) -> dict[str, str]:
     Chave desconhecida é descartada em silêncio, como em
     `observabilidade.sanitizar_detalhe`: um `id_agendamento` passado por engano
     não pode derrubar a ação, nem virar uma série por agendamento."""
-    if not atributos:
-        return {}
-    return {
-        chave: str(valor)[:TAMANHO_MAXIMO_ATRIBUTO]
-        for chave, valor in atributos.items()
-        if chave in ATRIBUTOS_PERMITIDOS and valor is not None
-    }
+    return _filtrar(atributos, ATRIBUTOS_PERMITIDOS)
 
 
 def identificadores_de_span(identificadores: dict[str, Any] | None) -> dict[str, str]:
     """Só as chaves de `IDENTIFICADORES_DE_SPAN`, sem `None`, como texto curto."""
-    if not identificadores:
+    return _filtrar(identificadores, IDENTIFICADORES_DE_SPAN)
+
+
+def _filtrar(valores: dict[str, Any] | None, permitidas: frozenset[str]) -> dict[str, str]:
+    if not valores:
         return {}
     return {
         chave: str(valor)[:TAMANHO_MAXIMO_ATRIBUTO]
-        for chave, valor in identificadores.items()
-        if chave in IDENTIFICADORES_DE_SPAN and valor is not None
+        for chave, valor in valores.items()
+        if chave in permitidas and valor is not None
     }
 
 
@@ -393,10 +403,10 @@ def span(
 
 def _abrir_span(nome: str, atributos: dict[str, str]) -> Any:
     """`atributos` já filtrados por quem chama (`span`)."""
-    if not _ativa_no_processo or not _provedores:
+    if not _ativa_no_processo or _provedores is None:
         return None
     try:
-        return _provedores[0].get_tracer("saudeja").start_as_current_span(
+        return _provedores.traces.get_tracer("saudeja").start_as_current_span(
             nome,
             attributes=atributos,
             record_exception=False,
@@ -435,9 +445,9 @@ def _registrar(nome: str, tipo: str, valor: float, atributos: dict[str, Any] | N
 def _instrumento(nome: str, tipo: str) -> Any:
     """Criado na primeira medição e guardado, para não recriar a cada chamada."""
     instrumento = _instrumentos.get(nome)
-    if instrumento is not None or len(_provedores) < 2:
+    if instrumento is not None or _provedores is None:
         return instrumento
-    medidor = _provedores[1].get_meter("saudeja")
+    medidor = _provedores.metricas.get_meter("saudeja")
     descricao = METRICAS[nome][1]
     if tipo == CONTADOR:
         instrumento = medidor.create_counter(nome, description=descricao)
@@ -494,16 +504,19 @@ def url_sem_consulta(url: str) -> str:
 
 def sanitizar_atributos(atributos: Any) -> dict[str, Any]:
     """Atributos de span de qualquer origem, prontos para sair do processo."""
-    limpos: dict[str, Any] = {}
-    for chave, valor in dict(atributos or {}).items():
-        if chave in _ATRIBUTOS_REMOVIDOS or chave.startswith(_PREFIXOS_REMOVIDOS):
-            continue
-        if chave in _ATRIBUTOS_DE_URL:
-            valor = url_sem_consulta(valor)
-        elif chave in _ATRIBUTOS_DE_ALVO:
-            valor = str(valor).split("?", 1)[0].split("#", 1)[0]
-        limpos[chave] = valor
-    return limpos
+    return {
+        chave: _valor_sanitizado(chave, valor)
+        for chave, valor in dict(atributos or {}).items()
+        if chave not in _ATRIBUTOS_REMOVIDOS and not chave.startswith(_PREFIXOS_REMOVIDOS)
+    }
+
+
+def _valor_sanitizado(chave: str, valor: Any) -> Any:
+    if chave in _ATRIBUTOS_DE_URL:
+        return url_sem_consulta(valor)
+    if chave in _ATRIBUTOS_DE_ALVO:
+        return str(valor).split("?", 1)[0].split("#", 1)[0]
+    return valor
 
 
 def sanitizar_span(span: Any) -> Any:
@@ -583,6 +596,8 @@ def _instrumentar_httpx() -> None:
     (`supabase-py` usa `httpx`), a Infobip no job e a API quando a UI usa
     `PREDICT_BACKEND=api` -- caso em que o `traceparent` vai junto e o trace
     atravessa UI -> API. Nunca levanta."""
+    if _provedores is None:
+        return
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
@@ -590,7 +605,7 @@ def _instrumentar_httpx() -> None:
         instrumentador = HTTPXClientInstrumentor()
         if not instrumentador.is_instrumented_by_opentelemetry:
             instrumentador.instrument(
-                tracer_provider=_provedores[0], meter_provider=_provedores[1]
+                tracer_provider=_provedores.traces, meter_provider=_provedores.metricas
             )
     except Exception as exc:
         logger.warning(
@@ -607,7 +622,7 @@ def instrumentar_fastapi(app: Any) -> bool:
     o próprio `lifespan` --, então a instrumentação, que troca o montador, só
     vale se a pilha for descartada: o request seguinte a remonta com o
     middleware do OTel por fora."""
-    if not _ativa_no_processo or len(_provedores) < 2:
+    if not _ativa_no_processo or _provedores is None:
         return False
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -615,8 +630,8 @@ def instrumentar_fastapi(app: Any) -> bool:
         _preparar_instrumentacao_http()
         FastAPIInstrumentor.instrument_app(
             app,
-            tracer_provider=_provedores[0],
-            meter_provider=_provedores[1],
+            tracer_provider=_provedores.traces,
+            meter_provider=_provedores.metricas,
             excluded_urls=ROTAS_FORA_DO_TRACING,
             exclude_spans=["receive", "send"],
         )
@@ -630,6 +645,7 @@ def instrumentar_fastapi(app: Any) -> bool:
 
 
 def _montar(servico: str) -> logging.Handler:
+    global _provedores
     from opentelemetry import metrics, trace
     from opentelemetry._logs import set_logger_provider
     from opentelemetry.instrumentation.logging.handler import LoggingHandler
@@ -683,11 +699,11 @@ def _montar(servico: str) -> logging.Handler:
 
     # Globais para a instrumentação automática (P3) e para `trace.get_tracer`
     # achá-los sem receber o provedor. O SDK só aceita definir uma vez por
-    # processo; os testes usam as referências guardadas em `_provedores`.
+    # processo; o módulo usa as referências guardadas em `_provedores`.
     trace.set_tracer_provider(provedor_traces)
     metrics.set_meter_provider(provedor_metricas)
     set_logger_provider(provedor_logs)
-    _provedores[:] = [provedor_traces, provedor_metricas, provedor_logs]
+    _provedores = _Provedores(provedor_traces, provedor_metricas, provedor_logs)
 
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=provedor_logs)
     handler.addFilter(_fora_os_logs_do_otel)
@@ -731,7 +747,7 @@ def _reiniciar() -> None:
     """Só para os testes: desliga os provedores e tira o handler de todos os
     loggers, devolvendo o módulo ao estado de antes da primeira chamada."""
     global _decidido, _ativa_no_processo, _handler, _id_execucao_do_processo
-    global _provedor_de_sessao
+    global _provedor_de_sessao, _provedores
     with _trava:
         with contextlib.suppress(Exception):
             from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
@@ -745,10 +761,10 @@ def _reiniciar() -> None:
             for alvo in [logging.getLogger(), *logging.getLogger().manager.loggerDict.values()]:
                 if isinstance(alvo, logging.Logger) and _handler in alvo.handlers:
                     alvo.removeHandler(_handler)
-        for provedor in _provedores:
+        for provedor in _provedores or ():
             with contextlib.suppress(Exception):
                 provedor.shutdown()
-        _provedores.clear()
+        _provedores = None
         _instrumentos.clear()
         _handler = None
         _decidido = False

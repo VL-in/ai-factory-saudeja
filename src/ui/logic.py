@@ -1012,7 +1012,7 @@ def obter_cliente(backend: str | None = None):
     )
 
 
-LIMITE_EVENTOS_OBSERVABILIDADE = 5000
+LIMITE_EVENTOS_OBSERVABILIDADE = observabilidade.LIMITE_LEITURA_SLO
 
 
 @_acao_ui("observabilidade")

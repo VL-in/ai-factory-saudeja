@@ -38,7 +38,7 @@ import observabilidade  # noqa: E402
 
 # Mesmo teto da aba "Observabilidade" (src/ui/logic.py): acima dele, o p95
 # seria o do pedaço mais recente da janela, e `truncado` avisa isso.
-LIMITE_EVENTOS = 5000
+LIMITE_EVENTOS = observabilidade.LIMITE_LEITURA_SLO
 
 # Limites do alerta. Só entram compromissos do docs/SLO.md: um e-mail de falha
 # por algo que o SLO não promete ensina a ignorar o e-mail.
