@@ -8,7 +8,7 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [Não publicado] (Vanessa + Claude) - 2026-10-08
+## [2.2.0] (Vanessa + Claude) - 2026-10-08
 
 ### Adicionado
 - **Base de treino separada, controlada pela SaúdeJá** ([ADR-010](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-010-base-de-treino-separada.md)). Quem autoriza o uso dos desfechos no treino vai, além do banco da clínica, para o schema `treino` do Supabase, sem nome, telefone, CPF nem data de nascimento, com o titular e a consulta identificados por pseudônimo HMAC com chave secreta. O banco recusa a consulta de quem não consentiu, e o schema só é acessado por funções do banco. A caixa do treino tem texto curto, em linguagem simples, com o processamento fora do Brasil em destaque e a garantia de que recusar não impede o agendamento; o detalhe fica nos Termos de uso. Migrations aditivas: `20261010000000_pedidos_e_ciencia.sql` e `20261011000000_schema_treino.sql`. Variável nova: `TREINO_CHAVE_PSEUDONIMO` (Space e job D-2; ver `.env.example`).
