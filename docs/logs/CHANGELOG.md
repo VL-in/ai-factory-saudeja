@@ -8,7 +8,32 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [2.2.0] (Vanessa + Claude) - 2026-10-08
+## [v2.2.0] (Vanessa + Claude) - 2026-10-15
+
+Esta versão reforça a proteção dos dados dos pacientes e passa a mostrar como o sistema está funcionando. O modelo de predição continua o mesmo da v2.1.0.
+
+**Para pacientes**
+- O agendamento começa pela leitura da Política de privacidade e dos Termos de uso.
+- Autorizar o uso dos dados para melhorar o modelo é opcional. Quem recusa agenda e recebe o lembrete do mesmo jeito.
+- O SMS de lembrete informa só a data e a hora da consulta, sem a especialidade.
+
+**Para a clínica**
+- A aba nova "Pedidos do titular" registra pedidos de eliminação de dados e de revisão da decisão de lembrete.
+- A "Fila do dia" traz um roteiro para atender esses pedidos de revisão.
+
+**Privacidade (LGPD)**
+- Os dados usados para treinar o modelo ficam numa base separada. Essa base guarda só quem autorizou, sem nome, telefone, CPF nem data de nascimento.
+- Uma rotina diária executa os pedidos de eliminação. Ela também apaga os dados de treino, as predições e as mensagens com mais de 90 dias.
+- O dataset de treino e o modelo passam a ser armazenados no Brasil.
+
+**Monitoramento**
+- Cada ação da interface e cada execução do envio diário de lembretes podem ser acompanhadas no Grafana Cloud, sem dados pessoais.
+- Os números de longo prazo, como disparos por dia e tempo de resposta, saem do banco por um acesso que só enxerga totais.
+- Falhas do banco na tela e falhas de envio de SMS passam a aparecer no alerta diário.
+
+**Atenção:** o processamento dos dados da clínica fora do Brasil ainda não tem mecanismo de transferência internacional previsto na LGPD. Até isso ser resolvido, o sistema não deve operar com pacientes reais.
+
+Os detalhes técnicos de cada mudança estão abaixo.
 
 ### Adicionado
 - **Base de treino separada, controlada pela SaúdeJá** ([ADR-010](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-010-base-de-treino-separada.md)). Quem autoriza o uso dos desfechos no treino vai, além do banco da clínica, para o schema `treino` do Supabase, sem nome, telefone, CPF nem data de nascimento, com o titular e a consulta identificados por pseudônimo HMAC com chave secreta. O banco recusa a consulta de quem não consentiu, e o schema só é acessado por funções do banco. A caixa do treino tem texto curto, em linguagem simples, com o processamento fora do Brasil em destaque e a garantia de que recusar não impede o agendamento; o detalhe fica nos Termos de uso. Migrations aditivas: `20261010000000_pedidos_e_ciencia.sql` e `20261011000000_schema_treino.sql`. Variável nova: `TREINO_CHAVE_PSEUDONIMO` (Space e job D-2; ver `.env.example`).
