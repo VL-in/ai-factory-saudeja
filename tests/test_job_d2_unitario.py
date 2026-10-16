@@ -17,6 +17,7 @@ O que se trava aqui:
 """
 import pytest
 
+import observabilidade
 from jobs import inferencia_diaria as job
 
 
@@ -245,3 +246,122 @@ def test_pre_checagem_passa_com_o_campeao_do_repositorio(monkeypatch):
 
     assert job.pre_checagem() == job.campeao.carregar_campeao()["model_version"]
     assert conexoes == [1]
+
+
+# --- sincronização com a base de treino (ADR-010) ------------------------------
+
+CHAVE_DE_TESTE = "s" * 32
+
+
+def test_sincronizacao_leva_desfecho_e_lembrete_pelo_pseudonimo_da_consulta(monkeypatch):
+    """O lote vai pelo pseudônimo do `id` do agendamento, sem nenhuma coluna
+    do paciente; quem decide quais linhas existem é a base de treino."""
+    monkeypatch.setenv(job.pseudonimo.VARIAVEL_CHAVE, CHAVE_DE_TESTE)
+    janelas = []
+
+    def _buscar(desde):
+        janelas.append(desde)
+        return [
+            {"id": "a1", "status": "no_show", "lembrete_enviado": True},
+            {"id": "a2", "status": "agendado", "lembrete_enviado": False},
+        ]
+
+    lotes = []
+    monkeypatch.setattr(job.repositories, "buscar_desfechos_para_treino", _buscar)
+    monkeypatch.setattr(
+        job.repositorio_treino, "sincronizar_desfechos", lambda itens: lotes.append(itens) or 1
+    )
+
+    assert job.sincronizar_treino() == 1
+
+    [lote] = lotes
+    assert lote == [
+        {"id_consulta": job.pseudonimo.id_consulta("a1"), "status": "no_show",
+         "lembrete_enviado": True},
+        {"id_consulta": job.pseudonimo.id_consulta("a2"), "status": "agendado",
+         "lembrete_enviado": False},
+    ]
+    assert "a1" not in str(lote)
+    # A janela é a mesma do export e da purga.
+    from datetime import datetime, timedelta, timezone
+
+    esperado = datetime.now(timezone.utc) - timedelta(days=job.janela_treino_dias())
+    assert abs(janelas[0] - esperado) < timedelta(minutes=5)
+
+
+def test_sincronizacao_sem_chave_nao_toca_o_banco(monkeypatch):
+    monkeypatch.setenv(job.pseudonimo.VARIAVEL_CHAVE, "")
+
+    def _nao_deveria_ser_chamado(*args):
+        raise AssertionError("sincronizou sem chave")
+
+    monkeypatch.setattr(job.repositories, "buscar_desfechos_para_treino", _nao_deveria_ser_chamado)
+
+    assert job.sincronizar_treino() is None
+
+
+def test_falha_da_sincronizacao_nao_levanta(monkeypatch):
+    """A fila de lembretes já foi processada: a sincronização perdida vira
+    aviso e se recupera na execução seguinte."""
+    monkeypatch.setenv(job.pseudonimo.VARIAVEL_CHAVE, CHAVE_DE_TESTE)
+
+    def _fora_do_ar(desde):
+        raise RuntimeError("PostgREST fora do ar")
+
+    monkeypatch.setattr(job.repositories, "buscar_desfechos_para_treino", _fora_do_ar)
+
+    assert job.sincronizar_treino() is None
+
+
+def test_resumo_mostra_a_sincronizacao_do_treino(tmp_path, monkeypatch):
+    destino = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(destino))
+
+    job._publicar_resumo(_resultado(sincronizados_treino=3), [], [], "abc123")
+
+    assert "| sincronizados_treino | 3 |" in destino.read_text(encoding="utf-8")
+
+
+# --- observabilidade do job (Passo 8.9) --------------------------------------
+
+
+def test_falha_de_envio_vira_evento_de_erro_so_com_a_classe(
+    repositorio, eventos_capturados, telemetria_em_memoria
+):
+    """Até o Passo 8.9 a falha de envio era só aviso no run, e não alertava."""
+    repositorio([_agendamento("a01", pacientes={"sexo": "F"})], threshold=1.01)
+    job.processar_dia(cliente_mensageria=_Espiao())
+
+    observabilidade.flush()
+    erros = [e for e in eventos_capturados if e["tipo"] == "erro"]
+    sem_correlacao = [
+        {k: v for k, v in e["detalhe"].items() if k != "id_execucao"} for e in erros
+    ]
+    assert {"rota": "enviar_lembrete", "excecao": "KeyError"} in sem_correlacao
+    (job_d2,) = [e for e in eventos_capturados if e["tipo"] == "job_d2"]
+    assert job_d2["detalhe"]["falhas_de_envio"] == 1
+    assert ({"status_envio": "falha_envio"}, 1) in telemetria_em_memoria.pontos(
+        "saudeja_sms_total"
+    )
+
+
+def test_job_mede_resultado_probabilidade_e_envio_por_braco(repositorio, telemetria_em_memoria):
+    repositorio(
+        [
+            _agendamento("a01"),
+            _agendamento("a02", distancia_km=120),
+            _agendamento("a03", distancia_km=None),
+        ],
+        threshold=0.0,
+    )
+    job.processar_dia(cliente_mensageria=_Espiao())
+
+    resultados = {
+        atributos["resultado"]: valor
+        for atributos, valor in telemetria_em_memoria.pontos("saudeja_job_d2_agendamentos_total")
+    }
+    assert resultados == {"predito": 1, "fora_do_dominio": 1, "quarentena": 1}
+    ((atributos, medicoes),) = telemetria_em_memoria.pontos("saudeja_predicao_probabilidade")
+    assert atributos["braco"] == "campeao" and medicoes == 2
+    envios = {a["status_envio"]: v for a, v in telemetria_em_memoria.pontos("saudeja_sms_total")}
+    assert envios == {"enviado": 2, job.STATUS_ENVIADO_SEM_PREDICAO: 1}

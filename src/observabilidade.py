@@ -25,6 +25,11 @@ Três propriedades que o resto do módulo existe para garantir:
    por nome de coluna de `tests/test_coerencia_repo.py` não teria como pegar
    isso dentro de um jsonb.
 
+Desde o Passo 8.9, cada evento também vira métrica e cada `medir` abre um
+span no Grafana Cloud (`src/telemetria.py`, no-op sem endpoint OTLP), e o
+`detalhe` ganha o `id_execucao` que liga a linha ao trace ou ao run do job.
+`eventos_app` continua sendo a fonte de verdade de longo prazo.
+
 O import de `db.repositories` é **tardio, dentro do worker**, de propósito: a
 imagem enxuta da API (`infra/api/dockerfile`, `requirements/api.txt`) não
 instala `supabase-py` (ele mora em `ui.txt`, para não pesar no cold start do
@@ -36,13 +41,27 @@ import queue
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+import telemetria
 
 TIPO_PREDICAO = "predicao"
 TIPO_JOB_D2 = "job_d2"
 TIPO_ERRO = "erro"
+# Ação da interface medida de ponta a ponta (carregar a fila, registrar
+# desfecho, cadastro, login...). Passo 8.9: a UI quase não era medida.
+TIPO_ACAO_UI = "acao_ui"
+# O que a aba "Observabilidade" e o alerta diário leem. `acao_ui` fica de
+# fora: a cada interação o Streamlit recarrega a fila, e esses eventos
+# encheriam o limite de linhas da janela, truncando o p95 das predições. Falha
+# de banco na UI chega aos dois como `erro` (`logic._relatar_falha_persistencia`).
+TIPOS_DO_SLO = (TIPO_PREDICAO, TIPO_JOB_D2, TIPO_ERRO)
+# Teto de linhas dessa leitura, o mesmo na aba e no alerta diário. O p95 sai em
+# Python sobre as linhas lidas (`percentil`): janela que bate no teto é
+# marcada como `truncado`, porque o p95 seria só o do trecho mais recente.
+LIMITE_LEITURA_SLO = 5000
 
 ORIGEM_API = "api"
 ORIGEM_PROCESSO = "processo"
@@ -50,6 +69,9 @@ ORIGEM_JOB = "job"
 
 STATUS_OK = "ok"
 STATUS_ERRO = "erro"
+# A ação terminou numa recusa esperada (senha errada, formulário inválido,
+# desfecho fora do prazo): não é falha do sistema e não conta na taxa de erro.
+STATUS_RECUSADO = "recusado"
 
 # Allowlist fechada do `detalhe` (ver docstring). Só contador, rótulo de rota,
 # status HTTP e nome de classe de exceção -- nada de texto livre vindo de
@@ -59,6 +81,13 @@ CHAVES_DETALHE_PERMITIDAS = frozenset(
         "rota",
         "status_http",
         "excecao",
+        # Nome da ação de `TIPO_ACAO_UI` -- um de um conjunto fechado de rótulos
+        # escritos no código (`ui/logic.py`).
+        "acao",
+        # Correlação com o run do Actions e com o trace (P3 do Passo 8.9).
+        "id_execucao",
+        # Braço do canário que fez a predição (`campeao`/`canario`).
+        "braco",
         # Nome do campo do contrato de features que mandou um
         # agendamento para a quarentena -- um de um conjunto fechado de nomes
         # de coluna, nunca o valor que estava nele.
@@ -68,6 +97,7 @@ CHAVES_DETALHE_PERMITIDAS = frozenset(
         "quarentena",
         "mensagens_disparadas",
         "lembretes_sem_predicao",
+        "falhas_de_envio",
         "erros",
         "eventos_purgados",
     }
@@ -140,8 +170,21 @@ def registrar_evento(
     (False = desligado, fila cheia ou processo sem destino de escrita) -- quem
     chama pode ignorar o retorno; ele existe para os testes conseguirem afirmar
     o descarte sem inspecionar a fila."""
+    # Métricas antes da guarda de `eventos_app`: a imagem enxuta da API não tem
+    # supabase-py (`_indisponivel_no_processo`), e é justamente ela que mede
+    # `/predict` para o Grafana. Telemetria quebrada não impede o evento.
+    with suppress(Exception):
+        _registrar_metricas(tipo, status, origem, duracao_ms, model_version, detalhe or {})
     if not ativa() or _indisponivel_no_processo:
         return False
+
+    # Correlação (P3 do Passo 8.9): o trace da ação ou da requisição, ou o run
+    # do Actions no job. Quem já trouxe um `id_execucao` próprio fica com ele.
+    if not (detalhe or {}).get("id_execucao"):
+        with suppress(Exception):
+            execucao = telemetria.id_execucao()
+            if execucao:
+                detalhe = {**(detalhe or {}), "id_execucao": execucao}
 
     evento = {
         "tipo": tipo,
@@ -166,29 +209,75 @@ def registrar_evento(
     return True
 
 
+def _registrar_metricas(
+    tipo: str,
+    status: str,
+    origem: str,
+    duracao_ms: int | None,
+    model_version: str | None,
+    detalhe: dict[str, Any],
+) -> None:
+    """O mesmo evento, como métrica (Passo 8.9). `telemetria` descarta em
+    silêncio o que não estiver na allowlist de atributos dela, então um
+    `detalhe` com chave desconhecida não vira série nova."""
+    if tipo == TIPO_ERRO:
+        telemetria.contar(
+            "saudeja_erro_total",
+            {"rota": detalhe.get("rota"), "origem": origem, "excecao": detalhe.get("excecao")},
+        )
+        return
+    acao = detalhe.get("acao") or tipo
+    telemetria.contar(
+        "saudeja_acao_total",
+        {"acao": acao, "origem": origem, "status": status, "excecao": detalhe.get("excecao")},
+    )
+    if duracao_ms is None:
+        return
+    if tipo == TIPO_PREDICAO:
+        telemetria.registrar(
+            "saudeja_predicao_duracao_ms",
+            duracao_ms,
+            {"origem": origem, "model_version": model_version, "braco": detalhe.get("braco")},
+        )
+    else:
+        telemetria.registrar(
+            "saudeja_acao_duracao_ms", duracao_ms, {"acao": acao, "origem": origem}
+        )
+
+
 @contextmanager
 def medir(
     tipo: str,
     origem: str = ORIGEM_PROCESSO,
     model_version: str | None = None,
     detalhe: dict[str, Any] | None = None,
+    recusas: tuple[type[BaseException], ...] = (),
 ) -> Iterator[dict[str, Any]]:
     """Cronometra o bloco e registra um evento ao sair -- `ok` se passou,
-    `erro` (com o *nome da classe* da exceção, nunca a mensagem) se levantou.
-    A exceção segue subindo: este módulo observa, não trata.
+    `erro` (com o *nome da classe* da exceção, nunca a mensagem) se levantou,
+    `recusado` se a exceção é uma de `recusas` (recusa esperada, como senha
+    errada). A exceção segue subindo: este módulo observa, não trata.
+
+    Um ponto de chamada, três destinos: o evento em `eventos_app`, a métrica
+    e o span no Grafana (`telemetria`, no-op quando desligada).
 
     Cede um dicionário mutável para o bloco completar o que só se sabe depois
     (`model_version`, contadores), sem obrigar quem chama a montar o evento
-    duas vezes.
+    duas vezes. Também serve de decorador (`@medir(...)`), caso em que o
+    dicionário não fica acessível.
     """
     contexto: dict[str, Any] = {"model_version": model_version, "detalhe": dict(detalhe or {})}
+    nome_do_span = contexto["detalhe"].get("acao") or tipo
+    atributos = {"acao": nome_do_span, "origem": origem, "model_version": model_version}
     inicio = time.perf_counter()
-    try:
-        yield contexto
-    except Exception as exc:
-        _registrar_do_contexto(tipo, origem, contexto, inicio, STATUS_ERRO, exc)
-        raise
-    _registrar_do_contexto(tipo, origem, contexto, inicio, STATUS_OK, None)
+    with telemetria.span(nome_do_span, atributos, recusas=recusas):
+        try:
+            yield contexto
+        except Exception as exc:
+            status = STATUS_RECUSADO if isinstance(exc, recusas) else STATUS_ERRO
+            _registrar_do_contexto(tipo, origem, contexto, inicio, status, exc)
+            raise
+        _registrar_do_contexto(tipo, origem, contexto, inicio, STATUS_OK, None)
 
 
 def _registrar_do_contexto(

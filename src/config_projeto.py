@@ -71,12 +71,12 @@ def para_horario_da_clinica(valor: str | datetime) -> datetime:
     return convertido.astimezone(fuso_da_clinica())
 
 
-RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS = 365
+RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS = 90
 
 
 def retencao_dados_derivados_dias() -> int:
     """Janela de retenção de `predicoes` e `mensagens_disparadas`
-    (`RETENCAO_DADOS_DERIVADOS_DIAS`, default 365) -- princípio da necessidade
+    (`RETENCAO_DADOS_DERIVADOS_DIAS`, default 90) -- princípio da necessidade
     da LGPD (Art. 6º, III), detalhado em `docs/LGPD.md` §5.
 
     Só dado **derivado**: a probabilidade que o modelo calculou e o registro de
@@ -85,9 +85,13 @@ def retencao_dados_derivados_dias() -> int:
     controladora; apagá-lo por conta própria seria a operadora decidindo sobre
     dado que não é dela.
 
-    365 dias, e não os 90 de `eventos_app`: a auditoria de disparo de lembrete
-    é compromisso do SLA §6, e um ciclo contratual anual é o horizonte em que
-    ela pode ser cobrada. Valor inválido cai no default em vez de levantar --
+    90 dias: a janela de rastreabilidade e auditoria do modelo. Cobre o
+    canário (até 21 dias, mais a espera pelo desfecho; ADR-008) e a maior
+    janela do SLO de explicação (30 dias), com folga para investigar um modelo
+    depois de promovido. O re-treino não depende destas tabelas: lê o desfecho
+    e o lembrete da base de treino (`treino.consultas_treino`), que o job D-2
+    sincroniza a partir de `agendamentos`.
+    Valor inválido cai no default em vez de levantar --
     mesma escolha de `observabilidade.retencao_dias()`.
     """
     try:
@@ -95,6 +99,22 @@ def retencao_dados_derivados_dias() -> int:
         return max(int(bruto or RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS), 1)
     except ValueError:
         return RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS
+
+
+JANELA_TREINO_PADRAO_DIAS = 90
+
+
+def janela_treino_dias() -> int:
+    """Janela da base de treino (`JANELA_TREINO_DIAS`, default 90; ADR-009 e
+    ADR-010): só consultas com até 90 dias entram no export, o job D-2 só
+    sincroniza o desfecho delas, e a purga tira da base de treino o que passou
+    disso. Um número só para os três, para que nenhum deles trabalhe com uma
+    janela que os outros não cobrem. Valor inválido cai no default."""
+    try:
+        bruto = os.environ.get("JANELA_TREINO_DIAS")
+        return max(int(bruto or JANELA_TREINO_PADRAO_DIAS), 1)
+    except ValueError:
+        return JANELA_TREINO_PADRAO_DIAS
 
 
 def caminho_de_env(variavel: str, default_relativo: str) -> str:

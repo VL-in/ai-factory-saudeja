@@ -80,6 +80,19 @@ Decisões menores tomadas junto, todas alinhadas ao critério de "nenhuma peça 
 
 Fica também registrado o que **não** foi implementado aqui, por depender de URL pública: as duas camadas externas (UptimeRobot e Healthchecks.io) e o alerta (hoje via Healthchecks, ver emenda acima). A camada interna, que é a que guarda estado, está completa.
 
+## Emenda (2026-10-11) — a sonda de disponibilidade bate em `/_stcore/health`
+
+A tabela da Decisão punha o UptimeRobot "batendo em `/health`". Isso foi escrito quando a API era o serviço medido. Duas coisas mudaram depois: o SLO §1 passou a medir a **interface** (reescrita de 2026-09-30, [SLO §1.1](../SLO.md#11-disponibilidade-da-interface)), e o Space publica uma porta só, a do Streamlit (7860); a API, em 8000, não tem endereço público.
+
+Bater em `/health` na URL pública seria pior que não medir: conferido nos dois Spaces nesta data, a rota devolve **200 com o HTML do Streamlit**, porque o frontend responde qualquer caminho desconhecido com a própria página. A sonda daria "no ar" mesmo com a interface quebrada, desde que o servidor entregasse arquivo estático. A sonda passa a bater em **`/_stcore/health`**, que o servidor do Streamlit responde com `ok` quando está pronto e que já é o critério do smoke do deploy (`scripts/smoke_deploy.py space`).
+
+Configuração: um monitor HTTP(s) por Space, intervalo de 5 minutos (o mínimo do plano free), esperando 2xx. Só o de produção tem contato de alerta, porque é o único com SLO; o de dev guarda histórico. Os endereços estão no README.
+
+Consequências aceitas:
+- **A sonda impede a hibernação.** O Space free hiberna depois de um período sem tráfego, e cada batida conta como tráfego. O cold start depois de hibernar deixa de acontecer na prática, e o risco do [SLO §2](../SLO.md#2-latência) fica sem ocorrência enquanto a sonda estiver ligada. O efeito é o mesmo no Space de dev.
+- **`/_stcore/health` não exercita o modelo.** Ele diz que o servidor do Streamlit está de pé, não que `model.pkl` carregou. O modelo é conferido no smoke de cada deploy e todo dia pelo job D-2, que falha na pré-checagem se o modelo não for o campeão; a sonda cobre o que esses dois não cobrem, que é a interface cair entre um deploy e outro.
+- `/health` da API continua existindo para o `docker compose` e para o smoke local do CI. Se a API ganhar endereço público (ponto em aberto no [architecture.md](../architecture.md), §6), ela ganha monitor próprio.
+
 ## Alternativas consideradas
 
 - **Langfuse** (proposto pelo ADR-001 como observabilidade geral): descartado para o núcleo. Seu modelo de dados é trace → span → **generation**, construído em torno de prompt, completion, tokens e custo por chamada de LLM. O núcleo do SaúdeJá é um LightGBM tabular: não há prompt nem token, e a instrumentação produziria spans vazios. Soma-se a isso que o Langfuse Cloud fica em EU/US (transferência internacional de dado de saúde) e que o self-host exige Postgres + ClickHouse + worker, fora do orçamento e do que cabe num Space. **Permanece reservado para futuro implementação de LLM**, onde é a ferramenta certa para o problema certo — conforme o ADR-004 já previa.

@@ -13,6 +13,8 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+import consentimento
+import documentos_legais
 from ui import logic
 
 CAMINHO_APP = "src/ui/app.py"
@@ -30,6 +32,18 @@ def _sessao(ultimo_uso=None):
 
 def _botao(at, rotulo):
     return next(b for b in at.button if b.label == rotulo)
+
+
+def _caixa(at, rotulo):
+    return next(c for c in at.checkbox if c.label == rotulo)
+
+
+def _dar_ciencia(at):
+    """A caixa de ciência da Política e dos Termos fica antes de qualquer
+    campo do cadastro, e o formulário só aparece depois do "Continuar"
+    (ADR-010, decisão D2)."""
+    _caixa(at, documentos_legais.TEXTO_CIENCIA).check().run()
+    _botao(at, "Continuar").click().run()
 
 
 def _rodar(
@@ -84,7 +98,8 @@ def test_entrada_padrao_e_a_visao_do_paciente(monkeypatch):
 
     assert not at.exception
     assert at.sidebar.radio[0].value == "Paciente"
-    assert "Nome completo" in [campo.label for campo in at.text_input]
+    assert _caixa(at, documentos_legais.TEXTO_CIENCIA).value is False
+    assert _botao(at, "Continuar").disabled
     assert [t.value for t in at.title] == ["SaúdeJá"]
 
 
@@ -111,6 +126,7 @@ def test_diagnostico_tecnico_fica_na_aba_de_dev(monkeypatch):
 # aparecem logo depois dela.
 ABAS_EM_PROD = [
     "Fila do dia",
+    "Pedidos do titular",
     "Time técnico",
     "Observabilidade",
     "Testar predição",
@@ -145,7 +161,6 @@ def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
     at.sidebar.radio[0].set_value("Paciente").run()
 
     assert not at.exception
-    assert at.text_input  # campos de nome completo/CPF, não mais placeholder
 
     _preencher_cadastro_valido(at)
     _botao(at, "Agendar").click().run()
@@ -155,6 +170,7 @@ def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
 
 
 def _preencher_cadastro_valido(at):
+    _dar_ciencia(at)
     at.text_input[0].set_value("Paciente de Teste")  # nome completo
     at.text_input[1].set_value("111.444.777-35")  # CPF válido
     at.text_input[2].set_value("(11) 98765-4321")  # telefone válido
@@ -165,6 +181,7 @@ def _preencher_cadastro_valido(at):
 
 def test_cadastro_em_branco_lista_todos_os_problemas_sem_tocar_o_banco(monkeypatch):
     at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _dar_ciencia(at)
 
     _botao(at, "Agendar").click().run()
 
@@ -178,6 +195,7 @@ def test_cadastro_em_branco_lista_todos_os_problemas_sem_tocar_o_banco(monkeypat
 def test_data_de_nascimento_comeca_vazia(monkeypatch):
     """Um 01/01/1990 pré-preenchido e esquecido virava idade errada no modelo."""
     at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _dar_ciencia(at)
 
     nascimento = next(d for d in at.date_input if d.label == "Data de nascimento")
     assert nascimento.value is None
@@ -207,17 +225,134 @@ def test_agendamento_confirmado_troca_o_formulario_pela_confirmacao(monkeypatch)
 
     assert not at.exception
     assert not at.success
+    # A ciência é de quem agenda: o próximo agendamento no mesmo navegador
+    # pode ser de outra pessoa, e a caixa volta desmarcada.
+    assert _caixa(at, documentos_legais.TEXTO_CIENCIA).value is False
+    assert _botao(at, "Continuar").disabled
+    assert not [b for b in at.button if b.label == "Agendar"]
+
+    _dar_ciencia(at)
+
     assert [b for b in at.button if b.label == "Agendar"]
     assert at.text_input[0].value == ""
 
 
+def _textos_da_tela(at):
+    return " ".join(
+        [*(c.value for c in at.caption), *(m.value for m in at.markdown)]
+        + [c.label for c in at.checkbox]
+        + [b.label for b in at.button]
+    )
+
+
 def test_aviso_de_privacidade_do_paciente_sem_jargao_tecnico(monkeypatch):
+    """Nas duas etapas: a da ciência e a do formulário. O texto longo saiu da
+    tela inicial para as telas da Política e dos Termos (decisão D2)."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+    na_ciencia = _textos_da_tela(at)
+    _dar_ciencia(at)
+    no_formulario = _textos_da_tela(at)
+
+    for textos in (na_ciencia, no_formulario):
+        for jargao in ("hash", "ADR", "Infobip", "LLM", "dataset", "features do modelo", ".md"):
+            assert jargao not in textos
+    assert not at.expander
+
+
+# --- ciência dos documentos e autorização do treino (ADR-010) --------------------
+
+
+def test_sem_ciencia_nenhum_campo_aparece_e_continuar_fica_bloqueado(monkeypatch):
+    """Esta tela roda fora do Brasil: nenhum campo é desenhado antes da
+    ciência, nem a data da consulta, que fica fora do form. Sem a mensagem
+    antiga que mandava agendar pela clínica: a alternativa está nos Termos."""
     at = _rodar(monkeypatch, sessao=None, perfil=None)
 
-    textos = " ".join(c.value for c in at.caption) + " ".join(m.value for m in at.markdown)
-    for jargao in ("hash", "ADR", "Infobip", "LLM", "dataset", "features do modelo", ".md"):
-        assert jargao not in textos
-    assert [e.label for e in at.expander] == ["Como usamos seus dados"]
+    assert not at.exception
+    assert not at.text_input
+    assert not at.date_input
+    assert not at.selectbox
+    assert not [b for b in at.button if b.label == "Agendar"]
+    assert _botao(at, "Continuar").disabled
+    assert not at.info
+    assert "fora do Brasil" in " ".join(m.value for m in at.markdown)
+
+    _caixa(at, documentos_legais.TEXTO_CIENCIA).check().run()
+
+    assert not _botao(at, "Continuar").disabled
+    assert not at.text_input  # só depois do clique
+
+    _botao(at, "Continuar").click().run()
+
+    assert "Nome completo" in [campo.label for campo in at.text_input]
+    assert "Data da consulta" in [d.label for d in at.date_input]
+
+
+@pytest.mark.parametrize("documento", documentos_legais.DOCUMENTOS)
+def test_link_abre_o_documento_e_a_ciencia_sobrevive_a_volta(monkeypatch, documento):
+    """O Streamlit descarta o estado de widget que deixa de ser desenhado: sem
+    o espelho em session_state, abrir a Política e voltar desmarcaria a caixa."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _caixa(at, documentos_legais.TEXTO_CIENCIA).check().run()
+
+    _botao(at, documentos_legais.TITULOS[documento]).click().run()
+
+    assert not at.exception
+    assert not at.checkbox
+    texto = " ".join(m.value for m in at.markdown)
+    assert documentos_legais.texto_para_tela(documento)[:60] in texto
+    assert "Rascunho" not in texto
+
+    _botao(at, "Voltar ao agendamento").click().run()
+
+    assert _caixa(at, documentos_legais.TEXTO_CIENCIA).value is True
+    assert not _botao(at, "Continuar").disabled
+
+
+def test_caixa_do_treino_comeca_desmarcada_e_e_a_unica_do_formulario(monkeypatch):
+    """O agendamento e o lembrete são parte do atendimento da clínica (art.
+    7º, V; LGPD.md §3): a única autorização opcional é a do treino."""
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _dar_ciencia(at)
+
+    assert _caixa(at, consentimento.TERMO_TREINO).value is False
+    assert [c.label for c in at.checkbox] == [consentimento.TERMO_TREINO]
+
+
+def test_agendar_repassa_a_caixa_do_treino_e_a_versao_dos_documentos(monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(
+        logic, "cadastrar_paciente_e_agendamento", lambda **kw: chamadas.append(kw) or {}
+    )
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _preencher_cadastro_valido(at)
+    _caixa(at, consentimento.TERMO_TREINO).check()
+
+    _botao(at, "Agendar").click().run()
+
+    assert not at.exception
+    assert chamadas[0]["consentimentos"] == {consentimento.FINALIDADE_TREINO: True}
+    assert chamadas[0]["versao_documentos"] == documentos_legais.versao()
+
+
+@pytest.mark.parametrize(
+    ("marcada", "trecho"),
+    [(True, "você pode autorizar no próximo agendamento"), (False, "peça à clínica")],
+)
+def test_falha_no_treino_confirma_o_agendamento_e_avisa(monkeypatch, marcada, trecho):
+    monkeypatch.setattr(
+        logic, "cadastrar_paciente_e_agendamento", lambda **kw: {"falha_no_treino": True}
+    )
+    at = _rodar(monkeypatch, sessao=None, perfil=None)
+    _preencher_cadastro_valido(at)
+    if marcada:
+        _caixa(at, consentimento.TERMO_TREINO).check()
+
+    _botao(at, "Agendar").click().run()
+
+    confirmacao = next(s.value for s in at.success)
+    assert confirmacao.startswith("Agendamento confirmado")
+    assert trecho in confirmacao
 
 
 def test_aba_fila_do_dia_sem_supabase_configurado_mostra_erro_amigavel(monkeypatch):
@@ -325,6 +460,7 @@ def test_visao_paciente_nao_exige_login(monkeypatch):
     dos dados da clínica."""
     at = _rodar(monkeypatch, sessao=None)
     at.sidebar.radio[0].set_value("Paciente").run()
+    _dar_ciencia(at)
 
     assert not at.exception
     assert "Nome completo" in [campo.label for campo in at.text_input]
@@ -509,3 +645,57 @@ def test_explicabilidade_mostra_fatores_em_portugues_na_mesma_execucao(monkeypat
     assert "historico_noshow" not in fatores[0]
     assert "log-odds" not in fatores[0]
     assert "Detalhes técnicos" in [e.label for e in at.expander]
+
+
+# --- pedidos do titular (ADR-009, ADR-010) ------------------------------------------
+
+
+def test_aba_de_pedidos_registra_e_encaminha_o_treino_sem_revelar_se_havia_dado(monkeypatch):
+    registrados, encaminhados = [], []
+    monkeypatch.setattr(
+        logic, "registrar_pedido_da_clinica", lambda cod, tipo: registrados.append((cod, tipo))
+    )
+    monkeypatch.setattr(logic, "encaminhar_pedido_ao_treino", encaminhados.append)
+    monkeypatch.setattr(logic, "listar_pedidos_da_clinica", lambda: [])
+    at = _rodar(monkeypatch)
+
+    codigo = next(c for c in at.text_input if c.label == "Código do agendamento")
+    codigo.set_value("0b9c6f2e-1d3a-4f5b-9c8d-7e6f5a4b3c2d")
+    next(c for c in at.checkbox if "aprimoramento" in c.label).check()
+    next(c for c in at.text_input if c.label.startswith("CPF do paciente")).set_value(
+        "111.444.777-35"
+    )
+    _botao(at, "Registrar pedido").click().run()
+
+    assert not at.exception
+    assert registrados == [("0b9c6f2e-1d3a-4f5b-9c8d-7e6f5a4b3c2d", "eliminacao")]
+    assert encaminhados == ["111.444.777-35"]
+    sucesso = next(s.value for s in at.success)
+    assert "encaminhado ao SaúdeJá" in sucesso
+    assert "não havia" not in sucesso and "não encontrado" not in sucesso
+
+
+def test_aba_de_pedidos_lista_e_decide(monkeypatch):
+    decisoes = []
+    monkeypatch.setattr(
+        logic,
+        "listar_pedidos_da_clinica",
+        lambda: [
+            {"id": "p1", "tipo": "eliminacao", "situacao": "pendente",
+             "criado_em": "2026-10-01T10:00:00+00:00", "confirmado_em": None},
+            {"id": "p2", "tipo": "revisao_decisao", "situacao": "confirmado_pela_clinica",
+             "criado_em": "2026-10-02T10:00:00+00:00",
+             "confirmado_em": "2026-10-03T10:00:00+00:00"},
+        ],
+    )
+    monkeypatch.setattr(
+        logic, "decidir_pedido_da_clinica", lambda id_, decisao: decisoes.append((id_, decisao))
+    )
+    at = _rodar(monkeypatch)
+
+    rotulos = [b.label for b in at.button]
+    assert {"Confirmar", "Recusar", "Concluir revisão"} <= set(rotulos)
+    next(b for b in at.button if b.key == "pedido_confirmar_p1").click().run()
+
+    assert not at.exception
+    assert decisoes == [("p1", "confirmar")]

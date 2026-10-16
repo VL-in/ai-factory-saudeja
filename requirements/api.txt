@@ -8,3 +8,17 @@ shap==0.49.1
 
 # TestClient (tests/test_api.py) usa httpx por baixo dos panos
 httpx==0.28.1
+
+# Telemetria OpenTelemetry (src/telemetria.py, Passo 8.9): envio OTLP/HTTP
+# direto ao Grafana Cloud, sem agente no container. No-op sem
+# OTEL_EXPORTER_OTLP_ENDPOINT. O handler de log vem do pacote de
+# instrumentação porque o LoggingHandler do opentelemetry-sdk foi descontinuado.
+# Mesmos pins em api.txt e ui.txt: a imagem do Space instala os dois.
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-instrumentation-logging==0.65b0
+# Tracing automático (P3 do Passo 8.9): span por chamada httpx (Supabase,
+# Infobip, UI -> API com traceparent) e por request do FastAPI. Os spans saem
+# sanitizados por src/telemetria.py (URL sem query string, sem IP).
+opentelemetry-instrumentation-fastapi==0.65b0
+opentelemetry-instrumentation-httpx==0.65b0

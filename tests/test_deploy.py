@@ -75,7 +75,14 @@ def test_staging_nao_leva_nada_proibido_nem_cache_de_bytecode(staging):
     _, conteudo = staging
     assert not [c for c in conteudo if montar_staging_space.PROIBIDO.search(c)]
     assert not [c for c in conteudo if "__pycache__" in c or c.endswith(".pyc")]
-    assert not [c for c in conteudo if c.startswith(("tests/", "docs/", "scripts/", "supabase/"))]
+    # De docs/, só os dois textos que a tela de agendamento exibe (ADR-010).
+    textos_legais = {"docs/LGPD/POLITICA-DE-PRIVACIDADE.md", "docs/LGPD/TERMOS-DE-USO.md"}
+    assert textos_legais <= set(conteudo)
+    assert not [
+        c
+        for c in conteudo
+        if c.startswith(("tests/", "docs/", "scripts/", "supabase/")) and c not in textos_legais
+    ]
 
 
 def test_staging_tem_dockerfile_na_raiz_e_front_matter_na_porta_da_ui(staging):
@@ -166,12 +173,22 @@ MODULOS_DO_PACOTE = {
     "ruff": ["ruff"],
     "mypy": ["mypy"],
     "types-pyyaml": [],
+    # Namespace `opentelemetry` compartilhado com o opentelemetry-sdk que o
+    # mlflow já puxa: bloquear pelo nome de topo quebraria o mlflow nos jobs
+    # sem api.txt/ui.txt. Ausência dos pacotes não é erro: o import em
+    # src/telemetria.py é tardio e cai em no-op (tests/test_telemetria.py).
+    "opentelemetry-sdk": [],
+    "opentelemetry-exporter-otlp-proto-http": [],
+    "opentelemetry-instrumentation-logging": [],
+    "opentelemetry-instrumentation-fastapi": [],
+    "opentelemetry-instrumentation-httpx": [],
 }
 
 # Imports tardios que o comando do workflow de fato executa (a importação do
 # arquivo não os alcança). `canario.py avaliar`/`reverter --registrar-no-banco`
-# gravam `canarios_revertidos`.
-IMPORTS_TARDIOS = {"src/canario.py": ["db.repositories"]}
+# gravam `canarios_revertidos`. `lgpd_purga.py` abre o remote pelas classes do
+# DVC só ao montar o `RemotoDVC`.
+IMPORTS_TARDIOS = {"src/canario.py": ["db.repositories"], "src/lgpd_purga.py": ["dvc.repo"]}
 
 
 def _pacotes(arquivo: Path) -> set[str]:

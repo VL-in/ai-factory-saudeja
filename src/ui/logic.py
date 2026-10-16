@@ -22,6 +22,7 @@ probabilidade nos dois backends.
 """
 import contextlib
 import hashlib
+import logging
 import os
 import re
 import sys
@@ -38,14 +39,20 @@ import httpx  # noqa: E402
 from supabase_auth.errors import AuthApiError  # noqa: E402
 
 import agenda_clinica  # noqa: E402
+import consentimento  # noqa: E402
 import db.client as db_client  # noqa: E402
 import db.repositories as repositories  # noqa: E402
+import db.repositorio_treino as repositorio_treino  # noqa: E402
 import inference  # noqa: E402
 import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
 import observabilidade  # noqa: E402
+import pseudonimo  # noqa: E402
 from config_projeto import caminho_de_env, fuso_da_clinica, hoje_na_clinica  # noqa: E402
 from db.client import ConfiguracaoSupabaseAusente  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
+from features import calcular_idade  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 BACKEND_PADRAO = "processo"  # ADR-005 (b)
 API_BASE_URL_PADRAO = "http://127.0.0.1:8000"
@@ -328,7 +335,21 @@ class ItemFila:
 _CODIGOS_DE_SCHEMA_DESATUALIZADO = frozenset({"42703", "42P01"})
 
 
-def _relatar_falha_persistencia(exc: Exception, acao: str) -> NoReturn:
+def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoReturn:
+    """Traduz a falha do banco na mensagem que a tela mostra -- e, antes,
+    deixa rastro dela (Passo 8.9): até aqui a falha virava só a mensagem
+    amigável, sem log nem evento, e o alerta diário não tinha como vê-la.
+
+    `rota` é o rótulo fixo da operação. Só ele e o **nome da classe** da
+    exceção vão para o log e para `eventos_app`: a mensagem de um erro do
+    PostgREST pode ecoar o valor de uma coluna."""
+    excecao = type(exc).__name__
+    logger.warning("falha de persistência na UI", extra={"rota": rota, "excecao": excecao})
+    observabilidade.registrar_evento(
+        observabilidade.TIPO_ERRO,
+        status=observabilidade.STATUS_ERRO,
+        detalhe={"rota": rota, "excecao": excecao},
+    )
     if isinstance(exc, ConfiguracaoSupabaseAusente):
         raise ErroPersistencia(str(exc)) from exc
     if getattr(exc, "code", None) in _CODIGOS_DE_SCHEMA_DESATUALIZADO:
@@ -348,13 +369,25 @@ def _relatar_falha_persistencia(exc: Exception, acao: str) -> NoReturn:
     raise ErroPersistencia(f"{acao}: {exc}") from exc
 
 
+def _acao_ui(acao: str, *recusas: type[BaseException]):
+    """Mede uma ação da interface de ponta a ponta (latência, volume e
+    desfecho), em `eventos_app` e no Grafana (Passo 8.9). `recusas` são as
+    exceções que significam "o sistema funcionou e recusou" (senha errada,
+    formulário inválido): viram `recusado`, não `erro`, e não entram na taxa
+    de erro que alerta a mantenedora."""
+    return observabilidade.medir(
+        observabilidade.TIPO_ACAO_UI, detalhe={"acao": acao}, recusas=recusas
+    )
+
+
+@_acao_ui("carregar_fila")
 def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
     """Fila do dia ordenada por risco (probabilidade desc, ver
     repositories.buscar_fila_do_dia)."""
     try:
         linhas = repositories.buscar_fila_do_dia(dia or hoje_na_clinica())
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao consultar a fila do dia")
+        _relatar_falha_persistencia(exc, "Falha ao consultar a fila do dia", rota="fila_do_dia")
 
     itens = []
     for linha in linhas:
@@ -457,6 +490,7 @@ def pode_registrar_desfecho(data_hora_agendada: datetime, hoje: date | None = No
     )
 
 
+@_acao_ui("registrar_desfecho", ErroDesfechoForaDePrazo)
 def atualizar_status_agendamento(
     id_agendamento: str, status: str, data_hora_agendada: datetime | None = None
 ) -> None:
@@ -475,7 +509,9 @@ def atualizar_status_agendamento(
             "O desfecho só pode ser registrado no dia da consulta ou depois."
         ) from exc
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao registrar desfecho do agendamento")
+        _relatar_falha_persistencia(
+            exc, "Falha ao registrar desfecho do agendamento", rota="desfecho"
+        )
 
 
 def resumo_da_fila(itens: list[ItemFila]) -> dict:
@@ -680,6 +716,13 @@ def validar_cadastro(
     return problemas
 
 
+MENSAGEM_SEM_CIENCIA = (
+    "Para agendar por esta tela, confirme que está ciente da Política de "
+    "privacidade e dos Termos de uso."
+)
+
+
+@_acao_ui("cadastro", ErroValidacaoCadastro)
 def cadastrar_paciente_e_agendamento(
     cpf: str,
     telefone: str,
@@ -690,6 +733,9 @@ def cadastrar_paciente_e_agendamento(
     data_consulta: date,
     hora_consulta: time | None,
     nome_completo: str | None = None,
+    *,
+    consentimentos: dict[str, bool],
+    versao_documentos: str | None,
 ) -> dict:
     """Cadastro do paciente (visão Paciente) --
     upsert do paciente seguido do agendamento.
@@ -715,7 +761,21 @@ def cadastrar_paciente_e_agendamento(
     `data_hora_agendada` vai com o fuso da clínica explícito: a coluna é
     `timestamptz`, então gravar um datetime naive deixaria o Postgres
     interpretá-lo no fuso do servidor (UTC no container) e a consulta
-    apareceria 3h deslocada na fila do dia."""
+    apareceria 3h deslocada na fila do dia.
+
+    `versao_documentos` é a versão da Política de privacidade e dos Termos de
+    uso que o paciente declarou conhecer na caixa de ciência (ADR-010). Sem
+    ela não há cadastro: a tela só libera o formulário depois da ciência, e a
+    recusa aqui é a segunda barreira. Fica gravada no agendamento como prova
+    de que a informação foi apresentada (art. 9º); não é consentimento.
+
+    `consentimentos` é o estado da caixa do treino, por finalidade, e é
+    obrigatório: quem chama tem de decidir, não herdar um default. **O
+    agendamento não depende dele**: primeiro vem o serviço da clínica
+    (paciente e agendamento), depois a etapa de treino
+    (`registrar_no_treino`), que nunca derruba o agendamento. Se ela falhar, o
+    resultado traz `falha_no_treino=True` e a tela avisa que a autorização não
+    foi registrada -- sem prova não há treino, que é o lado seguro."""
     problemas = validar_cadastro(
         nome_completo=nome_completo,
         cpf=cpf,
@@ -725,6 +785,8 @@ def cadastrar_paciente_e_agendamento(
         data_consulta=data_consulta,
         hora_consulta=hora_consulta,
     )
+    if not versao_documentos:
+        problemas.insert(0, MENSAGEM_SEM_CIENCIA)
     # As duas checagens de None nunca valem sem `problemas` (validar_cadastro
     # já as reporta): estão aqui só para o mypy estreitar o tipo abaixo.
     if problemas or data_nascimento is None or hora_consulta is None:
@@ -739,18 +801,188 @@ def cadastrar_paciente_e_agendamento(
             nome_completo=nome_completo,
         )
         historico_noshow = repositories.contar_no_shows_anteriores(paciente["id"])
-        return repositories.inserir_agendamento(
+        data_hora_agendada = datetime.combine(
+            data_consulta, hora_consulta, tzinfo=fuso_da_clinica()
+        )
+        dias = dias_ate_consulta(data_consulta)
+        agendamento = repositories.inserir_agendamento(
             id_paciente=paciente["id"],
             especialidade=especialidade,
             distancia_km=distancia_km,
-            data_hora_agendada=datetime.combine(
-                data_consulta, hora_consulta, tzinfo=fuso_da_clinica()
-            ),
-            dias_entre_agendamento_consulta=dias_ate_consulta(data_consulta),
+            data_hora_agendada=data_hora_agendada,
+            dias_entre_agendamento_consulta=dias,
             historico_noshow=historico_noshow,
+            versao_documentos=versao_documentos,
         )
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao cadastrar paciente/agendamento")
+        _relatar_falha_persistencia(exc, "Falha ao cadastrar paciente/agendamento", rota="cadastro")
+
+    # Daqui em diante o agendamento está confirmado.
+    treino_ok = registrar_no_treino(
+        cpf=cpf,
+        marcada=bool(consentimentos.get(consentimento.FINALIDADE_TREINO)),
+        id_agendamento=agendamento["id"],
+        data_nascimento=data_nascimento,
+        sexo=sexo,
+        especialidade=especialidade,
+        distancia_km=distancia_km,
+        data_hora_agendada=data_hora_agendada,
+        dias_entre_agendamento_consulta=dias,
+        historico_noshow=historico_noshow,
+    )
+    return {**agendamento, "falha_no_treino": not treino_ok}
+
+
+def registrar_no_treino(
+    cpf: str,
+    marcada: bool,
+    id_agendamento: str,
+    data_nascimento: date,
+    sexo: str,
+    especialidade: str,
+    distancia_km: float,
+    data_hora_agendada: datetime,
+    dias_entre_agendamento_consulta: int,
+    historico_noshow: int,
+) -> bool:
+    """Etapa de treino do agendamento (ADR-010), na base da SaúdeJá. Devolve
+    se terminou sem erro; **nunca levanta**, porque o agendamento já está
+    confirmado e não pode depender dela.
+
+    A consulta do vigente acontece mesmo com a caixa desmarcada: é preciso
+    saber se há consentimento a revogar. O que vai à base de treino nesse caso
+    é só o pseudônimo, no corpo da RPC, sem dado da consulta.
+
+    - grava os eventos só quando o estado muda (`decisoes_de_consentimento`);
+    - com a caixa marcada, grava a linha da consulta. O banco a recusa se não
+      houver consentimento vigente, então a ordem evento -> linha é obrigatória;
+    - na revogação, abre o pedido que o workflow de purga executa (apaga as
+      linhas e as versões do dataset que as contêm).
+
+    A idade é a da data da consulta, como o export sempre calculou: a data de
+    nascimento não vai para a base de treino. `historico_noshow` é o valor
+    gravado no agendamento, o mesmo com que o job D-2 prediz."""
+    try:
+        id_titular = pseudonimo.id_titular(cpf)
+        vigentes = consentimento.consentimentos_vigentes(
+            repositorio_treino.eventos_do_titular(id_titular)
+        )
+        decisoes = consentimento.decisoes_de_consentimento(
+            vigentes, {consentimento.FINALIDADE_TREINO: marcada}
+        )
+        repositorio_treino.registrar_consentimentos(
+            id_titular,
+            decisoes,
+            versao_termo=consentimento.VERSAO_TERMO,
+            canal=consentimento.CANAL_AUTOAGENDAMENTO,
+            consentido_por=consentimento.consentido_por(data_nascimento, hoje_na_clinica()),
+        )
+        if marcada:
+            repositorio_treino.inserir_consulta(
+                id_consulta=pseudonimo.id_consulta(id_agendamento),
+                id_titular=id_titular,
+                idade=calcular_idade(data_nascimento, data_hora_agendada.date()),
+                sexo=sexo,
+                especialidade=especialidade,
+                distancia_km=distancia_km,
+                dias_entre_agendamento_consulta=dias_entre_agendamento_consulta,
+                historico_noshow=historico_noshow,
+                data_hora_agendada=data_hora_agendada,
+            )
+        if (consentimento.FINALIDADE_TREINO, consentimento.ACAO_REVOGADO) in decisoes:
+            repositorio_treino.registrar_pedido(id_titular, "revogacao", "autoagendamento")
+    except Exception as exc:
+        # Só o nome da classe: a mensagem de um erro do PostgREST pode ecoar
+        # o pseudônimo ou o valor de uma coluna.
+        logger.warning("etapa de treino do agendamento falhou: %s", type(exc).__name__)
+        observabilidade.registrar_evento(
+            observabilidade.TIPO_ERRO,
+            status=observabilidade.STATUS_ERRO,
+            detalhe={"rota": "agendamento_treino", "excecao": type(exc).__name__},
+        )
+        return False
+    return True
+
+
+# --------------------------------------------------------------------------
+# pedidos do titular (ADR-009, ADR-010)
+# --------------------------------------------------------------------------
+class ErroPedido(Exception):
+    """Pedido recusado antes do banco: código ou CPF inválido."""
+
+
+ROTULOS_TIPO_PEDIDO = {
+    "eliminacao": "Eliminação do cadastro",
+    "revisao_decisao": "Revisão da decisão de lembrete",
+}
+ROTULOS_SITUACAO_PEDIDO = {
+    "pendente": "Aguardando a clínica",
+    "confirmado_pela_clinica": "Confirmado",
+}
+
+
+@_acao_ui("registrar_pedido", ErroPedido)
+def registrar_pedido_da_clinica(codigo_agendamento: str, tipo: str) -> None:
+    """Pedido sobre os dados da clínica, pelo código do agendamento que a
+    "Fila do dia" mostra: a equipe nunca procura o paciente por CPF ou nome
+    (iriam na URL da consulta, LGPD.md §8.1). Nasce pendente; a clínica
+    confirma em seguida, depois de conferir a identidade de quem pede."""
+    codigo = (codigo_agendamento or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", codigo):
+        raise ErroPedido("Código do agendamento inválido -- copie-o de \"Detalhes técnicos\".")
+    try:
+        id_paciente = repositories.paciente_do_agendamento(codigo)
+        if id_paciente is None:
+            raise ErroPedido("Nenhum agendamento com esse código.")
+        repositories.registrar_pedido(id_paciente, tipo)
+    except ErroPedido:
+        raise
+    except Exception as exc:
+        _relatar_falha_persistencia(exc, "Falha ao registrar o pedido", rota="registrar_pedido")
+
+
+@_acao_ui("encaminhar_pedido", ErroPedido)
+def encaminhar_pedido_ao_treino(cpf: str) -> None:
+    """Pedido de eliminação dos dados de aprimoramento, encaminhado pela
+    clínica à SaúdeJá, que é a controladora da base de treino (ADR-010). O
+    CPF vira o pseudônimo e não é guardado. A tela não diz se havia dado de
+    aprimoramento: diria a quem digitasse um CPF alheio se aquela pessoa
+    autorizou o treino."""
+    if not cpf_valido(cpf):
+        raise ErroPedido("CPF inválido -- confira os números digitados.")
+    try:
+        repositorio_treino.registrar_pedido(pseudonimo.id_titular(cpf), "eliminacao", "clinica")
+    except Exception as exc:
+        _relatar_falha_persistencia(
+            exc, "Falha ao encaminhar o pedido ao SaúdeJá", rota="encaminhar_pedido"
+        )
+
+
+@_acao_ui("listar_pedidos")
+def listar_pedidos_da_clinica() -> list[dict]:
+    try:
+        return repositories.pedidos_abertos()
+    except Exception as exc:
+        _relatar_falha_persistencia(exc, "Falha ao listar os pedidos", rota="listar_pedidos")
+
+
+@_acao_ui("decidir_pedido")
+def decidir_pedido_da_clinica(id_pedido: str, decisao: str) -> bool:
+    """`confirmar` (pendente -> confirmado; a eliminação confirmada é
+    executada pelo workflow de purga), `recusar` (pendente -> recusado) ou
+    `concluir` (revisão de decisão confirmada -> executado, quando a clínica
+    respondeu ao paciente). Devolve se o pedido mudou."""
+    acoes = {
+        "confirmar": repositories.confirmar_pedido,
+        "recusar": repositories.recusar_pedido,
+        "concluir": repositories.marcar_pedido_executado,
+    }
+    if decisao not in acoes:
+        raise ValueError(f"decisão desconhecida: {decisao!r}")
+    try:
+        return acoes[decisao](id_pedido)
+    except Exception as exc:
+        _relatar_falha_persistencia(exc, "Falha ao atualizar o pedido", rota="decidir_pedido")
 
 
 def disparar_job_diario(dia: date | None = None) -> dict:
@@ -761,7 +993,9 @@ def disparar_job_diario(dia: date | None = None) -> dict:
     try:
         return job_inferencia_diaria.processar_dia(dia)
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao rodar o job de inferência diária")
+        _relatar_falha_persistencia(
+            exc, "Falha ao rodar o job de inferência diária", rota="job_manual"
+        )
 
 
 def obter_cliente(backend: str | None = None):
@@ -778,9 +1012,10 @@ def obter_cliente(backend: str | None = None):
     )
 
 
-LIMITE_EVENTOS_OBSERVABILIDADE = 5000
+LIMITE_EVENTOS_OBSERVABILIDADE = observabilidade.LIMITE_LEITURA_SLO
 
 
+@_acao_ui("observabilidade")
 def resumo_observabilidade(janela_horas: int = 24) -> dict:
     """Números do SLO §2/§4/§5 lidos de `eventos_app`/`predicoes` (ADR-006)
     -- é daqui que sai a aba "Observabilidade" e, na validação final para o
@@ -793,13 +1028,17 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
     janela foi cortada do que publicar um número errado no pitch."""
     desde = observabilidade.inicio_da_janela(janela_horas)
     try:
-        eventos = repositories.buscar_eventos_app(desde, limite=LIMITE_EVENTOS_OBSERVABILIDADE)
+        eventos = repositories.buscar_eventos_app(
+            desde, limite=LIMITE_EVENTOS_OBSERVABILIDADE, tipos=observabilidade.TIPOS_DO_SLO
+        )
         total_predicoes, com_explicacao = repositories.contar_predicoes_e_explicacoes(desde)
         ultimo_job = repositories.ultimo_evento_app(
             observabilidade.TIPO_JOB_D2, status=observabilidade.STATUS_OK
         )
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao consultar a observabilidade")
+        _relatar_falha_persistencia(
+            exc, "Falha ao consultar a observabilidade", rota="observabilidade"
+        )
 
     predicoes = [e for e in eventos if e["tipo"] == observabilidade.TIPO_PREDICAO]
     latencias = [e["duracao_ms"] for e in predicoes if e["duracao_ms"] is not None]
@@ -902,6 +1141,7 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
     return ErroCredenciais(MENSAGEM_CREDENCIAIS_INVALIDAS)
 
 
+@_acao_ui("login", ErroCredenciais)
 def autenticar_funcionario(
     email: str, senha: str, criar_client=None, agora: datetime | None = None
 ) -> SessaoFuncionario:

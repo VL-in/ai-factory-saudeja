@@ -21,7 +21,7 @@ Service Level Objectives (SLOs) são as metas técnicas internas, mensuráveis, 
 
 | Métrica | Alvo | Observação |
 |---|---|---|
-| Uptime mensal da interface (fila do dia, cadastro) | ≥ 99.0% | Sonda externa no Space (UptimeRobot em `/health`, ligada com o deploy). Orçamento de US$ 100/mês (BRIEFING.md) exclui redundância; o Space free hiberna, e o cold start é risco conhecido. |
+| Uptime mensal da interface (fila do dia, cadastro) | ≥ 99.0% | Sonda externa no Space de produção (UptimeRobot em `/_stcore/health`, a cada 5 min — `/health` é a API, que não é pública; ver a emenda de 2026-10-11 no [ADR-006](adr/adr-006-observabilidade.md)). Orçamento de US$ 100/mês (BRIEFING.md) exclui redundância; o Space free hiberna, e o cold start é risco conhecido. |
 
 ## 2. Latência
 
@@ -82,7 +82,7 @@ Os números do modelo vigente, **medidos** no fold de teste isolado e registrado
 |---|---|---|
 | PII em logs de aplicação | 0 ocorrências | Requisito absoluto do BRIEFING.md ("Sem PII em logs. Nunca.") e das notas da Camila. Como é verificado: ver §6.1. |
 | Dados sensíveis (Art. 5º/11 LGPD) em repouso | 100% criptografados | Dados de saúde são categoria especial mesmo sendo sintéticos no protótipo (`AVISO-DADOS-SINTETICOS.md`, `notas-camila.md`). Herdado do provedor gerenciado (Supabase, Azure Blob Storage), não implementado por nós — registrado como risco residual em [LGPD.md §9](LGPD.md). |
-| Retenção de dados derivados | `predicoes`/`mensagens_disparadas` purgadas em ≤ 365 dias | Princípio da necessidade (Art. 6º, III). Purga no job diário; política por tabela em [LGPD.md §5](LGPD.md). |
+| Retenção de dados derivados | `predicoes`/`mensagens_disparadas` purgadas em ≤ 90 dias | Princípio da necessidade (Art. 6º, III). Purga no job diário; política por tabela em [LGPD.md §5](LGPD.md). |
 
 ### 6.1 Como o "zero PII em log" é verificado (revisão de 2026-09-27)
 

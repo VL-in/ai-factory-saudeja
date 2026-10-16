@@ -32,30 +32,6 @@ MODEL_PATH = "data/model.pkl"
 
 
 @pytest.fixture
-def eventos_capturados(monkeypatch):
-    """Substitui o destino de gravação por um espião em memória -- prova o que
-    é registrado sem precisar de Supabase de pé (mesma ideia do cliente de
-    mensageria espião de test_job_inferencia.py).
-
-    Liga a observabilidade explicitamente: o ci.yml exporta
-    `OBSERVABILIDADE_ATIVA=false` no workflow inteiro (CI não é tráfego de
-    produto), e sem isto o espião nunca recebe nada no runner -- os testes
-    passavam na máquina local e quebravam no primeiro CI real."""
-    monkeypatch.setenv("OBSERVABILIDADE_ATIVA", "true")
-    capturados = []
-
-    def _escritor(**evento):
-        capturados.append(evento)
-
-    # Drena o que outro teste possa ter deixado na fila antes de trocar o
-    # destino -- senão um evento alheio cairia no espião deste teste.
-    observabilidade.flush()
-    observabilidade.definir_escritor(_escritor)
-    yield capturados
-    observabilidade.definir_escritor(None)
-
-
-@pytest.fixture
 def escritor_que_falha(monkeypatch):
     """Destino permanentemente quebrado: o caminho principal (predição, job)
     tem que continuar funcionando por cima dele. Liga a observabilidade pelo
@@ -210,6 +186,143 @@ def test_registro_nao_bloqueia_quando_a_fila_enche(monkeypatch, eventos_capturad
     assert observabilidade.registrar_evento(observabilidade.TIPO_PREDICAO) is False
 
 
+# --- um ponto de chamada, três destinos (Passo 8.9) ---------------------------
+
+
+def test_medir_vira_evento_span_e_metricas(eventos_capturados, telemetria_em_memoria):
+    with observabilidade.medir(
+        observabilidade.TIPO_ACAO_UI, detalhe={"acao": "carregar_fila"}
+    ):
+        pass
+
+    observabilidade.flush()
+    (evento,) = eventos_capturados
+    assert evento["tipo"] == "acao_ui"
+    assert evento["status"] == "ok"
+
+    (span,) = telemetria_em_memoria.spans()
+    assert span.name == "carregar_fila"
+    assert span.attributes["acao"] == "carregar_fila"
+    # P3: a linha de `eventos_app` leva o trace da ação, que liga a tabela ao Tempo.
+    assert evento["detalhe"] == {
+        "acao": "carregar_fila",
+        "id_execucao": f"{span.context.trace_id:032x}",
+    }
+
+    assert telemetria_em_memoria.pontos("saudeja_acao_total") == [
+        ({"acao": "carregar_fila", "origem": "processo", "status": "ok"}, 1)
+    ]
+    assert telemetria_em_memoria.pontos("saudeja_acao_duracao_ms") == [
+        ({"acao": "carregar_fila", "origem": "processo"}, 1)
+    ]
+
+
+def test_recusa_esperada_nao_e_erro(eventos_capturados, telemetria_em_memoria):
+    """Senha errada é o sistema funcionando: não pode contar na taxa de erro
+    que alerta a mantenedora (P2)."""
+
+    class SenhaErrada(Exception):
+        pass
+
+    with pytest.raises(SenhaErrada), observabilidade.medir(
+        observabilidade.TIPO_ACAO_UI, detalhe={"acao": "login"}, recusas=(SenhaErrada,)
+    ):
+        raise SenhaErrada("a@clinica.test")
+
+    observabilidade.flush()
+    (evento,) = eventos_capturados
+    assert evento["status"] == observabilidade.STATUS_RECUSADO
+    assert evento["detalhe"].items() >= {"acao": "login", "excecao": "SenhaErrada"}.items()
+    (span,) = telemetria_em_memoria.spans()
+    assert span.status.status_code.name != "ERROR"
+    assert telemetria_em_memoria.pontos("saudeja_acao_total") == [
+        (
+            {"acao": "login", "origem": "processo", "status": "recusado", "excecao": "SenhaErrada"},
+            1,
+        )
+    ]
+
+
+def test_falha_vira_erro_nos_tres_destinos(eventos_capturados, telemetria_em_memoria):
+    with pytest.raises(ConnectionError), observabilidade.medir(
+        observabilidade.TIPO_ACAO_UI, detalhe={"acao": "cadastro"}
+    ):
+        raise ConnectionError("5511987654321")
+
+    observabilidade.flush()
+    assert eventos_capturados[0]["status"] == "erro"
+    (span,) = telemetria_em_memoria.spans()
+    assert span.status.description == "ConnectionError"
+    ((atributos, _),) = telemetria_em_memoria.pontos("saudeja_acao_total")
+    assert atributos["status"] == "erro"
+    assert "5511987654321" not in json.dumps(eventos_capturados) + str(atributos)
+
+
+def test_medir_serve_de_decorador_com_detalhe_novo_a_cada_chamada(eventos_capturados):
+    @observabilidade.medir(observabilidade.TIPO_ACAO_UI, detalhe={"acao": "listar_pedidos"})
+    def listar():
+        return ["p1"]
+
+    assert listar() == ["p1"]
+    assert listar() == ["p1"]
+
+    observabilidade.flush()
+    assert [e["detalhe"] for e in eventos_capturados] == [{"acao": "listar_pedidos"}] * 2
+
+
+def test_evento_de_erro_vira_contador_por_rota(eventos_capturados, telemetria_em_memoria):
+    observabilidade.registrar_evento(
+        observabilidade.TIPO_ERRO,
+        status=observabilidade.STATUS_ERRO,
+        origem=observabilidade.ORIGEM_JOB,
+        detalhe={"rota": "enviar_lembrete", "excecao": "ErroEnvioInfobip"},
+    )
+
+    assert telemetria_em_memoria.pontos("saudeja_erro_total") == [
+        ({"rota": "enviar_lembrete", "origem": "job", "excecao": "ErroEnvioInfobip"}, 1)
+    ]
+    assert telemetria_em_memoria.pontos("saudeja_acao_total") == []
+
+
+def test_predicao_vai_para_o_histograma_de_predicao_com_o_braco(telemetria_em_memoria):
+    observabilidade.registrar_evento(
+        observabilidade.TIPO_PREDICAO,
+        origem=observabilidade.ORIGEM_JOB,
+        duracao_ms=11,
+        model_version="6430cb3315da",
+        detalhe={"braco": "canario"},
+    )
+
+    assert telemetria_em_memoria.pontos("saudeja_predicao_duracao_ms") == [
+        ({"origem": "job", "model_version": "6430cb3315da", "braco": "canario"}, 1)
+    ]
+    assert telemetria_em_memoria.pontos("saudeja_acao_duracao_ms") == []
+
+
+def test_metrica_sai_mesmo_sem_destino_de_eventos_app(telemetria_em_memoria, monkeypatch):
+    """A imagem enxuta da API não tem supabase-py: `eventos_app` fica
+    indisponível no processo, e é ela que mede /predict para o Grafana."""
+    monkeypatch.setattr(observabilidade, "_indisponivel_no_processo", True)
+
+    assert observabilidade.registrar_evento(observabilidade.TIPO_PREDICAO) is False
+    assert telemetria_em_memoria.pontos("saudeja_acao_total")
+
+
+def test_telemetria_quebrada_nao_derruba_o_registro(eventos_capturados, monkeypatch):
+    """Telemetria quebrada degrada, não interrompe: o evento continua indo
+    para `eventos_app`, que é a fonte de verdade."""
+
+    def _quebra(*args, **kwargs):
+        raise RuntimeError("SDK quebrado")
+
+    monkeypatch.setattr(observabilidade.telemetria, "contar", _quebra)
+    with observabilidade.medir(observabilidade.TIPO_ACAO_UI, detalhe={"acao": "login"}):
+        pass
+
+    observabilidade.flush()
+    assert [e["status"] for e in eventos_capturados] == ["ok"]
+
+
 # --- instrumentação da API: mede /predict, ignora a sonda de /health ----------
 
 
@@ -237,6 +350,39 @@ def test_predict_registra_evento_de_latencia(eventos_capturados):
     assert evento["duracao_ms"] >= 0
     assert evento["model_version"]
     assert evento["detalhe"] == {"rota": "/predict", "status_http": 200}
+
+
+def test_predict_com_telemetria_vira_span_e_o_evento_leva_o_trace(
+    eventos_capturados, telemetria_em_memoria
+):
+    """P3 do Passo 8.9: o `lifespan` instrumenta o FastAPI, o request vira um
+    span de servidor, e a linha de `eventos_app` aponta para ele pelo
+    `id_execucao` -- é a ponte entre a tabela (90 dias) e o Tempo (14 dias)."""
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    from api.main import app
+
+    _, mapa_especialidade = inference.carregar_modelo(MODEL_PATH)
+    payload = {
+        "idade": 45,
+        "sexo": "F",
+        "especialidade": sorted(mapa_especialidade)[0],
+        "distancia_km": 5.5,
+        "dias_entre_agendamento_consulta": 14,
+        "historico_noshow": 1,
+        "data_hora_agendada": "2026-01-05T09:00:00",
+    }
+    try:
+        with TestClient(app) as client:
+            assert client.post("/predict", json=payload).status_code == 200
+    finally:
+        FastAPIInstrumentor.uninstrument_app(app)
+    observabilidade.flush()
+
+    (servidor,) = [s for s in telemetria_em_memoria.spans() if s.name == "POST /predict"]
+    evento = next(e for e in eventos_capturados if e["origem"] == observabilidade.ORIGEM_API)
+    assert evento["detalhe"]["id_execucao"] == f"{servidor.context.trace_id:032x}"
+    assert telemetria_em_memoria.pontos("http.server.request.duration")
 
 
 def test_health_nao_gera_evento(eventos_capturados):
@@ -357,6 +503,33 @@ def test_registrar_evento_faz_round_trip_no_supabase(db):
     assert linhas[0]["origem"] == "job"
     # O telefone é barrado antes de entrar na fila, não confiando no schema.
     assert linhas[0]["detalhe"] == {"rota": "/predict"}
+
+
+@pytest.mark.integracao
+def test_acao_da_ui_recusada_cabe_no_schema_e_fica_fora_da_leitura_do_slo(db):
+    """Migration `20261012000000_eventos_app_acao_ui.sql`: sem ela o banco
+    recusaria `acao_ui`/`recusado`, e o worker engoliria o erro em silêncio."""
+    import db.repositories as repositories
+
+    observabilidade.definir_escritor(repositories.inserir_evento_app)
+    try:
+        with pytest.raises(KeyError), observabilidade.medir(
+            observabilidade.TIPO_ACAO_UI, detalhe={"acao": "login"}, recusas=(KeyError,)
+        ):
+            raise KeyError("senha")
+        observabilidade.registrar_evento(observabilidade.TIPO_PREDICAO, duracao_ms=10)
+        assert observabilidade.flush(timeout=10)
+    finally:
+        observabilidade.definir_escritor(None)
+
+    linhas = db.table("eventos_app").select("tipo, status").execute().data
+    assert sorted((linha["tipo"], linha["status"]) for linha in linhas) == [
+        ("acao_ui", "recusado"),
+        ("predicao", "ok"),
+    ]
+    desde = datetime.now(tz=timezone.utc) - timedelta(hours=1)
+    lidas = repositories.buscar_eventos_app(desde, tipos=observabilidade.TIPOS_DO_SLO)
+    assert [linha["tipo"] for linha in lidas] == ["predicao"]
 
 
 @pytest.mark.integracao

@@ -18,11 +18,18 @@ from supabase_auth.errors import AuthApiError, AuthRetryableError
 
 import db.repositories as repositories
 import inference
+import observabilidade
 from api.main import app
 from api.schemas import PacienteConsultaIn
 from ui import logic
 
 MODEL_PATH = "data/model.pkl"
+# O mínimo para o cadastro existir (ADR-010): a ciência dos documentos, sem
+# a qual a tela não mostra o formulário e a lógica recusa. A caixa do treino
+# fica desmarcada: o agendamento não depende dela.
+VERSAO_DOCUMENTOS = "politica 0.2; termos 0.1"
+SO_CIENCIA = {"consentimentos": {"treino": False}, "versao_documentos": VERSAO_DOCUMENTOS}
+CHAVE_DE_TESTE = "c" * 32
 
 
 @pytest.fixture(scope="module")
@@ -304,6 +311,7 @@ def test_cadastro_recusa_nome_invalido_antes_de_tocar_o_banco(monkeypatch):
             data_consulta=date(2026, 9, 30),
             hora_consulta=time(10, 0),
             nome_completo=" ",
+            **SO_CIENCIA,
         )
 
 
@@ -314,29 +322,186 @@ def test_cadastro_repassa_o_nome_ao_repositorio(monkeypatch):
         capturado.update(kwargs)
         return {"id": "p1"}
 
+    _banco_falso(monkeypatch)
     monkeypatch.setattr(logic.repositories, "inserir_paciente", _inserir_paciente)
-    monkeypatch.setattr(logic.repositories, "contar_no_shows_anteriores", lambda _id: 0)
-    monkeypatch.setattr(logic.repositories, "inserir_agendamento", lambda **kw: {"id": "a1"})
     # Data fixa da consulta exige "hoje" fixo: o
     # cadastro recusa consulta no passado.
     monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
 
-    logic.cadastrar_paciente_e_agendamento(
-        cpf="529.982.247-25",
-        telefone="(11) 98765-4321",
-        data_nascimento=date(1990, 1, 1),
-        sexo="F",
-        especialidade="cardiologia",
-        distancia_km=5.5,
-        data_consulta=date(2026, 9, 30),
-        hora_consulta=time(10, 0),
-        nome_completo="Ana Souza",
-    )
+    _cadastrar(date(2026, 9, 30))
 
     assert capturado["nome_completo"] == "Ana Souza"
     # O CPF continua não sendo persistido: o que vai é o hash dele.
     assert "cpf" not in capturado
     assert capturado["id_paciente_externo"] == logic._id_paciente_externo_de_cpf("52998224725")
+
+
+# --- agendamento e etapa de treino (ADR-010) -------------------------------------
+
+
+def _banco_falso(monkeypatch, eventos_anteriores=(), falha_no_treino=None):
+    """Troca as funções do banco da clínica e da base de treino que o cadastro
+    chama e devolve a lista de chamadas, na ordem: é a ordem que prova que o
+    agendamento nasce antes, e independente, da etapa de treino."""
+    monkeypatch.setenv(logic.pseudonimo.VARIAVEL_CHAVE, CHAVE_DE_TESTE)
+    chamadas = []
+
+    def _registrar(modulo, nome, retorno, erro=None):
+        def _funcao(*args, **kwargs):
+            chamadas.append((nome, {**dict(enumerate(args)), **kwargs}))
+            if erro is not None:
+                raise erro
+            return retorno
+
+        monkeypatch.setattr(modulo, nome, _funcao)
+
+    _registrar(logic.repositories, "inserir_paciente", {"id": "p1"})
+    _registrar(logic.repositories, "contar_no_shows_anteriores", 2)
+    _registrar(logic.repositories, "inserir_agendamento", {"id": "a1", "id_paciente": "p1"})
+    _registrar(
+        logic.repositorio_treino, "eventos_do_titular", list(eventos_anteriores), falha_no_treino
+    )
+    _registrar(logic.repositorio_treino, "registrar_consentimentos", 0)
+    _registrar(logic.repositorio_treino, "inserir_consulta", True)
+    _registrar(logic.repositorio_treino, "registrar_pedido", "pedido-1")
+    return chamadas
+
+
+def _agendar(monkeypatch, treino, **sobrescritos):
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
+    return logic.cadastrar_paciente_e_agendamento(
+        **_campos_validos(**sobrescritos),
+        sexo="F",
+        distancia_km=5.5,
+        consentimentos={"treino": treino},
+        versao_documentos=VERSAO_DOCUMENTOS,
+    )
+
+
+def test_cadastro_sem_ciencia_e_recusado_antes_de_tocar_o_banco(monkeypatch):
+    """A tela só mostra o formulário depois da ciência; a lógica é a segunda
+    barreira, para quem chamar por outro caminho."""
+    chamadas = _banco_falso(monkeypatch)
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
+
+    with pytest.raises(logic.ErroValidacaoCadastro) as erro:
+        logic.cadastrar_paciente_e_agendamento(
+            **_campos_validos(),
+            sexo="F",
+            distancia_km=5.5,
+            consentimentos={"treino": True},
+            versao_documentos=None,
+        )
+
+    assert erro.value.problemas == [logic.MENSAGEM_SEM_CIENCIA]
+    assert chamadas == []
+
+
+def test_agendamento_vem_antes_da_etapa_de_treino(monkeypatch):
+    chamadas = _banco_falso(monkeypatch)
+
+    resultado = _agendar(monkeypatch, treino=True)
+
+    assert [nome for nome, _ in chamadas] == [
+        "inserir_paciente",
+        "contar_no_shows_anteriores",
+        "inserir_agendamento",
+        "eventos_do_titular",
+        "registrar_consentimentos",
+        "inserir_consulta",
+    ]
+    assert resultado["falha_no_treino"] is False
+    assert dict(chamadas)["inserir_agendamento"]["versao_documentos"] == VERSAO_DOCUMENTOS
+
+
+def test_com_autorizacao_a_consulta_vai_ao_treino_pseudonimizada(monkeypatch):
+    """Sem nome, telefone, CPF nem data de nascimento; idade na data da
+    consulta e o `historico_noshow` gravado no agendamento (o de serving)."""
+    chamadas = _banco_falso(monkeypatch)
+
+    _agendar(monkeypatch, treino=True, data_nascimento=date(1990, 10, 1))
+
+    id_titular = logic.pseudonimo.id_titular("529.982.247-25")
+    registro = dict(chamadas)["registrar_consentimentos"]
+    assert registro[0] == id_titular
+    assert registro[1] == [("treino", "concedido")]
+    assert registro["versao_termo"] == logic.consentimento.VERSAO_TERMO
+    assert registro["canal"] == "autoagendamento"
+    assert registro["consentido_por"] == "titular"
+
+    linha = dict(chamadas)["inserir_consulta"]
+    assert linha["id_titular"] == id_titular
+    assert linha["id_consulta"] == logic.pseudonimo.id_consulta("a1")
+    assert linha["idade"] == 35  # faz 36 só em 01/10, depois da consulta de 30/09
+    assert linha["historico_noshow"] == 2
+    assert linha["dias_entre_agendamento_consulta"] == 1
+    for proibido in ("cpf", "telefone", "nome_completo", "data_nascimento"):
+        assert proibido not in linha
+    assert "52998224725" not in str(chamadas[3:])
+
+
+def test_sem_autorizacao_nenhum_dado_da_consulta_vai_ao_treino(monkeypatch):
+    """Quem não consente é agendado normalmente e nada da consulta chega à
+    base de treino: só a consulta do vigente, pelo pseudônimo."""
+    chamadas = _banco_falso(monkeypatch)
+
+    resultado = _agendar(monkeypatch, treino=False)
+
+    nomes = [nome for nome, _ in chamadas]
+    assert "inserir_agendamento" in nomes
+    assert "inserir_consulta" not in nomes
+    assert "registrar_pedido" not in nomes
+    assert dict(chamadas)["registrar_consentimentos"][1] == []
+    assert resultado["falha_no_treino"] is False
+
+
+def test_desmarcar_com_autorizacao_vigente_revoga_e_abre_o_pedido_de_purga(monkeypatch):
+    vigente = {
+        "finalidade": "treino",
+        "acao": "concedido",
+        "versao_termo": logic.consentimento.VERSAO_TERMO,
+        "registrado_em": "2026-09-01T12:00:00+00:00",
+    }
+    chamadas = _banco_falso(monkeypatch, eventos_anteriores=[vigente])
+
+    _agendar(monkeypatch, treino=False)
+
+    assert dict(chamadas)["registrar_consentimentos"][1] == [("treino", "revogado")]
+    pedido = dict(chamadas)["registrar_pedido"]
+    assert (pedido[1], pedido[2]) == ("revogacao", "autoagendamento")
+    assert "inserir_consulta" not in [nome for nome, _ in chamadas]
+
+
+def test_falha_na_base_de_treino_nao_derruba_o_agendamento(monkeypatch):
+    chamadas = _banco_falso(monkeypatch, falha_no_treino=RuntimeError("PostgREST fora do ar"))
+
+    resultado = _agendar(monkeypatch, treino=True)
+
+    assert resultado["id"] == "a1"
+    assert resultado["falha_no_treino"] is True
+    assert "inserir_consulta" not in [nome for nome, _ in chamadas]
+
+
+def test_sem_chave_do_pseudonimo_o_agendamento_segue_sem_treino(monkeypatch):
+    chamadas = _banco_falso(monkeypatch)
+    monkeypatch.setenv(logic.pseudonimo.VARIAVEL_CHAVE, "")
+
+    resultado = _agendar(monkeypatch, treino=True)
+
+    assert resultado["falha_no_treino"] is True
+    assert [nome for nome, _ in chamadas] == [
+        "inserir_paciente",
+        "contar_no_shows_anteriores",
+        "inserir_agendamento",
+    ]
+
+
+def test_cadastro_de_crianca_registra_o_consentimento_pelo_responsavel(monkeypatch):
+    chamadas = _banco_falso(monkeypatch)
+
+    _agendar(monkeypatch, treino=True, data_nascimento=date(2020, 5, 1))
+
+    assert dict(chamadas)["registrar_consentimentos"]["consentido_por"] == "responsavel_legal"
 
 
 class _ErroDeSchema(Exception):
@@ -736,6 +901,7 @@ def _cadastrar(data_consulta):
         data_consulta=data_consulta,
         hora_consulta=time(10, 0),
         nome_completo="Ana Souza",
+        **SO_CIENCIA,
     )
 
 
@@ -893,6 +1059,7 @@ def test_cadastro_com_varios_erros_nao_toca_o_banco_e_lista_todos(hoje_fixo, mon
             data_consulta=date(2026, 9, 30),
             hora_consulta=time(10, 0),
             nome_completo="Ana Souza",
+            **SO_CIENCIA,
         )
 
     assert erro.value.problemas == [
@@ -937,3 +1104,149 @@ def test_toda_feature_do_modelo_tem_rotulo_para_a_recepcao():
         preprocess.COLUNAS_CATEGORICAS
     )
     assert features <= set(logic.ROTULOS_FEATURES)
+
+
+# --- pedidos do titular (ADR-009, ADR-010) -----------------------------------------
+
+
+def test_pedido_da_clinica_e_registrado_pelo_codigo_do_agendamento(monkeypatch):
+    registrados = []
+    monkeypatch.setattr(logic.repositories, "paciente_do_agendamento", lambda codigo: "p1")
+    monkeypatch.setattr(
+        logic.repositories, "registrar_pedido", lambda id_, tipo: registrados.append((id_, tipo))
+    )
+
+    logic.registrar_pedido_da_clinica(" 0b9c6f2e-1d3a-4f5b-9c8d-7e6f5a4b3c2d ", "eliminacao")
+
+    assert registrados == [("p1", "eliminacao")]
+
+
+@pytest.mark.parametrize("codigo", ["", "ana souza", "111.444.777-35"])
+def test_pedido_com_codigo_invalido_nao_chega_ao_banco(monkeypatch, codigo):
+    def _nao_deveria_ser_chamado(*args):
+        raise AssertionError("consultou o banco com código inválido")
+
+    monkeypatch.setattr(logic.repositories, "paciente_do_agendamento", _nao_deveria_ser_chamado)
+
+    with pytest.raises(logic.ErroPedido):
+        logic.registrar_pedido_da_clinica(codigo, "eliminacao")
+
+
+def test_agendamento_inexistente_e_avisado(monkeypatch):
+    monkeypatch.setattr(logic.repositories, "paciente_do_agendamento", lambda codigo: None)
+
+    with pytest.raises(logic.ErroPedido, match="Nenhum agendamento"):
+        logic.registrar_pedido_da_clinica("0b9c6f2e-1d3a-4f5b-9c8d-7e6f5a4b3c2d", "eliminacao")
+
+
+def test_encaminhar_ao_treino_manda_so_o_pseudonimo(monkeypatch):
+    monkeypatch.setenv(logic.pseudonimo.VARIAVEL_CHAVE, CHAVE_DE_TESTE)
+    enviados = []
+    monkeypatch.setattr(
+        logic.repositorio_treino, "registrar_pedido", lambda *args: enviados.append(args)
+    )
+
+    logic.encaminhar_pedido_ao_treino("111.444.777-35")
+
+    assert enviados == [(logic.pseudonimo.id_titular("11144477735"), "eliminacao", "clinica")]
+    assert "11144477735" not in str(enviados)
+
+
+def test_encaminhar_ao_treino_recusa_cpf_invalido():
+    with pytest.raises(logic.ErroPedido):
+        logic.encaminhar_pedido_ao_treino("123")
+
+
+def test_decisao_desconhecida_e_erro():
+    with pytest.raises(ValueError):
+        logic.decidir_pedido_da_clinica("p1", "apagar")
+
+
+# --- observabilidade das ações da UI (Passo 8.9) ----------------------------------
+
+
+def test_falha_de_banco_na_ui_deixa_evento_de_erro_e_acao_com_erro(
+    monkeypatch, eventos_capturados
+):
+    """Até o Passo 8.9 a falha virava só a mensagem na tela: sem log nem
+    evento, o alerta diário não a via."""
+
+    def _indisponivel(_dia):
+        raise _ErroDeSchema("08006", "falhou para 5511987654321")
+
+    monkeypatch.setattr(logic.repositories, "buscar_fila_do_dia", _indisponivel)
+
+    with pytest.raises(logic.ErroPersistencia):
+        logic.buscar_fila_do_dia(date(2026, 9, 28))
+
+    observabilidade.flush()
+    por_tipo = {e["tipo"]: e for e in eventos_capturados}
+    assert por_tipo["erro"]["detalhe"] == {"rota": "fila_do_dia", "excecao": "_ErroDeSchema"}
+    assert por_tipo["acao_ui"]["status"] == "erro"
+    assert por_tipo["acao_ui"]["detalhe"] == {
+        "acao": "carregar_fila",
+        "excecao": "ErroPersistencia",
+    }
+    assert "5511987654321" not in str(eventos_capturados)
+
+
+def test_login_recusado_e_recusa_sem_o_email(eventos_capturados):
+    erro = AuthApiError("Invalid login credentials", 400, "invalid_credentials")
+
+    with pytest.raises(logic.ErroCredenciais):
+        _autenticar_com_erro(erro)
+
+    observabilidade.flush()
+    (evento,) = eventos_capturados
+    assert evento["status"] == observabilidade.STATUS_RECUSADO
+    assert evento["detalhe"] == {"acao": "login", "excecao": "ErroCredenciais"}
+    assert "clinica.test" not in str(evento)
+
+
+def test_login_com_autenticacao_fora_do_ar_e_erro(eventos_capturados):
+    with pytest.raises(logic.ErroAutenticacaoIndisponivel):
+        _autenticar_com_erro(AuthRetryableError("timeout", 503))
+
+    observabilidade.flush()
+    (evento,) = eventos_capturados
+    assert evento["status"] == observabilidade.STATUS_ERRO
+    assert evento["detalhe"]["excecao"] == "ErroAutenticacaoIndisponivel"
+
+
+def test_cadastro_invalido_e_recusa_nao_erro(eventos_capturados):
+    with pytest.raises(logic.ErroValidacaoCadastro):
+        logic.cadastrar_paciente_e_agendamento(
+            cpf="123",
+            telefone="",
+            data_nascimento=None,
+            sexo="F",
+            especialidade="cardiologia",
+            distancia_km=1.0,
+            data_consulta=date(2026, 10, 20),
+            hora_consulta=None,
+            **SO_CIENCIA,
+        )
+
+    observabilidade.flush()
+    assert [(e["detalhe"]["acao"], e["status"]) for e in eventos_capturados] == [
+        ("cadastro", "recusado")
+    ]
+
+
+def test_aba_de_observabilidade_le_so_os_tipos_do_slo(monkeypatch):
+    """`acao_ui` sai a cada interação; sem o filtro, ocuparia o limite de
+    linhas da janela e truncaria o p95 das predições."""
+    chamadas = []
+
+    def _buscar(desde, limite, tipos=None):
+        chamadas.append(tipos)
+        return []
+
+    monkeypatch.setattr(logic.repositories, "buscar_eventos_app", _buscar)
+    monkeypatch.setattr(logic.repositories, "contar_predicoes_e_explicacoes", lambda d: (0, 0))
+    monkeypatch.setattr(logic.repositories, "ultimo_evento_app", lambda *a, **k: None)
+
+    logic.resumo_observabilidade(24)
+
+    assert chamadas == [observabilidade.TIPOS_DO_SLO]
+    assert observabilidade.TIPO_ACAO_UI not in observabilidade.TIPOS_DO_SLO

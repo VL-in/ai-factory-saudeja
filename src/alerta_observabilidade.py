@@ -38,7 +38,7 @@ import observabilidade  # noqa: E402
 
 # Mesmo teto da aba "Observabilidade" (src/ui/logic.py): acima dele, o p95
 # seria o do pedaço mais recente da janela, e `truncado` avisa isso.
-LIMITE_EVENTOS = 5000
+LIMITE_EVENTOS = observabilidade.LIMITE_LEITURA_SLO
 
 # Limites do alerta. Só entram compromissos do docs/SLO.md: um e-mail de falha
 # por algo que o SLO não promete ensina a ignorar o e-mail.
@@ -89,7 +89,9 @@ def medir(janela_horas: int = 24) -> Medicoes:
     import db.repositories as repositories
 
     desde = observabilidade.inicio_da_janela(janela_horas)
-    eventos = repositories.buscar_eventos_app(desde, limite=LIMITE_EVENTOS)
+    eventos = repositories.buscar_eventos_app(
+        desde, limite=LIMITE_EVENTOS, tipos=observabilidade.TIPOS_DO_SLO
+    )
     gravadas, com_explicacao = repositories.contar_predicoes_e_explicacoes(desde)
     return medicoes_dos_eventos(eventos, janela_horas, gravadas, com_explicacao)
 

@@ -76,7 +76,13 @@ jobs:
       # nem uma nem a outra (ver .dvc/config).
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING_ESCRITA }}
       DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
-      # Supabase: e' de onde saem os desfechos reais registrados pela clinica.
+      # Supabase: o export le' SO' a base de treino (schema `treino`, ADR-010),
+      # pelas funcoes `treino_*`, com os desfechos de quem consentiu. A chave e'
+      # a mesma do banco da clinica (decisao D1 do ADR-010): a fronteira e'
+      # garantida por codigo e teste (export_treino.py so' importa
+      # db.repositorio_treino), nao por credencial. Sem TREINO_CHAVE_PSEUDONIMO
+      # de proposito: o re-treino recebe os pseudonimos prontos e nunca precisa
+      # recalcula-los a partir de um CPF.
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       HEALTHCHECKS_RETRAIN_URL: ${{ secrets.HEALTHCHECKS_RETRAIN_URL }}
@@ -103,15 +109,25 @@ jobs:
         run: dvc remote add --local -f azure "$DVC_REMOTE_URL"
 
       - name: dvc pull (dataset semente + cache do ciclo anterior)
-        # Falha aqui quase sempre significa que o `dvc push` inicial nao foi
-        # feito: data/consultas-historicas.csv (a semente da Camila) nao esta'
-        # em git, so' no remote, e src/export_treino.py nao roda sem ela.
-        run: dvc pull
+        # Dois passos (ADR-009). A semente e' obrigatoria: falha aqui quase
+        # sempre significa que o `dvc push` inicial nao foi feito --
+        # data/consultas-historicas.csv (a semente da Camila) nao esta' em git,
+        # so' no remote, e src/export_treino.py nao roda sem ela. O resto e'
+        # cache do ciclo anterior, com --allow-missing: a purga LGPD
+        # (lgpd.yml) pode ter apagado do remote a versao vigente do dataset e
+        # os recortes dela, numa eliminacao ou revogacao, e o dataset e'
+        # sempre remontado a partir do banco no passo seguinte. Sem isso, a
+        # primeira eliminacao quebraria o re-treino do mes.
+        run: |
+          dvc pull data/consultas-historicas.csv
+          dvc pull --allow-missing
 
-      - name: Exportar desfechos reais registrados pela clinica
+      - name: Exportar desfechos reais da base de treino
         # Remonta data/consultas-treino.csv = semente intocada + producao real,
-        # sem telefone, com o historico_noshow gravado no cadastro (o que o
-        # modelo viu em producao) e sem as linhas fora do contrato de features
+        # so' das consultas de quem consentiu e com ate' 90 dias (base de
+        # treino, ADR-010), sem nome, telefone, CPF nem data de nascimento, com
+        # o historico_noshow gravado no cadastro (o que o modelo viu em
+        # producao) e sem as linhas fora do contrato de features
         # (src/contrato_features.py). Mede tambem a completude de rotulo -- consultas
         # passadas sem desfecho -- e a publica no summary.
         run: python src/export_treino.py

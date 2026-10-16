@@ -9,6 +9,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import observabilidade
+import telemetria
 
 _HORAS_DA_GRADE = (8, 9, 10, 11, 13, 14, 15, 16, 17)
 
@@ -33,6 +34,109 @@ def observabilidade_sem_destino_real():
     yield
     observabilidade.flush(timeout=2)
     observabilidade.definir_escritor(_descartar_evento)
+
+
+@pytest.fixture
+def eventos_capturados(monkeypatch):
+    """Substitui o destino de gravação por um espião em memória -- prova o que
+    é registrado sem precisar de Supabase de pé (mesma ideia do cliente de
+    mensageria espião de test_job_inferencia.py).
+
+    Liga a observabilidade explicitamente: o ci.yml exporta
+    `OBSERVABILIDADE_ATIVA=false` no workflow inteiro (CI não é tráfego de
+    produto), e sem isto o espião nunca recebe nada no runner -- os testes
+    passavam na máquina local e quebravam no primeiro CI real."""
+    monkeypatch.setenv("OBSERVABILIDADE_ATIVA", "true")
+    capturados = []
+
+    def _escritor(**evento):
+        capturados.append(evento)
+
+    # Drena o que outro teste possa ter deixado na fila antes de trocar o
+    # destino -- senão um evento alheio cairia no espião deste teste.
+    observabilidade.flush()
+    observabilidade.definir_escritor(_escritor)
+    yield capturados
+    observabilidade.definir_escritor(None)
+
+
+@pytest.fixture(autouse=True)
+def telemetria_sem_exportar(monkeypatch):
+    """Nenhum teste exporta telemetria para o Grafana Cloud (Passo 8.9).
+
+    Mesmo motivo da fixture de cima: `config_projeto` carrega o `.env` local
+    no import, e o `.env` de quem desenvolve pode ter o endpoint OTLP real.
+    Sem endpoint, `configurar_telemetria` é no-op; quem precisa observar o que
+    sairia (tests/test_telemetria.py) define o endpoint e troca os exportadores
+    por exportadores em memória. O teardown devolve o módulo ao estado inicial.
+    """
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_HEADERS", raising=False)
+    telemetria._reiniciar()
+    yield
+    telemetria._reiniciar()
+
+
+@pytest.fixture(autouse=True)
+def canario_sem_desligamento_do_env(monkeypatch):
+    """`CANARIO_DESLIGADO` do `.env` local não vaza para a suíte. Com ela
+    definida, os testes do canário que esperam o braço ligado falhavam na
+    máquina de quem desenvolve e passavam no CI, que não tem `.env`. Quem testa
+    o desligamento define a variável no próprio teste."""
+    monkeypatch.delenv("CANARIO_DESLIGADO", raising=False)
+
+
+class TelemetriaEmMemoria:
+    """O que teria saído por OTLP, lido em memória."""
+
+    def __init__(self, spans, leitor, logs):
+        self.spans_exportados = spans
+        self.leitor = leitor
+        self.logs = logs
+
+    def spans(self) -> list:
+        telemetria.forcar_envio(timeout=5)
+        return list(self.spans_exportados.get_finished_spans())
+
+    def pontos(self, nome: str) -> list[tuple[dict, float]]:
+        """(atributos, valor) de cada série da métrica `nome`. Valor é a soma
+        do contador ou a contagem de medições do histograma."""
+        dados = self.leitor.get_metrics_data()
+        pontos = []
+        for recurso in dados.resource_metrics if dados else []:
+            for escopo in recurso.scope_metrics:
+                for metrica in escopo.metrics:
+                    if metrica.name != nome:
+                        continue
+                    for ponto in metrica.data.data_points:
+                        valor = getattr(ponto, "value", None)
+                        pontos.append(
+                            (dict(ponto.attributes), valor if valor is not None else ponto.count)
+                        )
+        return pontos
+
+
+@pytest.fixture
+def telemetria_em_memoria(monkeypatch):
+    """Telemetria LIGADA, com exportadores em memória no lugar dos OTLP: nada
+    sai do processo, e o teste lê spans, métricas e logs que teriam saído."""
+    from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
+    monkeypatch.setenv("OBSERVABILIDADE_ATIVA", "true")
+    em_memoria = TelemetriaEmMemoria(
+        InMemorySpanExporter(), InMemoryMetricReader(), InMemoryLogRecordExporter()
+    )
+    monkeypatch.setattr(
+        telemetria,
+        "_criar_exportadores",
+        lambda: (em_memoria.spans_exportados, em_memoria.leitor, em_memoria.logs),
+    )
+    assert telemetria.configurar_telemetria(telemetria.SERVICO_UI)
+    return em_memoria
 
 
 @pytest.fixture
