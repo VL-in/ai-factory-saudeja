@@ -196,6 +196,82 @@ def test_excecoes_de_pii_apontam_para_migrations_que_existem():
         )
 
 
+def _migrations_sem_comentario() -> dict[str, str]:
+    return {
+        migration.name: "\n".join(
+            linha.split("--", 1)[0]
+            for linha in migration.read_text(encoding="utf-8").lower().splitlines()
+        )
+        for migration in sorted((REPO_ROOT / "supabase" / "migrations").glob("*.sql"))
+    }
+
+
+MARCADOR_DA_ALLOWLIST = "-- allowlist: observabilidade.CHAVES_DETALHE_PERMITIDAS"
+
+
+def test_view_de_lgpd_usa_a_mesma_allowlist_de_eventos_app():
+    """A regra P1 "PII em eventos_app" (Passo 8.9) lê
+    `observabilidade.eventos_fora_da_allowlist_por_dia`, que repete em SQL a
+    allowlist de `src/observabilidade.py`. Chave nova no Python sem a view
+    nova faria cada evento legítimo disparar o P1; chave esquecida no Python e
+    deixada na view esconderia o bypass. Vale a migration mais recente que
+    (re)define a view."""
+    import observabilidade
+
+    com_marcador = [
+        m
+        for m in sorted((REPO_ROOT / "supabase" / "migrations").glob("*.sql"))
+        if MARCADOR_DA_ALLOWLIST in m.read_text(encoding="utf-8")
+    ]
+    assert com_marcador, f"nenhuma migration traz o marcador {MARCADOR_DA_ALLOWLIST!r}"
+    texto = com_marcador[-1].read_text(encoding="utf-8")
+    depois_do_marcador = texto[texto.index(MARCADOR_DA_ALLOWLIST) :]
+    lista = re.search(r"array\[(.*?)\]::text\[\]", depois_do_marcador, re.DOTALL)
+    assert lista, f"{com_marcador[-1].name}: array da allowlist não encontrado após o marcador"
+    chaves = set(re.findall(r"'([^']+)'", lista.group(1)))
+    assert chaves == set(observabilidade.CHAVES_DETALHE_PERMITIDAS), (
+        f"{com_marcador[-1].name} diverge de CHAVES_DETALHE_PERMITIDAS: "
+        f"só na view {sorted(chaves - observabilidade.CHAVES_DETALHE_PERMITIDAS)}, "
+        f"só no código {sorted(observabilidade.CHAVES_DETALHE_PERMITIDAS - chaves)}"
+    )
+
+
+def test_grafana_leitura_so_recebe_select_no_schema_observabilidade_e_sem_senha_no_git():
+    """O papel do Grafana só lê as views de agregados (Passo 8.9, P4). Toda
+    concessão a ele nas migrations é `usage` no schema `observabilidade` ou
+    `select` em views dele. E o login com senha é passo manual da autora em
+    cada projeto: senha de papel nunca entra no git."""
+    concessoes_permitidas = (
+        re.compile(r"^grant usage on schema observabilidade to grafana_leitura$"),
+        re.compile(r"^grant select on all tables in schema observabilidade to grafana_leitura$"),
+        re.compile(r"^grant select on observabilidade\.[a-z_]+ to grafana_leitura$"),
+    )
+    for nome, texto in _migrations_sem_comentario().items():
+        for comando in (" ".join(c.split()) for c in texto.split(";")):
+            if "grafana_leitura" not in comando:
+                continue
+            assert "password" not in comando and " login" not in comando, (
+                f"{nome}: login/senha do grafana_leitura é passo manual, fora do git"
+            )
+            if comando.startswith("grant"):
+                assert any(p.match(comando) for p in concessoes_permitidas), (
+                    f"{nome}: concessão fora do schema observabilidade: {comando!r}"
+                )
+
+
+def test_views_de_observabilidade_usam_o_fuso_da_clinica(monkeypatch):
+    """O dia das views é o dia civil da clínica, o mesmo da fila do dia."""
+    import config_projeto
+
+    monkeypatch.delenv("TIMEZONE_CLINICA", raising=False)
+    fuso = str(config_projeto.fuso_da_clinica()).lower()
+    for nome, texto in _migrations_sem_comentario().items():
+        if "create view observabilidade." not in texto:
+            continue
+        fusos = set(re.findall(r"at time zone '([^']+)'", texto))
+        assert fusos == {fuso}, f"{nome} usa fuso(s) {fusos}, a clínica usa {fuso}"
+
+
 def test_export_treino_sem_coluna_proibida_de_pii():
     """`src/export_treino.py` monta um CSV a partir de dados reais
     de produção -- mesmo critério de PII do schema (`test_migrations_sql_...`),
