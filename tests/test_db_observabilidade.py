@@ -454,6 +454,13 @@ def test_gatilho_do_job_d2_agendado_fechado_e_inerte_sem_o_token():
     _sql("set statement_timeout = '2s'; select agendador.disparar_job_d2()")
     # A chamada é síncrona (extensão `http`) e não usa o pg_net, que guardaria o
     # pedido, com o token no cabeçalho, numa tabela legível pelo Grafana.
-    corpo = _valor("select prosrc from pg_proc where proname = 'disparar_job_d2'") or ""
+    # Numa linha só: `_sql` separa a saída do psql por linha, e o corpo da
+    # função tem várias.
+    corpo = (
+        _valor(
+            "select replace(prosrc, E'\\n', ' ') from pg_proc where proname = 'disparar_job_d2'"
+        )
+        or ""
+    )
     assert "extensions.http(" in corpo and "net." not in corpo
 
