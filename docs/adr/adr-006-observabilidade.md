@@ -93,6 +93,19 @@ Consequências aceitas:
 - **`/_stcore/health` não exercita o modelo.** Ele diz que o servidor do Streamlit está de pé, não que `model.pkl` carregou. O modelo é conferido no smoke de cada deploy e todo dia pelo job D-2, que falha na pré-checagem se o modelo não for o campeão; a sonda cobre o que esses dois não cobrem, que é a interface cair entre um deploy e outro.
 - `/health` da API continua existindo para o `docker compose` e para o smoke local do CI. Se a API ganhar endereço público (ponto em aberto no [architecture.md](../architecture.md), §6), ela ganha monitor próprio.
 
+## Emenda (2026-10-17) — a sonda é o Synthetic Monitoring do Grafana Cloud
+
+A emenda anterior descreveu os monitores do UptimeRobot como configurados, mas a conta nunca foi criada. **De 2026-10-11 a 2026-10-17 não houve sonda externa**: o uptime do [SLO §1.1](../SLO.md#11-disponibilidade-da-interface) não foi medido nesse período, e o Space pode ter hibernado.
+
+A sonda passa a ser o Synthetic Monitoring do Grafana Cloud, que o projeto já usa para logs, métricas e traces. Isso reverte dois descartes deste ADR, o Grafana Cloud e o OpenTelemetry, e o registro completo dessa mudança fica para um ADR próprio. Configuração:
+- **Um check HTTP por Space**, em `/_stcore/health`, a cada 5 minutos, com timeout de 10 s.
+- **Só a sonda pública de São Paulo**, a região dos usuários.
+- **Validação mais estrita que a da emenda anterior: status 2xx e corpo `ok`.** Na URL pública, qualquer caminho desconhecido devolve 200 com a página do Streamlit; o corpo distingue o servidor pronto de uma página servida no lugar dele.
+- **Alerta só no check de produção**, com 2 falhas em 10 minutos (duas sondas seguidas): uma falha isolada, como a troca de container num deploy, não alerta.
+- **O de dev guarda histórico.**
+
+As consequências da emenda anterior continuam valendo: a sonda impede a hibernação e não exercita o modelo. O UptimeRobot sai do desenho sem ter entrado.
+
 ## Alternativas consideradas
 
 - **Langfuse** (proposto pelo ADR-001 como observabilidade geral): descartado para o núcleo. Seu modelo de dados é trace → span → **generation**, construído em torno de prompt, completion, tokens e custo por chamada de LLM. O núcleo do SaúdeJá é um LightGBM tabular: não há prompt nem token, e a instrumentação produziria spans vazios. Soma-se a isso que o Langfuse Cloud fica em EU/US (transferência internacional de dado de saúde) e que o self-host exige Postgres + ClickHouse + worker, fora do orçamento e do que cabe num Space. **Permanece reservado para futuro implementação de LLM**, onde é a ferramenta certa para o problema certo — conforme o ADR-004 já previa.

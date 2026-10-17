@@ -8,6 +8,11 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado] (Vanessa + Claude) - 2026-10-17
+
+### Corrigido
+- **A disponibilidade da interface passa a ser medida de verdade, pelo Synthetic Monitoring do Grafana Cloud.** A v2.2.0 anunciou monitores do UptimeRobot que nunca foram criados: de 2026-10-11 a 2026-10-17 não houve sonda externa, o uptime do [SLO §1.1](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/SLO.md#11-disponibilidade-da-interface) não foi medido e o Space pode ter hibernado. Agora há um check por Space em `/_stcore/health`, a cada 5 minutos, a partir de uma sonda em São Paulo. O check espera status 2xx e também o corpo `ok`, porque a URL pública devolve 200 com a página do Streamlit para qualquer caminho. Só produção alerta: crítico, por e-mail, com 2 falhas em 10 minutos, para que uma falha isolada durante um deploy não acione ninguém ([ADR-006](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-006-observabilidade.md), emenda de 2026-10-17).
+
 ## [v2.3.0] (Vanessa + Claude) - 2026-10-16
 
 ### Adicionado
