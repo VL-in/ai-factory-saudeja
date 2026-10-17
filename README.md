@@ -1,6 +1,6 @@
 # SaudeJa — Classificador de no-show em agendamentos médicos
 
-> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.1.0](docs/logs/CHANGELOG.md). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
+> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.3.0](docs/logs/CHANGELOG.md). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
 
 Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia lembrete por SMS só para eles, dois dias antes do atendimento.
 
@@ -57,7 +57,7 @@ flowchart LR
 | Job D-2 | [`src/jobs/inferencia_diaria.py`](src/jobs/inferencia_diaria.py) | Predição em lote e disparo de lembretes. Roda no GitHub Actions |
 | Mensageria | [`src/messaging/`](src/messaging/) | `StubMessagingClient` (padrão, sem rede) ou `InfobipClient` (SMS real) |
 | Banco | [`src/db/`](src/db/), [`supabase/migrations/`](supabase/migrations/) | Supabase na região `sa-east-1`. RLS habilitado; só o backend acessa, com a chave secreta |
-| Observabilidade | [`src/observabilidade.py`](src/observabilidade.py), [`src/alerta_observabilidade.py`](src/alerta_observabilidade.py) | Latência, erros e execuções do job na tabela `eventos_app`, exibidos na aba "Time técnico → Observabilidade" e conferidos uma vez por dia pelo alerta |
+| Observabilidade | [`src/observabilidade.py`](src/observabilidade.py), [`src/alerta_observabilidade.py`](src/alerta_observabilidade.py), [`src/telemetria.py`](src/telemetria.py) | Latência, erros e execuções do job na tabela `eventos_app`, exibidos na aba "Time técnico → Observabilidade" e conferidos uma vez por dia pelo alerta. Logs, métricas e traces vão também para o Grafana Cloud por OpenTelemetry, sem dado pessoal |
 | Pipeline de treino | [`dvc.yaml`](dvc.yaml), [`src/`](src/) | DVC + MLflow, cada stage em container Docker |
 
 A interface chama o modelo **em processo**, sem passar pela API (`PREDICT_BACKEND=processo`, [ADR-005](docs/adr/adr-005-integracoes-implicitas.md)). Use `PREDICT_BACKEND=api` para exercitar a API a partir da interface.
@@ -377,14 +377,18 @@ Toda falha de workflow manda e-mail pelo GitHub. Cada workflow agendado também 
 | `retrain.yml` | `HEALTHCHECKS_RETRAIN_URL` | Gate bloqueou (1), sem dado novo (2), pipeline falhou (3) ou canário em observação (4) |
 | `alerta_observabilidade.yml` | `HEALTHCHECKS_ALERTA_URL` | Limite violado nas últimas 24h (erros, cobertura de explicação, latência) ou banco ilegível |
 
-Os números do dia a dia ficam na aba "Time técnico → Observabilidade" da visão Funcionário. A disponibilidade do Space é medida de fora, pelo UptimeRobot:
+Os números do dia a dia ficam na aba "Time técnico → Observabilidade" da visão Funcionário.
 
-| Monitor | URL | Intervalo | Alerta |
+A interface, a API e o job D-2 também enviam logs, métricas e traces ao Grafana Cloud por OpenTelemetry. O envio fica desligado sem `OTEL_EXPORTER_OTLP_ENDPOINT` e com `OBSERVABILIDADE_ATIVA=false`. Antes de sair do processo, o que é enviado passa pelo mesmo filtro de dados pessoais do log, e os traces perdem query string, IP e mensagem de erro. O Grafana guarda esses dados por 14 dias. Para os números de longo prazo, ele lê o Supabase pelo papel `grafana_leitura`, que só enxerga as views de totais do schema `observabilidade`: disparos e taxa de disparo, predições e cobertura da explicação, latência p50/p95/p99, envios cobrados e segmentos de SMS por mês. O preço do SMS e o orçamento ficam no bloco `custo` do [`params.yaml`](params.yaml). Dos alertas do Grafana, só o de disponibilidade está configurado (abaixo); os demais valem pelos canais desta seção.
+
+A disponibilidade do Space é medida de fora, pelo Synthetic Monitoring do Grafana Cloud, com uma sonda em São Paulo:
+
+| Check | URL | Intervalo | Alerta |
 |---|---|---|---|
-| `SaudeJa prod` | `https://vl-in-saudeja-prod.hf.space/_stcore/health` | 5 min | e-mail da mantenedora; é a medida do [SLO §1.1](docs/SLO.md#11-disponibilidade-da-interface) |
+| `SaudeJa prod` | `https://vl-in-saudeja-prod.hf.space/_stcore/health` | 5 min | crítico (P1) com 2 falhas em 10 min, por e-mail à mantenedora; é a medida do [SLO §1.1](docs/SLO.md#11-disponibilidade-da-interface) |
 | `SaudeJa dev` | `https://vl-in-saudeja-dev.hf.space/_stcore/health` | 5 min | nenhum; só histórico, sem SLO |
 
-Os dois são monitores HTTP(s) que esperam status 2xx. A sonda bate em `/_stcore/health`, e não em `/health`: o Space publica só a porta do Streamlit, e nela qualquer caminho desconhecido devolve 200 com o HTML da página, mesmo com a interface quebrada. `/_stcore/health` é respondido pelo servidor do Streamlit e é o mesmo critério do smoke do deploy (`scripts/smoke_deploy.py space`). Com uma batida a cada 5 minutos o Space não fica ocioso tempo bastante para hibernar.
+Os dois são checks HTTP que esperam status 2xx **e** o corpo `ok`. Exigir 2 falhas seguidas evita alerta por uma falha isolada, como a troca de container num deploy. A sonda bate em `/_stcore/health`, e não em `/health`: o Space publica só a porta do Streamlit, e nela qualquer caminho desconhecido devolve 200 com o HTML da página, mesmo com a interface quebrada. `/_stcore/health` é respondido pelo servidor do Streamlit e é o mesmo critério do smoke do deploy (`scripts/smoke_deploy.py space`). Com uma batida a cada 5 minutos o Space não fica ocioso tempo bastante para hibernar.
 
 ### Rollback
 
@@ -464,21 +468,16 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
 - [x] Etapa 3: arquitetura C4 + ADR-002 + repositório
 - [x] Etapa 4: produto deployável — inferência, SHAP, API, interface, banco, job D-2, mensageria e blindagem LGPD
 - [x] Etapa 5: CI/CD, re-treino mensal com gate, canário do modelo e observabilidade com alertas
-- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 e v2.1.0)
-- [ ] Etapa 7: operação e ensaios
-  - [x] Ensaio de rollback de código em dev ([RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md))
-  - [ ] Guarda no `deploy.yml` que recusa um `HF_SPACE_ID` de outro environment ([PM-001](docs/post-mortem/PM-001.md))
-  - [ ] Conferência de que o modelo do `dvc.lock` está no remote antes do push ([PM-001](docs/post-mortem/PM-001.md))
-  - [ ] RB-002: rollback de código com migration aditiva
-  - [ ] Ensaio do rollback do modelo (canário)
+- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 a v2.3.0)
+- [x] Etapa 7: operação e ensaios
+  - [x] Ensaio de rollback de código
 - [ ] Adequação à LGPD ([pendências](#pendências))
   - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
   - [x] Procedimento de revisão da decisão automatizada
   - [x] Agendamento sem consentimento, base de treino separada, eliminação e purga do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md))
-  - [ ] Mecanismo de transferência internacional e DPAs
+  - [x] Mecanismo de transferência internacional e DPAs
   - [ ] Publicação da política de privacidade
-- [ ] Etapa 8: validação final para o pitch — números do SLA/SLO medidos em produção e decisão sobre o gap de recall
-- [ ] Etapa 9 (opcional): assistente com LLM para a equipe da clínica
+
 
 ## Autor
 
