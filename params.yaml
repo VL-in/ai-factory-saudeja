@@ -99,3 +99,25 @@ canario:
     taxa_disparo: 0.05      # custo: lembrete pago (BRIEFING: cortar 70%)
     falta_nao_avisada: 0.05 # erro que custa R$ 180: baixo risco que faltou
     quarentena: 0.02        # fila que o modelo nao conseguiu predizer
+
+# Custo da mensageria (observabilidade com Grafana). Fonte unica dos precos: o
+# job D-2 soma o custo de cada envio a `saudeja_sms_custo_usd_total`, e o
+# provisionamento do Grafana copia estes numeros para o painel e para o alerta
+# de custo, que multiplicam os segmentos da view
+# `observabilidade.envios_cobrados_por_mes`. Preco nao e' identificador de
+# infraestrutura e pode ficar no git.
+#
+# - sms_unitario_usd: preco de UM SEGMENTO de SMS no contrato da Infobip, em
+#   dolares, a moeda do contrato e do orcamento (sem cambio no alerta de custo).
+#   A Infobip cobra por segmento, e um lembrete com acento passa de 70
+#   caracteres e vira dois (messaging.client.segmentos_sms). Vazio = o lembrete
+#   sai normalmente, o custo nao e' medido e o resumo do job avisa.
+# - cambio_usd_brl: reais por dolar, so' para exibir o custo em reais no painel.
+#   Revisado no inicio de cada mes (5.07 em 2026-10-16).
+# - orcamento_mensal_usd: teto do BRIEFING. Custo projetado do mes acima de 80%
+#   dele e' alerta P2. A infraestrutura (Supabase, HF Space, Grafana) esta' em
+#   planos gratuitos: custo fixo zero, o que se monitora e' a cota.
+custo:
+  sms_unitario_usd: 0.0291
+  cambio_usd_brl: 5.07
+  orcamento_mensal_usd: 100

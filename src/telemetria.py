@@ -103,6 +103,12 @@ METRICAS = {
         "Agendamentos do job D-2 por resultado e braço",
     ),
     "saudeja_sms_total": (CONTADOR, "Lembretes por status_envio"),
+    # Operacional (14 dias). O mês fechado sai do Supabase, que guarda os
+    # segmentos de cada envio por 90 dias.
+    "saudeja_sms_custo_usd_total": (
+        CONTADOR,
+        "Custo dos lembretes cobrados (segmentos x preço), em dólares, por status_envio",
+    ),
 }
 
 # Atributos permitidos em métrica e em span: cardinalidade FECHADA. O plano
@@ -277,9 +283,9 @@ def forcar_envio(timeout: float = 5.0) -> bool:
     return tudo_enviado
 
 
-def contar(nome: str, atributos: dict[str, Any] | None = None, valor: int = 1) -> None:
-    """Soma `valor` ao contador `nome`. No-op com a telemetria desligada;
-    nunca levanta."""
+def contar(nome: str, atributos: dict[str, Any] | None = None, valor: float = 1) -> None:
+    """Soma `valor` ao contador `nome` (fracionário no custo em dólares).
+    No-op com a telemetria desligada; nunca levanta."""
     _registrar(nome, CONTADOR, valor, atributos)
 
 
