@@ -8,6 +8,35 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado]
+
+### Adicionado
+- **Alertas do Grafana por criticidade, mantidos como código** (`infra/grafana/alertas/`, aplicados por `scripts/grafana_provisionar.py`). São 17 regras, cada uma com os rótulos `severidade` (P1, P2 ou P3), `area` (operação, modelo, custo ou LGPD) e `ambiente`. Só as de produção notificam.
+  - **Críticos (P1):**
+    - o job D-2 não terminou com sucesso até as 13h;
+    - a fila inteira foi para a quarentena;
+    - agendamentos que já existiam ficaram sem predição e sem lembrete numa execução bem-sucedida;
+    - dado pessoal num log exportado ao Loki, com os mesmos padrões do filtro de redação traduzidos para o regex do Loki;
+    - chave fora da lista permitida em `eventos_app`.
+  - **Altos (P2):**
+    - erro de banco na interface;
+    - erro de predição;
+    - falha de envio de SMS;
+    - predição sem explicação;
+    - disparos do dia fora de ±40% da média com a taxa de disparo mudando junto;
+    - custo de SMS projetado acima de 80% do orçamento.
+  - **Médios (P3):** disparos fora da faixa com a taxa estável (mudança na agenda), quarentena parcial e dado fora do domínio do treino, job acima de 10 min, p95 da predição acima de 2 s, leitura do SLO perto do teto de 5000 eventos e banco acima de 80% da cota gratuita.
+  - Os limites ficam no bloco novo `observabilidade` do `params.yaml` e no bloco `custo`. O provisionamento falha se algum estiver vazio, em vez de criar uma regra que nunca dispara.
+- **Rotas de notificação por criticidade** (`infra/grafana/notificacoes.yaml`). P1 vai ao contact point de plantão e repete a cada hora até resolver. P2 vai por e-mail e repete a cada 24 horas; com `area=modelo`, vai também à responsável pelo modelo. P3 sai num resumo, só às segundas, das 9h às 10h. Os contact points são criados à mão no Grafana, porque e-mails e Telegram não entram no repositório.
+- **Seis painéis do Grafana** (`infra/grafana/dashboards/`): visão geral do SLO, interface, inferência, job D-2, mensageria e custo. Os números de curto prazo vêm do Mimir e do Loki (14 dias). Os de longo prazo vêm das views do schema `observabilidade`.
+- **Workflow `grafana.yml`.** Aplica alertas, rotas e painéis no fim de cada deploy em `main`, e também por disparo manual.
+  - Em dev, o disparo manual só sai do branch `dev`. Ele cria cópias de verificação numa pasta própria, que notificam apenas o contact point de dev e são apagadas com `acao=remover`.
+  - `acao=conferir` lista, sem alterar nada, quais métricas e rótulos chegaram ao stack.
+- **View `observabilidade.agendamentos_sem_processamento_por_dia`** (migration aditiva `20261017000000_observabilidade_alertas.sql`). Por dia de execução do job, conta os agendamentos que ele deveria ter processado e não processou. A view só traz a contagem, sem nenhuma linha por agendamento.
+- **O Supabase de produção pode disparar o job D-2 às 08h17** (migration aditiva `20261017010000_gatilho_job_d2.sql`, com `pg_cron` e `pg_net`). O agendamento do GitHub, num repositório fork, chegou com 3 a 9 horas de atraso entre 06/10 e 17/10, e o lembrete saía à tarde.
+  - O disparo só acontece depois de o token do GitHub ser cadastrado no Vault do Supabase de produção. Sem ele, como em dev e no CI, nada muda.
+  - O agendamento do GitHub continua como reserva. Uma segunda execução no mesmo dia não envia SMS em dobro.
+
 ## [v2.3.1] (Vanessa + Claude) - 2026-10-17
 
 ### Corrigido

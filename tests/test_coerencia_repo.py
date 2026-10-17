@@ -699,6 +699,66 @@ def test_job_d2_em_dev_e_so_por_dispatch_do_branch_dev_com_sms_em_stub():
     assert job["steps"].index(guarda) == 0  # antes de qualquer acesso a banco
 
 
+MIGRATION_DO_GATILHO = "20261017010000_gatilho_job_d2.sql"
+
+
+def test_gatilho_do_pg_cron_dispara_o_job_d2_de_producao_no_horario_do_cron():
+    """O pg_cron do Supabase (problema 14 do plano: o cron do GitHub num fork
+    chegava horas atrasado) dispara o MESMO caminho do cron: o job_d2.yml em
+    `main`, environment `production`, no mesmo horário. Se um dos dois mudar
+    sozinho, o alerta P1 da fila passa a medir outra coisa."""
+    texto = (REPO_ROOT / "supabase" / "migrations" / MIGRATION_DO_GATILHO).read_text(
+        encoding="utf-8"
+    )
+    agendado = re.search(r"cron\.schedule\('job-d2', '([^']+)'", texto)
+    assert agendado, "a migration não agenda o job-d2"
+    workflow = yaml.safe_load((WORKFLOWS / "job_d2.yml").read_text(encoding="utf-8"))
+    assert [c["cron"] for c in workflow[True]["schedule"]] == [agendado.group(1)]
+    assert "/actions/workflows/job_d2.yml/dispatches" in texto
+    assert "'ref', 'main'" in texto and "'ambiente', 'production'" in texto
+
+
+def test_token_do_gatilho_so_existe_no_vault_e_a_funcao_nao_e_exposta():
+    """O token que dispara workflows fica no Vault do Supabase de produção,
+    criado à mão. Sem ele (dev, local, CI) a função não faz nada -- o disparo
+    diário existe só em produção sem `if` de ambiente no código."""
+    texto = (REPO_ROOT / "supabase" / "migrations" / MIGRATION_DO_GATILHO).read_text(
+        encoding="utf-8"
+    )
+    sem_comentario = _migrations_sem_comentario()[MIGRATION_DO_GATILHO]
+    assert not re.search(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w+", texto)
+    assert "vault.decrypted_secrets" in sem_comentario
+    assert "if token is null or repositorio is null then\n        return;" in sem_comentario
+    assert "security definer" not in sem_comentario
+    assert (
+        "revoke all on function agendador.disparar_job_d2() "
+        "from public, anon, authenticated, service_role" in sem_comentario
+    )
+
+
+def test_grafana_dev_so_do_branch_dev_e_producao_so_de_main():
+    """A árvore de notificação de produção só recebe o que vem de `main`; a
+    verificação de dev só sai do branch dev (P7, regra da autora de 2026-10-13).
+    No deploy, o provisionamento vem depois do Space no ar e só em `main`."""
+    workflow = yaml.safe_load((WORKFLOWS / "grafana.yml").read_text(encoding="utf-8"))
+    job = workflow["jobs"]["grafana"]
+    assert workflow[True]["workflow_dispatch"]["inputs"]["ambiente"]["default"] == "production"
+    assert job["environment"] == {
+        "name": "${{ inputs.ambiente || 'production' }}",
+        "deployment": False,
+    }
+    guarda = job["steps"][0]["run"]
+    assert '"$GITHUB_REF" != "refs/heads/dev"' in guarda
+    assert '"$GITHUB_REF" != "refs/heads/main"' in guarda
+    assert guarda.count("exit 1") == 2
+
+    deploy = yaml.safe_load((WORKFLOWS / "deploy.yml").read_text(encoding="utf-8"))
+    chamada = deploy["jobs"]["grafana"]
+    assert chamada["uses"] == "./.github/workflows/grafana.yml"
+    assert chamada["needs"] == "deploy"
+    assert chamada["if"] == "github.ref_name == 'main'"
+
+
 def test_canario_e_encerrado_sempre_por_pr_nunca_por_push_em_main():
     texto = (WORKFLOWS / "canario.yml").read_text(encoding="utf-8")
     assert "gh pr create" in texto

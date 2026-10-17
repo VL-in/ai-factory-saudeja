@@ -154,6 +154,36 @@ REGRAS_DE_PII = (
     ("cpf-telefone-ip", _PADRAO_SEQUENCIA_NUMERICA, _redigir_sequencia_numerica),
 )
 
+# As mesmas três famílias, traduzidas para RE2 (o regex do Loki), para a regra
+# P1 "PII em log" do Grafana (infra/grafana/alertas/lgpd.yaml). O RE2 não tem
+# lookbehind nem lookahead, e a contagem de dígitos que
+# `_redigir_sequencia_numerica` faz em Python vira repetição no próprio
+# padrão. A regra procura o que o filtro deveria ter apagado, então cada
+# padrão casa o dado cru e NÃO casa a saída de `redigir` -- a chave seguida de
+# `<REDIGIDO>` não é achado. tests/test_logging_lgpd.py confere as duas coisas
+# com o mesmo corpus de PII do filtro, e também que nenhum texto que o filtro
+# deixa passar intacto dispara a regra.
+REGRAS_DE_PII_RE2 = (
+    (
+        "chave-de-pii",
+        rf"""(?i:["']?\b(?:\w+_)?(?:{_ALTERNATIVAS_DE_CHAVE})(?:_\w+)?["']?\s*[:=]\s*"""
+        r"""[^\s<,;)}\]])""",
+    ),
+    ("email", r"(?:^|[^\w.])[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
+    (
+        "cpf-telefone-ip",
+        rf"(?:^|[^\w-])\+?\d(?:[\s().-]{{0,4}}\d)"
+        rf"{{{_DIGITOS_MINIMOS - 1},{_DIGITOS_MAXIMOS - 1}}}(?:[^\w-]|$)",
+    ),
+)
+
+
+def regex_de_pii_re2() -> str:
+    """As três regras de `REGRAS_DE_PII_RE2` numa alternância só, pronta para
+    o filtro de linha do LogQL (`|~`). Sem crase: o LogQL a recebe entre
+    crases."""
+    return "|".join(f"(?:{padrao})" for _nome, padrao in REGRAS_DE_PII_RE2)
+
 
 def redigir(texto: str) -> str:
     """Aplica as três famílias de regra a um texto já renderizado.

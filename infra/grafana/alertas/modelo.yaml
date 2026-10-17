@@ -1,0 +1,278 @@
+# Alertas do modelo: a decisao de quem recebe lembrete mudou de comportamento?
+# Formato e marcadores ${...}: ver o cabecalho de operacao.yaml.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: modelo-banco
+    folder: "${PASTA}"
+    interval: 5m
+    rules:
+      # Regra dos +-40% (params.yaml, observabilidade.disparos). Os disparos de
+      # hoje contra a media dos dias com fila na janela anterior. Fora da faixa,
+      # a taxa de disparo (disparos / agendamentos processados) decide:
+      #   - moveu na mesma direcao e tambem alem da faixa -> nivel 2 (P2): o
+      #     modelo mudou de comportamento (drift, threshold, canario, Infobip);
+      #   - senao -> nivel 3 (P3): a agenda encheu ou esvaziou.
+      # Hoje so' tem linha depois que o job rodou; antes disso, e com menos de
+      # `janela_dias` de historico ou media abaixo do piso, o nivel e' 0.
+      # A mesma consulta (ancora YAML) alimenta as duas regras.
+      - uid: saudeja-disparos-modelo
+        title: Disparos fora da faixa com a taxa de disparo junto
+        condition: C
+        data:
+          - &disparos
+            refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: |
+                with hoje as (
+                    select (now() at time zone 'America/Sao_Paulo')::date as dia
+                ),
+                avaliado as (
+                    select d.disparos, d.taxa_de_disparo
+                    from observabilidade.disparos_por_dia d, hoje
+                    where d.dia = hoje.dia
+                ),
+                referencia as (
+                    select avg(d.disparos) as media, avg(d.taxa_de_disparo) as taxa_media
+                    from observabilidade.disparos_por_dia d, hoje
+                    where d.dia between hoje.dia - ${DISPAROS_JANELA_DIAS} and hoje.dia - 1
+                ),
+                historico as (
+                    select min(dia) as primeiro_dia from observabilidade.disparos_por_dia
+                )
+                select case
+                    when h.primeiro_dia is null
+                      or h.primeiro_dia > hoje.dia - ${DISPAROS_JANELA_DIAS} then 0
+                    when r.media is null or r.media < ${DISPAROS_PISO} then 0
+                    when a.disparos is null then 0
+                    when abs(a.disparos / r.media - 1) < ${DISPAROS_VARIACAO} then 0
+                    when r.taxa_media > 0
+                     and sign(a.disparos - r.media) = sign(a.taxa_de_disparo - r.taxa_media)
+                     and abs(a.taxa_de_disparo / r.taxa_media - 1) >= ${DISPAROS_VARIACAO}
+                        then 2
+                    else 3
+                end as nivel
+                from hoje
+                cross join historico h
+                cross join referencia r
+                left join avaliado a on true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: math
+              expression: "$A == 2"
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P2
+          area: modelo
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: Os disparos de hoje e a taxa de disparo saíram juntos da faixa de ±${DISPAROS_VARIACAO_PCT}%.
+          description: >-
+            Comparação com a média dos ${DISPAROS_JANELA_DIAS} dias anteriores com
+            fila. Com a taxa movendo junto, a causa provável é o modelo: drift,
+            threshold trocado, canário ruim ou a Infobip falhando. Ver o painel de
+            inferência (distribuição da probabilidade por braço) e o de mensageria.
+
+      - uid: saudeja-disparos-agenda
+        title: Disparos fora da faixa com a taxa de disparo estável
+        condition: C
+        data:
+          - *disparos
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: math
+              expression: "$A == 3"
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P3
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: Os disparos de hoje saíram da faixa de ±${DISPAROS_VARIACAO_PCT}%, com a taxa de disparo estável.
+          description: >-
+            A agenda encheu ou esvaziou (feriado, por exemplo); o modelo decidiu
+            como de costume. Aviso para o resumo semanal.
+
+      - uid: saudeja-cobertura-da-explicacao
+        title: Predição sem explicação SHAP
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: |
+                select coalesce(sum(predicoes) - sum(com_explicacao), 0) as sem_explicacao
+                from observabilidade.predicoes_por_dia
+                where dia >= (now() at time zone 'America/Sao_Paulo')::date - 1
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P2
+          area: modelo
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "{{ $values.A.Value }} predição(ões) gravada(s) desde ontem sem explicação."
+          description: >-
+            O SLO §4 exige explicação em 100% das predições expostas à clínica,
+            e a revisão de decisão automatizada (art. 20 da LGPD) depende dela.
+            Lista vazia de contribuições conta como sem explicação.
+
+  - orgId: 1
+    name: modelo-metricas
+    folder: "${PASTA}"
+    interval: 1m
+    rules:
+      # Mesmo padrao `increase ... or ... unless offset` das regras de contador
+      # de operacao.yaml.
+      - uid: saudeja-erro-de-predicao
+        title: Erro de predição
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: "${DS_MIMIR}"
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              range: false
+              expr: |
+                (
+                  sum(increase(saudeja_acao_total{acao="predicao", status="erro", deployment_environment="${AMBIENTE}"}[15m])) > 0
+                )
+                or
+                sum(
+                  saudeja_acao_total{acao="predicao", status="erro", deployment_environment="${AMBIENTE}"}
+                  unless
+                  saudeja_acao_total{acao="predicao", status="erro", deployment_environment="${AMBIENTE}"} offset 15m
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P2
+          area: modelo
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "{{ $values.A.Value }} predição(ões) com erro nos últimos 15 minutos."
+          description: >-
+            A predição (features, modelo ou SHAP) levantou exceção. A classe está
+            em saudeja_acao_total{excecao} e no span `predicao` do Tempo.
+
+      - uid: saudeja-fila-fora-do-normal
+        title: Quarentena parcial ou dado fora do domínio do treino
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: "${DS_MIMIR}"
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              range: false
+              expr: |
+                (
+                  sum by (resultado) (increase(saudeja_job_d2_agendamentos_total{resultado=~"quarentena|fora_do_dominio", deployment_environment="${AMBIENTE}"}[15m])) > 0
+                )
+                or
+                sum by (resultado) (
+                  saudeja_job_d2_agendamentos_total{resultado=~"quarentena|fora_do_dominio", deployment_environment="${AMBIENTE}"}
+                  unless
+                  saudeja_job_d2_agendamentos_total{resultado=~"quarentena|fora_do_dominio", deployment_environment="${AMBIENTE}"} offset 15m
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P3
+          area: modelo
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "{{ $values.A.Value }} agendamento(s) com resultado {{ $labels.resultado }} na última execução do job D-2."
+          description: >-
+            Quarentena parcial: o agendamento fora da regra de negócio recebeu o
+            lembrete por exceção. Fora do domínio: predito, mas com valor que o
+            modelo não viu no treino. A fila inteira em quarentena é P1 (outra regra).
+
+      - uid: saudeja-p95-da-predicao
+        title: p95 da predição acima de ${P95_PREDICAO_MS} ms
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 3600, to: 0}
+            datasourceUid: "${DS_MIMIR}"
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              range: false
+              expr: |
+                histogram_quantile(0.95, sum by (le, origem) (
+                  rate(saudeja_predicao_duracao_ms_bucket{origem=~"api|processo", deployment_environment="${AMBIENTE}"}[1h])
+                ))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: ["${P95_PREDICAO_MS}"]}
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severidade: P3
+          area: modelo
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "p95 da predição em {{ $labels.origem }}: {{ humanize $values.A.Value }} ms na última hora."
+          description: >-
+            Indicador de desenvolvimento do SLO §2 (fora do compromisso de
+            produção): a predição da interface e da API. A primeira predição de
+            um processo leva ~1,4 s; as seguintes, ~10 ms.

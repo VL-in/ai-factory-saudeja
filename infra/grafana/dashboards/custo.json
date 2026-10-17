@@ -1,0 +1,294 @@
+{
+  "uid": "saudeja-custo",
+  "title": "SaúdeJá — Custo",
+  "description": "SMS cobrado por segmento, projeção do mês e orçamento. Preço e câmbio vêm do params.yaml (bloco custo).",
+  "tags": [
+    "saudeja"
+  ],
+  "timezone": "America/Sao_Paulo",
+  "schemaVersion": 39,
+  "editable": true,
+  "refresh": "5m",
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "SMS no mês até hoje (US$)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select round(coalesce(sum(segmentos), 0) * ${CUSTO_SMS_UNITARIO_USD}, 2) as custo\nfrom observabilidade.envios_cobrados_por_mes\nwhere canal = 'sms' and mes = date_trunc('month', now() at time zone 'America/Sao_Paulo')::date"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "SMS no mês até hoje (R$)",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select round(coalesce(sum(segmentos), 0) * ${CUSTO_SMS_UNITARIO_USD} * ${CAMBIO_USD_BRL}, 2) as custo\nfrom observabilidade.envios_cobrados_por_mes\nwhere canal = 'sms' and mes = date_trunc('month', now() at time zone 'America/Sao_Paulo')::date"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyBRL"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "description": "Câmbio de ${CAMBIO_USD_BRL} R$/US$, revisado no início do mês."
+    },
+    {
+      "id": 3,
+      "type": "gauge",
+      "title": "Projeção do mês contra o orçamento (US$)",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select round(coalesce(sum(segmentos_projetados), 0) * ${CUSTO_SMS_UNITARIO_USD}, 2)\n       as custo_projetado_usd\nfrom observabilidade.envios_cobrados_por_mes\nwhere canal = 'sms' and mes = date_trunc('month', now() at time zone 'America/Sao_Paulo')::date"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "max": "${CUSTO_ORCAMENTO_USD}",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": "${CUSTO_LIMITE_USD}"
+              },
+              {
+                "color": "red",
+                "value": "${CUSTO_ORCAMENTO_USD}"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Alerta P2 acima de US$ ${CUSTO_LIMITE_USD} (${FRACAO_DE_ALERTA_PCT}% do orçamento)."
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Infraestrutura (US$/mês)",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select 0 as infraestrutura"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "description": "Supabase, Hugging Face Space e Grafana Cloud em planos gratuitos: o que se monitora é a cota (alerta P3 do banco)."
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Envios cobrados por mês",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select mes, canal, disparos, segmentos, disparos_sem_segmentos,\n       case when canal = 'sms' then round(segmentos * ${CUSTO_SMS_UNITARIO_USD}, 2)\n            else 0 end as custo_usd,\n       case when canal = 'sms'\n            then round(segmentos_projetados * ${CUSTO_SMS_UNITARIO_USD}, 2)\n            else 0 end as custo_projetado_usd\nfrom observabilidade.envios_cobrados_por_mes order by mes desc, canal"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "description": "`disparos_sem_segmentos`: envios gravados antes da contagem de segmentos (só no mês de transição); ficam fora do custo. O stub de dev nunca custa."
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Custo por execução do job (US$, operacional)",
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "sum(last_over_time(saudeja_sms_custo_usd_total{job=\"saudeja-job-d2\", deployment_environment=\"${AMBIENTE}\"}[1d]))",
+          "editorMode": "code",
+          "legendFormat": "custo",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "O job vive alguns minutos por dia, e o contador recomeça a cada execução: cada ponto é o total da última execução no dia. O Mimir guarda 14 dias; o mês fechado sai do banco.",
+      "interval": "1d"
+    }
+  ]
+}

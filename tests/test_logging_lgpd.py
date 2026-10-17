@@ -85,39 +85,46 @@ def _logger_com_captura(nome: str, formato="json"):
 # --- redação: as quatro formas de PII que o sistema manipula -------------------
 
 
-@pytest.mark.parametrize(
-    "texto,segredo",
-    [
-        (f"cadastro recusado para cpf={CPF}", CPF),
-        ("cpf sem pontuação: 52998224725", "52998224725"),
-        (f"enviando SMS para {TELEFONE}", TELEFONE),
-        (f"telefone digitado: {TELEFONE_FORMATADO}", "98765-4321"),
-        (f"contato: {EMAIL}", EMAIL),
-        ('{"nome": "Ana Souza", "idade": 34}', "Ana Souza"),
-        ("nome=Ana Souza, idade=34", "Ana Souza"),
-        ("nome_completo=Ana Souza", "Ana Souza"),
-        ("paciente_nome=Ana Souza", "Ana Souza"),
-        ("sobrenome=Souza", "Souza"),
-        ("Infobip recusou: {'to': '5511987654321'}", TELEFONE),
-    ],
-)
+# (texto com PII, o trecho que não pode sobreviver). Também é o corpus da
+# regra RE2 do Loki, mais abaixo: as duas cópias das regras ficam provadas
+# contra os mesmos textos.
+CASOS_DE_PII = [
+    (f"cadastro recusado para cpf={CPF}", CPF),
+    ("cpf sem pontuação: 52998224725", "52998224725"),
+    (f"enviando SMS para {TELEFONE}", TELEFONE),
+    (f"telefone digitado: {TELEFONE_FORMATADO}", "98765-4321"),
+    (f"contato: {EMAIL}", EMAIL),
+    ('{"nome": "Ana Souza", "idade": 34}', "Ana Souza"),
+    ("nome=Ana Souza, idade=34", "Ana Souza"),
+    ("nome_completo=Ana Souza", "Ana Souza"),
+    ("paciente_nome=Ana Souza", "Ana Souza"),
+    ("sobrenome=Souza", "Souza"),
+    ("Infobip recusou: {'to': '5511987654321'}", TELEFONE),
+]
+
+
+@pytest.mark.parametrize("texto,segredo", CASOS_DE_PII)
 def test_redige_as_formas_de_pii_do_produto(texto, segredo):
     redigido = redigir(texto)
     assert segredo not in redigido, f"PII sobreviveu à redação: {redigido}"
     assert MARCADOR in redigido
 
 
-@pytest.mark.parametrize(
-    "texto",
-    [
-        f"paciente {HASH_PACIENTE} sem predição",
-        f"agendamento {UUID_AGENDAMENTO} processado",
-        "predição servida em duracao_ms=1423",
-        "model_version=a1b2c3d4e5f6",
-        "threshold=0.6 probabilidade=0.8123",
-        "consulta em 2026-09-27 às 14:30",
-    ],
-)
+TEXTOS_DE_DIAGNOSTICO = [
+    f"paciente {HASH_PACIENTE} sem predição",
+    f"agendamento {UUID_AGENDAMENTO} processado",
+    "predição servida em duracao_ms=1423",
+    "model_version=a1b2c3d4e5f6",
+    "threshold=0.6 probabilidade=0.8123",
+    "consulta em 2026-09-27 às 14:30",
+    "namespace=saudeja",
+    "nomeacao=automatica",
+    "job D-2 concluído id_execucao=gh-38830675560-1",
+    "span 4bf92f3577b34da6a3ce929d0e0e4736 status_http=500",
+]
+
+
+@pytest.mark.parametrize("texto", TEXTOS_DE_DIAGNOSTICO)
 def test_nao_redige_o_que_o_diagnostico_precisa(texto):
     """Redigir demais é falha, não excesso de zelo: sem `id_agendamento` no log
     não se responde "por que este paciente não recebeu lembrete", e o hash de
@@ -131,6 +138,42 @@ def test_nome_de_variavel_parecido_nao_vira_falso_positivo():
     valor e o log viraria inútil."""
     assert redigir("namespace=saudeja") == "namespace=saudeja"
     assert redigir("nomeacao=automatica") == "nomeacao=automatica"
+
+
+# --- a cópia RE2 das regras, para a regra P1 "PII em log" do Loki -------------
+# O `re` do Python aceita a sintaxe usada em `REGRAS_DE_PII_RE2` (classes,
+# `(?i:...)`, repetição contada), então o mesmo corpus serve às duas cópias.
+# O que fica fora do teste é a diferença de `\w`: no RE2 ele é só ASCII.
+
+
+@pytest.mark.parametrize("texto,segredo", CASOS_DE_PII)
+def test_regra_do_loki_acha_a_pii_crua_e_nao_a_redigida(texto, segredo):
+    import re
+
+    padrao = re.compile(logging_config.regex_de_pii_re2())
+    assert padrao.search(texto), f"a regra do Loki não achou PII em {texto!r}"
+    assert not padrao.search(redigir(texto)), (
+        f"a regra do Loki dispararia sobre a saída do filtro: {redigir(texto)!r}"
+    )
+
+
+@pytest.mark.parametrize("texto", TEXTOS_DE_DIAGNOSTICO)
+def test_regra_do_loki_nao_dispara_no_que_o_filtro_deixa_passar(texto):
+    """Falso positivo aqui é alerta crítico (P1) sem causa: o texto que o filtro
+    deixa intacto chega ao Loki como está e não pode casar a regra."""
+    import re
+
+    assert not re.search(logging_config.regex_de_pii_re2(), texto)
+
+
+def test_regra_do_loki_cabe_no_logql_e_cobre_as_tres_familias():
+    """O LogQL recebe o padrão entre crases, e uma família esquecida na
+    tradução deixaria a rede de segurança com um furo."""
+    regex = logging_config.regex_de_pii_re2()
+    assert "`" not in regex
+    assert [n for n, _p in logging_config.REGRAS_DE_PII_RE2] == [
+        n for n, _p, _s in logging_config.REGRAS_DE_PII
+    ]
 
 
 # --- o filtro no caminho real do registro -------------------------------------

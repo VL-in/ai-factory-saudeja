@@ -1,0 +1,76 @@
+# Para onde vai cada alerta, por criticidade (matriz do Passo 8.9).
+#
+# scripts/grafana_provisionar.py escreve estas rotas na arvore de politicas
+# PADRAO do Alertmanager do Grafana, como filhas da raiz. A raiz (contact point
+# padrao e agrupamento) e as rotas de terceiros sao preservadas; as rotas que
+# entregam a um dos contact points abaixo sao trocadas por estas -- inclusive
+# a filha provisoria do Synthetic Monitoring criada a mao na P6, que vira
+# redundante: o check de producao manda `severidade=P1` no proprio rotulo.
+#
+# Os contact points NAO estao no git: e-mails e Telegram sao identificadores de
+# pessoas e de infraestrutura. A autora os cria no Grafana com estes nomes, e o
+# provisionamento falha, listando os que faltam, se algum nao existir.
+#
+# Rotas so' em producao: a verificacao em dev (`--ambiente dev`) nao toca a
+# arvore. As regras de dev levam `notification_settings` direto para
+# `contato_dev` (o script confere que o Grafana o gravou antes de liga-las), e a
+# primeira rota abaixo e' a segunda barreira: rotulo `ambiente=dev` nunca chega
+# a um contact point de producao.
+contatos:
+  P1: saudeja-p1          # mantenedora + gestora da clinica; push + e-mail
+  P2: saudeja-p2          # mantenedora, e-mail
+  P2_modelo: saudeja-p2-modelo   # mantenedora + Vanessa (area=modelo)
+  P3: saudeja-p3          # time tecnico, resumo semanal
+contato_dev: saudeja-dev  # so' quem verifica em dev; exigido tambem em producao (1a rota)
+
+# Resumo semanal: o P3 fica silenciado fora de segunda, 09h-10h em Sao Paulo
+# (formato do endpoint de "mute timings" do Grafana).
+intervalos:
+  - name: saudeja-fora-do-resumo-semanal
+    time_intervals:
+      - weekdays: ["tuesday:sunday"]
+        location: America/Sao_Paulo
+      - weekdays: [monday]
+        times:
+          - start_time: "00:00"
+            end_time: "09:00"
+          - start_time: "10:00"
+            end_time: "24:00"
+        location: America/Sao_Paulo
+
+rotas:
+  - receiver: saudeja-dev
+    object_matchers:
+      - [ambiente, "=", dev]
+
+  - receiver: saudeja-p1
+    object_matchers:
+      - [severidade, "=", P1]
+    group_by: [alertname, ambiente]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 1h
+
+  - receiver: saudeja-p2
+    object_matchers:
+      - [severidade, "=", P2]
+    group_by: [alertname, ambiente]
+    group_wait: 1m
+    group_interval: 15m
+    repeat_interval: 24h
+    routes:
+      - receiver: saudeja-p2-modelo
+        object_matchers:
+          - [area, "=", modelo]
+
+  # Um e-mail com todos os P3 que estiverem disparando na segunda de manha.
+  # Limite aceito: um P3 que dispara e resolve no meio da semana nao chega ao
+  # resumo; o historico dele fica na tela de alertas do Grafana.
+  - receiver: saudeja-p3
+    object_matchers:
+      - [severidade, "=", P3]
+    group_by: [severidade]
+    group_wait: 1m
+    group_interval: 5m
+    repeat_interval: 144h
+    mute_time_intervals: [saudeja-fora-do-resumo-semanal]

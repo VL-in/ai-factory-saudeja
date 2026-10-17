@@ -1,0 +1,279 @@
+{
+  "uid": "saudeja-inferencia",
+  "title": "SaúdeJá — Inferência ML",
+  "description": "Latência, distribuição da probabilidade, cobertura da explicação e domínio, por modelo (campeão e canário).",
+  "tags": [
+    "saudeja"
+  ],
+  "timezone": "America/Sao_Paulo",
+  "schemaVersion": 39,
+  "editable": true,
+  "refresh": "5m",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Latência da predição por origem (p50, p95, p99)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, origem) (rate(saudeja_predicao_duracao_ms_bucket{deployment_environment=\"${AMBIENTE}\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "legendFormat": "p50 {{origem}}",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, origem) (rate(saudeja_predicao_duracao_ms_bucket{deployment_environment=\"${AMBIENTE}\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "legendFormat": "p95 {{origem}}",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, origem) (rate(saudeja_predicao_duracao_ms_bucket{deployment_environment=\"${AMBIENTE}\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "legendFormat": "p99 {{origem}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Features + predição + SHAP. Indicador de desenvolvimento do SLO §2 na interface e na API; o job não tem compromisso de latência."
+    },
+    {
+      "id": 2,
+      "type": "bargauge",
+      "title": "Distribuição da probabilidade na última execução do job",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "sum by (le) (last_over_time(saudeja_predicao_probabilidade_bucket{job=\"saudeja-job-d2\", deployment_environment=\"${AMBIENTE}\"}[1d]))",
+          "editorMode": "code",
+          "legendFormat": "{{le}}",
+          "instant": true,
+          "range": false,
+          "format": "heatmap"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "orientation": "vertical",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "description": "Faixas de 0,1. Ao lado da taxa de disparo, é o sinal de drift: o formato muda antes de a taxa sair da faixa."
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Predições por dia e modelo",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select dia::timestamptz as time, model_version as metric, predicoes as value\nfrom observabilidade.predicoes_por_dia where $__timeFilter(dia) order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Cobertura da explicação por dia e modelo",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select dia::timestamptz as time, model_version as metric, cobertura_explicacao as value\nfrom observabilidade.predicoes_por_dia where $__timeFilter(dia) order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "SLO §4: 100%."
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Fora do domínio do treino e positivas por dia",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select dia::timestamptz as time, sum(fora_do_dominio) as fora_do_dominio,\n       sum(positivas) as positivas\nfrom observabilidade.predicoes_por_dia where $__timeFilter(dia)\ngroup by 1 order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Agendamentos do job por resultado e braço",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "sum by (resultado, braco) (last_over_time(saudeja_job_d2_agendamentos_total{job=\"saudeja-job-d2\", deployment_environment=\"${AMBIENTE}\"}[1d]))",
+          "editorMode": "code",
+          "legendFormat": "{{resultado}} · {{braco}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "O job vive alguns minutos por dia, e o contador recomeça a cada execução: cada ponto é o total da última execução no dia.",
+      "interval": "1d"
+    }
+  ]
+}

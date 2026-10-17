@@ -17,7 +17,7 @@ import calendar
 import re
 import subprocess
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -31,6 +31,7 @@ FUSO = ZoneInfo("America/Sao_Paulo")
 
 VIEWS = (
     "agendamentos_por_dia",
+    "agendamentos_sem_processamento_por_dia",
     "disparos_por_dia",
     "envios_cobrados_por_mes",
     "eventos_fora_da_allowlist_por_dia",
@@ -363,3 +364,92 @@ def test_views_de_agenda_e_de_banco_respondem(banco):
     assert int(_valor("select bytes from observabilidade.tamanho_do_banco") or 0) > 0
     # Sem `job_d2` não há erro, só nulos.
     assert len(_sql("select ultimo_ok, ultima_execucao from observabilidade.ultimo_job_d2")) == 1
+
+
+# --- P7: fonte do P1 "agendamentos deixados para trás" e o gatilho do job ---------
+
+
+def _sem_processamento(dia: str) -> list[list[str]]:
+    return _sql(
+        """
+        select agendamentos from observabilidade.agendamentos_sem_processamento_por_dia
+        where dia = :'dia'
+        """,
+        dia=dia,
+    )
+
+
+@pytest.mark.integracao
+def test_agendamentos_sem_processamento_conta_so_o_que_o_job_devia_ter_pego(banco):
+    """Execução `ok` do job num dia D do futuro (todo agendamento criado agora é
+    anterior a ela): conta só o agendado de D+1 a D+2 sem predição e sem
+    mensagem. O processado, o que teve falha de envio e o fora da janela não
+    entram."""
+    distancia = 400
+    dia = datetime.now(FUSO).date() + timedelta(days=distancia)
+    banco.evento(
+        tipo="job_d2",
+        status="ok",
+        origem="job",
+        duracao_ms=90_000,
+        criado_em=f"{dia.isoformat()}T12:00:00-03:00",
+    )
+    banco.agendamento(dias=distancia + 1)  # o esquecido
+    predito = banco.agendamento(dias=distancia + 2)
+    banco.repo.gravar_predicao(
+        id_agendamento=predito["id"],
+        probabilidade=0.2,
+        classe_prevista=0,
+        threshold_usado=0.6,
+        explicacao_shap=[{"feature": "idade", "contribuicao": 0.1}],
+        model_version="teste-p7",
+        fora_do_dominio=False,
+    )
+    com_falha = banco.agendamento(dias=distancia + 1)
+    banco.repo.registrar_mensagem(
+        id_agendamento=com_falha["id"], canal="sms", status_envio="falha_envio"
+    )
+    banco.agendamento(dias=distancia + 3)
+
+    assert _sem_processamento(dia.isoformat()) == [["1"]]
+
+
+@pytest.mark.integracao
+def test_agendamento_criado_depois_da_execucao_e_da_proxima(banco):
+    """Execução `ok` num dia do passado: o agendamento criado agora, mesmo
+    com consulta na janela daquele dia, é da execução seguinte."""
+    distancia = 400
+    dia = datetime.now(FUSO).date() - timedelta(days=distancia)
+    banco.evento(
+        tipo="job_d2", status="ok", origem="job", duracao_ms=1_000,
+        criado_em=f"{dia.isoformat()}T12:00:00-03:00",
+    )
+    banco.agendamento(dias=-distancia + 1)
+
+    assert _sem_processamento(dia.isoformat()) == [["0"]]
+
+
+@pytest.mark.integracao
+def test_gatilho_do_job_d2_agendado_fechado_e_inerte_sem_o_token():
+    """O pg_cron agenda o disparo; a função não é executável por nenhum papel
+    da API nem pelo do Grafana; e, sem o token no Vault (o caso do local, do CI
+    e do Supabase de dev), chamá-la não enfileira requisição nenhuma."""
+    assert _sql("select schedule, command from cron.job where jobname = 'job-d2'") == [
+        ["17 11 * * *", "select agendador.disparar_job_d2()"]
+    ]
+    papeis = _sql(
+        """
+        select papel
+        from unnest(array['anon', 'authenticated', 'service_role', 'grafana_leitura']) as papel
+        where has_function_privilege(papel, 'agendador.disparar_job_d2()', 'execute')
+           or has_schema_privilege(papel, 'agendador', 'usage')
+        """
+    )
+    assert papeis == []
+    assert _valor(
+        "select count(*) from vault.decrypted_secrets where name like 'github_job_d2_%'"
+    ) == "0"
+    antes = _valor("select count(*) from net.http_request_queue")
+    _sql("select agendador.disparar_job_d2()")
+    assert _valor("select count(*) from net.http_request_queue") == antes
+

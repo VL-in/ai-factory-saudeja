@@ -1,0 +1,202 @@
+{
+  "uid": "saudeja-mensageria",
+  "title": "SaúdeJá — Mensageria (Infobip)",
+  "description": "Lembretes por status, taxa de disparo e falhas de envio.",
+  "tags": [
+    "saudeja"
+  ],
+  "timezone": "America/Sao_Paulo",
+  "schemaVersion": 39,
+  "editable": true,
+  "refresh": "5m",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Agendamentos processados, disparos e taxa de disparo",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select dia::timestamptz as time, agendamentos_processados as processados,\n       disparos, taxa_de_disparo\nfrom observabilidade.disparos_por_dia\nwhere $__timeFilter(dia)\norder by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "taxa_de_disparo"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {},
+      "description": "Regra dos ±${DISPAROS_VARIACAO_PCT}%: disparos de hoje contra a média dos ${DISPAROS_JANELA_DIAS} dias anteriores com fila."
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Status do envio por dia",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select dia::timestamptz as time, disparos_por_risco, disparos_sem_predicao,\n       nao_enviados, falhas_de_envio\nfrom observabilidade.disparos_por_dia where $__timeFilter(dia) order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Por risco: acima do threshold. Sem predição: lembrete por exceção da quarentena."
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Lembretes por status (por execução)",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "sum by (status_envio) (last_over_time(saudeja_sms_total{job=\"saudeja-job-d2\", deployment_environment=\"${AMBIENTE}\"}[1d]))",
+          "editorMode": "code",
+          "legendFormat": "{{status_envio}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 70,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "O job vive alguns minutos por dia, e o contador recomeça a cada execução: cada ponto é o total da última execução no dia.",
+      "interval": "1d"
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Latência da chamada à Infobip (p95 por execução)",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (last_over_time(http_client_request_duration_seconds_bucket{job=\"saudeja-job-d2\", deployment_environment=\"${AMBIENTE}\", server_address=~\".*infobip.*\"}[1d])))",
+          "editorMode": "code",
+          "legendFormat": "p95",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Span HTTP automático do httpx no envio do lembrete.",
+      "interval": "1d"
+    }
+  ]
+}
