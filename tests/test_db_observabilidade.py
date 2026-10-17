@@ -13,6 +13,7 @@ Valor variável vai como variável do `psql` (`-v nome=valor`, lido como
 `:'nome'`), que o próprio psql cita como literal -- nunca interpolado no texto
 da consulta.
 """
+import calendar
 import re
 import subprocess
 import uuid
@@ -31,6 +32,7 @@ FUSO = ZoneInfo("America/Sao_Paulo")
 VIEWS = (
     "agendamentos_por_dia",
     "disparos_por_dia",
+    "envios_cobrados_por_mes",
     "eventos_fora_da_allowlist_por_dia",
     "eventos_por_dia",
     "eventos_por_mes",
@@ -276,6 +278,48 @@ def test_disparos_por_dia_conta_agendamentos_processados_e_disparos_cobrados(ban
     depois = _disparos_de_hoje()
     # Dois agendamentos (a2 tem duas linhas), um disparo cobrado.
     assert [d - a for d, a in zip(depois, antes, strict=True)] == [2, 1, 1, 1, 1]
+
+
+@pytest.mark.integracao
+def test_envios_cobrados_por_mes_soma_segmentos_e_projeta_o_mes(banco):
+    """P5: o custo é segmentos x preço, e o preço fica no Grafana. Só envio
+    cobrado entra; envio gravado antes da coluna `segmentos` aparece à parte.
+    Um canal só deste teste isola a linha da view."""
+    canal = f"teste-p5-{uuid.uuid4().hex[:8]}"
+    a1, a2, a3 = banco.agendamento(), banco.agendamento(), banco.agendamento()
+    registrar = banco.repo.registrar_mensagem
+    registrar(id_agendamento=a1["id"], canal=canal, status_envio="enviado", segmentos=2)
+    registrar(
+        id_agendamento=a2["id"], canal=canal, status_envio="enviado_sem_predicao", segmentos=3
+    )
+    registrar(id_agendamento=a3["id"], canal=canal, status_envio="enviado")
+    registrar(id_agendamento=a3["id"], canal=canal, status_envio="nao_enviado")
+    registrar(id_agendamento=a3["id"], canal=canal, status_envio="falha_envio")
+
+    ((mes, disparos, segmentos, sem_segmentos, decorridos, do_mes, projetados),) = _sql(
+        """
+        select mes, disparos, segmentos, disparos_sem_segmentos, dias_decorridos,
+               dias_do_mes, segmentos_projetados
+        from observabilidade.envios_cobrados_por_mes where canal = :'canal'
+        """,
+        canal=canal,
+    )
+    hoje = datetime.now(FUSO).date()
+    dias_do_mes = calendar.monthrange(hoje.year, hoje.month)[1]
+    assert (mes, disparos, segmentos, sem_segmentos) == (
+        hoje.replace(day=1).isoformat(), "3", "5", "1"
+    )
+    assert (int(decorridos), int(do_mes)) == (hoje.day, dias_do_mes)
+    assert float(projetados) == pytest.approx(5 / hoje.day * dias_do_mes, abs=0.005)
+
+
+@pytest.mark.integracao
+def test_segmentos_so_aceita_numero_positivo(banco):
+    agendamento = banco.agendamento()
+    with pytest.raises(Exception, match="segmentos_check"):
+        banco.repo.registrar_mensagem(
+            id_agendamento=agendamento["id"], canal="sms", status_envio="enviado", segmentos=0
+        )
 
 
 @pytest.mark.integracao

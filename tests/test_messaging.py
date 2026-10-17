@@ -17,6 +17,7 @@ from messaging.client import (
     InfobipClient,
     MessagingClient,
     StubMessagingClient,
+    segmentos_sms,
 )
 
 
@@ -151,3 +152,27 @@ def test_corpo_de_erro_fora_do_formato_documentado_nao_vira_texto_livre():
 
     assert "5511987654321" not in str(capturado.value)
     assert "502" in str(capturado.value)
+
+
+# --- segmentos (custo: a Infobip cobra por segmento) ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("mensagem", "segmentos"),
+    [
+        ("a" * 160, 1),  # GSM-7 inteira
+        ("a" * 161, 2),  # dividida em partes de 153
+        ("a" * 306, 2),
+        ("a" * 307, 3),
+        ("[" * 80, 1),  # extensão vale dois: 160 unidades
+        ("[" * 81, 2),
+        ("à" * 160, 1),  # `à` está no alfabeto GSM
+        ("á" * 70, 1),  # `á` não está: UCS-2, 70 por segmento
+        ("á" * 71, 2),  # dividida em partes de 67
+        ("á" * 135, 3),
+        ("a" * 159 + "ã", 3),  # um acento leva a mensagem INTEIRA para UCS-2
+        ("", 1),
+    ],
+)
+def test_segmentos_seguem_o_alfabeto_gsm_e_o_ucs2(mensagem, segmentos):
+    assert segmentos_sms(mensagem) == segmentos

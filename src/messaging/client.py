@@ -14,10 +14,39 @@ contato de envio o produto (lembrete pago para reduzir no-show) não tem para
 onde mandar mensagem. `enviar_lembrete` recebe o telefone já normalizado
 (`ui/logic.py::normalizar_telefone`), não o `id_paciente_externo`.
 """
+import math
 import os
 from abc import ABC, abstractmethod
 
 import httpx
+
+# Alfabeto GSM 03.38, o padrão do SMS. Texto só com estes caracteres vai em 7
+# bits: 160 por segmento, 153 quando a mensagem é dividida (o cabeçalho de
+# concatenação ocupa o resto). Os da extensão valem dois. Um caractere fora
+# dos dois -- `á`, `ã`, `ç`, `ê`, `í`, `ó`, `õ`, `ú`, comuns no português --
+# leva a mensagem INTEIRA para UCS-2: 70 por segmento, 67 quando dividida.
+_GSM7_BASICO = frozenset(
+    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?"
+    "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
+)
+_GSM7_EXTENSAO = frozenset("^{}\\[~]|€\f")
+
+
+def segmentos_sms(mensagem: str) -> int:
+    """Em quantos segmentos a operadora divide `mensagem`. A Infobip cobra
+    por segmento, não por lembrete: é este número que multiplica o preço
+    (`params.yaml`, `custo.sms_unitario_usd`)."""
+    if all(c in _GSM7_BASICO or c in _GSM7_EXTENSAO for c in mensagem):
+        unidades = sum(2 if c in _GSM7_EXTENSAO else 1 for c in mensagem)
+        inteira, dividida = 160, 153
+    else:
+        # UCS-2 conta unidades de 16 bits: emoji e outros fora do plano
+        # básico ocupam duas.
+        unidades = len(mensagem.encode("utf-16-le")) // 2
+        inteira, dividida = 70, 67
+    if unidades <= inteira:
+        return 1
+    return math.ceil(unidades / dividida)
 
 
 class MessagingClient(ABC):

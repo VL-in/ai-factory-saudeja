@@ -255,18 +255,26 @@ def gravar_predicao(
     return _primeira(resposta.data)
 
 
-def registrar_mensagem(id_agendamento: str, canal: str, status_envio: str) -> Linha:
+def registrar_mensagem(
+    id_agendamento: str, canal: str, status_envio: str, segmentos: int | None = None
+) -> Linha:
     """Auditoria de disparo (`docs/LGPD/LGPD.md` §5) -- uma linha por agendamento processado
     pelo job D-2, enviado ou não: `status_envio` distingue
     'enviado' (probabilidade acima do threshold, lembrete pago disparado) de
     'nao_enviado' (abaixo do threshold, nenhum custo de mensageria), então a
-    tabela sempre reflete a decisão tomada, não só os envios reais."""
+    tabela sempre reflete a decisão tomada, não só os envios reais.
+
+    `segmentos` só no envio que saiu (`messaging.client.segmentos_sms`): é a
+    unidade que a Infobip cobra, e o que o custo mensal soma."""
+    linha: dict[str, Any] = {
+        "id_agendamento": id_agendamento,
+        "canal": canal,
+        "status_envio": status_envio,
+    }
+    if segmentos is not None:
+        linha["segmentos"] = segmentos
     client = obter_client()
-    resposta = (
-        client.table("mensagens_disparadas")
-        .insert({"id_agendamento": id_agendamento, "canal": canal, "status_envio": status_envio})
-        .execute()
-    )
+    resposta = client.table("mensagens_disparadas").insert(linha).execute()
     return _primeira(resposta.data)
 
 

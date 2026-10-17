@@ -582,7 +582,7 @@ class _RepositorioDoJob:
     def gravar_predicao(self, **kwargs):
         self.predicoes.append(kwargs)
 
-    def registrar_mensagem(self, id_agendamento, canal, status_envio):
+    def registrar_mensagem(self, id_agendamento, canal, status_envio, segmentos=None):
         self.mensagens.append((id_agendamento, status_envio))
 
     def marcar_lembrete_enviado(self, id_agendamento):

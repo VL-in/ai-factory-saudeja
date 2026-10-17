@@ -73,6 +73,7 @@ from messaging.client import (  # noqa: E402
     InfobipClient,
     MessagingClient,
     StubMessagingClient,
+    segmentos_sms,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,11 +108,15 @@ class ProvedorMensageriaDesconhecido(Exception):
     configuração de produção errada."""
 
 
+def provedor_de_mensageria() -> str:
+    return (os.environ.get("MESSAGING_PROVIDER") or "stub").strip().lower()
+
+
 def obter_cliente_mensageria() -> MessagingClient:
     """`stub` (default) nunca faz rede; `infobip` envia SMS de
     verdade via `InfobipClient`, lendo `INFOBIP_BASE_URL`/`INFOBIP_CHAVE_API`
     do ambiente."""
-    provedor = (os.environ.get("MESSAGING_PROVIDER") or "stub").strip().lower()
+    provedor = provedor_de_mensageria()
     if provedor == "stub":
         return StubMessagingClient()
     if provedor == "infobip":
@@ -119,6 +124,20 @@ def obter_cliente_mensageria() -> MessagingClient:
     raise ProvedorMensageriaDesconhecido(
         f"MESSAGING_PROVIDER={provedor!r} sem implementação -- use 'stub' ou 'infobip'"
     )
+
+
+def preco_do_segmento_usd(canal: str) -> float | None:
+    """Preço de um segmento enviado por `canal`, em dólares, a moeda do
+    contrato da Infobip e do orçamento (`params.yaml`,
+    `custo.sms_unitario_usd`). O stub não custa: 0. `None` quando o preço do
+    SMS não foi preenchido ou não é um número não negativo -- o lembrete sai do
+    mesmo jeito, só o custo deixa de ser medido (e o resumo do run avisa)."""
+    if canal != InfobipClient.canal:
+        return 0.0
+    preco = (inference.PARAMS.get("custo") or {}).get("sms_unitario_usd")
+    if isinstance(preco, bool) or not isinstance(preco, int | float) or preco < 0:
+        return None
+    return float(preco)
 
 
 def _payload_de_agendamento(agendamento: dict[str, Any]) -> dict[str, Any]:
@@ -443,6 +462,7 @@ def _enviar_lembrete(
     confundir "compareceu" com "compareceu porque foi lembrado", e que impede
     reenvio na janela de três dias do job."""
     canal = cliente_mensageria.canal
+    mensagem = _mensagem_de_lembrete(agendamento)
     try:
         # O span cobre só o envio: falha marca o span com a classe da exceção
         # (o motivo da Infobip nunca entra), e a chamada HTTP vira filho dele.
@@ -452,9 +472,7 @@ def _enviar_lembrete(
             identificadores={"id_agendamento": agendamento.get("id")},
         ):
             telefone = agendamento["pacientes"]["telefone"]
-            cliente_mensageria.enviar_lembrete(
-                telefone=telefone, mensagem=_mensagem_de_lembrete(agendamento)
-            )
+            cliente_mensageria.enviar_lembrete(telefone=telefone, mensagem=mensagem)
     except (ErroEnvioInfobip, KeyError, TypeError) as exc:
         # Falha de envio de UM paciente (número inválido, sandbox recusou,
         # Infobip fora do ar, paciente sem telefone no embed) não pode travar
@@ -481,10 +499,18 @@ def _enviar_lembrete(
         )
         telemetria.contar("saudeja_sms_total", {"status_envio": "falha_envio"})
         return
+    segmentos = segmentos_sms(mensagem)
     repositories.registrar_mensagem(
-        id_agendamento=agendamento["id"], canal=canal, status_envio=status
+        id_agendamento=agendamento["id"], canal=canal, status_envio=status, segmentos=segmentos
     )
     telemetria.contar("saudeja_sms_total", {"status_envio": status})
+    # Só aqui: `nao_enviado` e `falha_envio` não são cobrados. Sem preço
+    # preenchido, o custo some do Grafana mas continua no Supabase (segmentos).
+    preco = preco_do_segmento_usd(canal)
+    if preco:
+        telemetria.contar(
+            "saudeja_sms_custo_usd_total", {"status_envio": status}, valor=preco * segmentos
+        )
     repositories.marcar_lembrete_enviado(agendamento["id"])
     resultado["mensagens_disparadas"] += 1
     if status == STATUS_ENVIADO_SEM_PREDICAO:
@@ -583,6 +609,19 @@ def pre_checagem() -> str:
 
 def taxa_de_disparo_alerta() -> float:
     return float(inference.PARAMS["gate"]["taxa_disparo_alerta"])
+
+
+def avisos_de_custo() -> list[str]:
+    """SMS de verdade sem preço preenchido: o custo do dia não chega ao
+    Grafana. Aviso, nunca falha -- medir o custo não pode segurar lembrete."""
+    if provedor_de_mensageria() != "infobip":
+        return []
+    if preco_do_segmento_usd(InfobipClient.canal) is not None:
+        return []
+    return [
+        "custo.sms_unitario_usd não preenchido (ou inválido) em params.yaml -- os "
+        "lembretes saíram, mas o custo desta execução não foi medido"
+    ]
 
 
 def pos_checagem(resultado: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -722,6 +761,7 @@ def _executar() -> int:
             "execução refaz a janela; se repetir, confira TREINO_CHAVE_PSEUDONIMO e o "
             "schema `treino`"
         )
+    avisos += avisos_de_custo()
     canario_version = preparacao.contexto.model_version if preparacao.contexto else None
     if preparacao.contexto is not None:
         falhas += canario.avaliar_execucao(

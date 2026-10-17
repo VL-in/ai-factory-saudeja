@@ -19,6 +19,7 @@ import pytest
 
 import observabilidade
 from jobs import inferencia_diaria as job
+from messaging.client import segmentos_sms
 
 
 class _RepositorioFalso:
@@ -26,6 +27,7 @@ class _RepositorioFalso:
         self.pendentes = pendentes
         self.predicoes = []
         self.mensagens = []
+        self.segmentos = []
         self.lembretes = []
 
     def buscar_agendamentos_d2_pendentes(self, data_referencia):
@@ -34,8 +36,9 @@ class _RepositorioFalso:
     def gravar_predicao(self, **kwargs):
         self.predicoes.append(kwargs)
 
-    def registrar_mensagem(self, id_agendamento, canal, status_envio):
+    def registrar_mensagem(self, id_agendamento, canal, status_envio, segmentos=None):
         self.mensagens.append((id_agendamento, status_envio))
+        self.segmentos.append(segmentos)
 
     def marcar_lembrete_enviado(self, id_agendamento):
         self.lembretes.append(id_agendamento)
@@ -365,3 +368,93 @@ def test_job_mede_resultado_probabilidade_e_envio_por_braco(repositorio, telemet
     assert atributos["braco"] == "campeao" and medicoes == 2
     envios = {a["status_envio"]: v for a, v in telemetria_em_memoria.pontos("saudeja_sms_total")}
     assert envios == {"enviado": 2, job.STATUS_ENVIADO_SEM_PREDICAO: 1}
+
+
+# --- custo da mensageria (Passo 8.9, P5) --------------------------------------
+
+
+class _Sms:
+    """Como o `InfobipClient`: canal `sms`, o único que custa."""
+
+    canal = "sms"
+
+    def __init__(self):
+        self.mensagens = []
+
+    def enviar_lembrete(self, telefone, mensagem):
+        self.mensagens.append(mensagem)
+
+
+def test_envio_cobrado_grava_os_segmentos_e_soma_segmentos_vezes_preco(
+    repositorio, telemetria_em_memoria, monkeypatch
+):
+    """A Infobip cobra por segmento: o lembrete com acento passa de 70
+    caracteres e vira dois. Falha de envio não é cobrada nem ganha segmentos."""
+    monkeypatch.setitem(job.inference.PARAMS, "custo", {"sms_unitario_usd": 0.05})
+    falso = repositorio(
+        [
+            _agendamento("a01"),
+            _agendamento("a02", especialidade="neurologia"),  # quarentena
+            _agendamento("a03", pacientes={"sexo": "F"}),  # sem telefone: falha
+        ],
+        threshold=0.0,
+    )
+    sms = _Sms()
+    job.processar_dia(cliente_mensageria=sms)
+
+    esperados = [segmentos_sms(m) for m in sms.mensagens]
+    assert falso.segmentos == [*esperados, None]
+    custo = {
+        a["status_envio"]: v
+        for a, v in telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total")
+    }
+    assert custo == pytest.approx(
+        {"enviado": 0.05 * esperados[0], job.STATUS_ENVIADO_SEM_PREDICAO: 0.05 * esperados[1]}
+    )
+
+
+def test_lembrete_nao_enviado_e_canal_sem_custo_nao_somam_custo(
+    repositorio, telemetria_em_memoria, monkeypatch
+):
+    monkeypatch.setitem(job.inference.PARAMS, "custo", {"sms_unitario_usd": 0.05})
+    falso = repositorio([_agendamento("a01")], threshold=1.01)
+    job.processar_dia(cliente_mensageria=_Sms())
+    assert falso.segmentos == [None]
+
+    # O stub (aqui, o espião) grava os segmentos, mas não custa.
+    falso = repositorio([_agendamento("a02")], threshold=0.0)
+    job.processar_dia(cliente_mensageria=_Espiao())
+    assert falso.segmentos == [segmentos_sms(job._mensagem_de_lembrete(_agendamento("a02")))]
+    assert telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total") == []
+
+
+def test_sem_preco_o_lembrete_sai_e_o_custo_nao_e_medido(
+    repositorio, telemetria_em_memoria, monkeypatch
+):
+    monkeypatch.setitem(job.inference.PARAMS, "custo", {"sms_unitario_usd": None})
+    falso = repositorio([_agendamento("a01")], threshold=0.0)
+    sms = _Sms()
+    job.processar_dia(cliente_mensageria=sms)
+
+    assert len(sms.mensagens) == 1 and falso.lembretes == ["a01"]
+    assert telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total") == []
+
+
+@pytest.mark.parametrize("preco", [None, "0,05", -0.05, True])
+def test_preco_ausente_ou_invalido_vira_aviso_so_com_sms_de_verdade(monkeypatch, preco):
+    monkeypatch.setitem(job.inference.PARAMS, "custo", {"sms_unitario_usd": preco})
+    assert job.preco_do_segmento_usd("sms") is None
+    assert job.preco_do_segmento_usd("stub") == 0.0
+
+    monkeypatch.setenv("MESSAGING_PROVIDER", "infobip")
+    (aviso,) = job.avisos_de_custo()
+    assert "custo.sms_unitario_usd" in aviso
+    monkeypatch.setenv("MESSAGING_PROVIDER", "stub")
+    assert job.avisos_de_custo() == []
+
+
+def test_preco_preenchido_nao_gera_aviso(monkeypatch):
+    monkeypatch.setitem(job.inference.PARAMS, "custo", {"sms_unitario_usd": 0})
+    monkeypatch.setenv("MESSAGING_PROVIDER", "infobip")
+    assert job.preco_do_segmento_usd("sms") == 0.0
+    assert job.avisos_de_custo() == []

@@ -8,6 +8,11 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado] (Vanessa + Claude) - 2026-10-16
+
+### Adicionado
+- **O custo dos lembretes por SMS passa a ser medido.** A Infobip cobra por segmento de SMS, e não por lembrete. Quando o texto tem uma letra acentuada fora do alfabeto do SMS, como `á` e `ã`, cada segmento comporta 70 caracteres. O lembrete atual tem 72 e por isso sai em dois. O job D-2 grava os segmentos de cada envio na coluna nova `mensagens_disparadas.segmentos` (migration aditiva `20261016000000_observabilidade_custo.sql`) e soma o custo, em dólares, à métrica `saudeja_sms_custo_usd_total`. A view `observabilidade.envios_cobrados_por_mes` mostra, por mês e por canal, os envios cobrados, os segmentos e a projeção para o mês inteiro. O Grafana multiplica esses números pelo preço. Os preços ficam em `params.yaml`, no bloco novo `custo`: o preço de um segmento em dólares, como no contrato da Infobip (`sms_unitario_usd`, US$ 0,0291), o câmbio para mostrar o custo em reais (`cambio_usd_brl`) e o orçamento mensal (`orcamento_mensal_usd`, US$ 100). Se o preço do SMS não estiver preenchido, o lembrete é enviado normalmente e o resumo do job avisa que o custo não foi medido. O SMS simulado (stub) não tem custo.
+
 ## [v2.2.0] (Vanessa + Claude) - 2026-10-15
 
 Esta versão reforça a proteção dos dados dos pacientes e passa a mostrar como o sistema está funcionando. O modelo de predição continua o mesmo da v2.1.0.

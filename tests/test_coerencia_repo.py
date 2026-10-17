@@ -272,6 +272,20 @@ def test_views_de_observabilidade_usam_o_fuso_da_clinica(monkeypatch):
         assert fusos == {fuso}, f"{nome} usa fuso(s) {fusos}, a clínica usa {fuso}"
 
 
+def test_bloco_de_custo_do_params_e_a_fonte_unica_dos_precos():
+    """O job lê `sms_unitario_usd` e o provisionamento do Grafana copia os três
+    números (Passo 8.9, P5). Vazio, texto ou zero no arquivo versionado
+    desligaria a medição de custo em produção: no job, só com aviso no resumo
+    do run, que ninguém lê todo dia."""
+    import config_projeto
+
+    custo = config_projeto.carregar_params()["custo"]
+    assert set(custo) == {"sms_unitario_usd", "cambio_usd_brl", "orcamento_mensal_usd"}
+    for chave, valor in custo.items():
+        assert isinstance(valor, int | float) and not isinstance(valor, bool), chave
+        assert valor > 0, chave
+
+
 def test_export_treino_sem_coluna_proibida_de_pii():
     """`src/export_treino.py` monta um CSV a partir de dados reais
     de produção -- mesmo critério de PII do schema (`test_migrations_sql_...`),
