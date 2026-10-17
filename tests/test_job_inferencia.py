@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import agenda_clinica
 import inference
 from config_projeto import fuso_da_clinica, hoje_na_clinica
 
@@ -67,6 +68,20 @@ class _ClienteMensageriaEspiao:
     def enviar_lembrete(self, telefone: str, mensagem: str) -> dict:
         self.chamadas.append(telefone)
         return {"status": "simulado", "telefone": telefone}
+
+
+def _referencia_e_consulta_d2() -> tuple[date, datetime]:
+    """Data de referência do job e consulta em D+2 às 10:00, num dia que a
+    clínica atende. Com `hoje + 2` fixo, os testes quebravam toda semana: na
+    sexta-feira D+2 é domingo, o contrato de features recusa o horário e a fila
+    inteira ia para a quarentena. A referência anda até três dias para frente;
+    a fila do job é relativa a ela, não ao relógio."""
+    for avanco in range(3):
+        referencia = hoje_na_clinica() + timedelta(days=avanco)
+        dia = referencia + timedelta(days=2)
+        if agenda_clinica.horario_valido(dia, HORA_DA_CONSULTA):
+            return referencia, datetime.combine(dia, HORA_DA_CONSULTA, tzinfo=fuso_da_clinica())
+    raise AssertionError("nenhum dia de atendimento em três dias seguidos")
 
 
 def _payload(idade, sexo, especialidade, distancia_km, dias, historico_noshow, data_hora):
@@ -128,9 +143,7 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
 
     _, mapa_esp = inference.carregar_modelo(MODEL_PATH)
     especialidade = sorted(mapa_esp)[0]
-    data_hora_d2 = datetime.combine(
-        hoje_na_clinica() + timedelta(days=2), HORA_DA_CONSULTA, tzinfo=fuso_da_clinica()
-    )
+    referencia, data_hora_d2 = _referencia_e_consulta_d2()
 
     payload_a = _payload(45, "F", especialidade, 5.5, 14, 1, data_hora_d2)
     payload_b = _payload(30, "M", especialidade, 3.0, 30, 0, data_hora_d2)
@@ -149,7 +162,7 @@ def test_job_processa_fila_d2_grava_predicoes_e_dispara_so_para_alto_risco(db, m
     agendamento_baixo = _criar_agendamento_d2(repositories, "EXT-JOB-BAIXO", payload_baixo)
 
     espiao = _ClienteMensageriaEspiao()
-    resultado = job.processar_dia(hoje_na_clinica(), cliente_mensageria=espiao)
+    resultado = job.processar_dia(referencia, cliente_mensageria=espiao)
 
     assert resultado["agendamentos_encontrados"] == 2
     assert resultado["predicoes_gravadas"] == 2
@@ -198,15 +211,13 @@ def test_job_nao_reprocessa_agendamento_ja_com_predicao(db):
 
     _, mapa_esp = inference.carregar_modelo(MODEL_PATH)
     especialidade = sorted(mapa_esp)[0]
-    data_hora_d2 = datetime.combine(
-        hoje_na_clinica() + timedelta(days=2), HORA_DA_CONSULTA, tzinfo=fuso_da_clinica()
-    )
+    referencia, data_hora_d2 = _referencia_e_consulta_d2()
     payload = _payload(50, "F", especialidade, 8.0, 20, 2, data_hora_d2)
     _criar_agendamento_d2(repositories, "EXT-JOB-REPETIDO", payload)
 
     espiao = _ClienteMensageriaEspiao()
-    primeira = job.processar_dia(hoje_na_clinica(), cliente_mensageria=espiao)
-    segunda = job.processar_dia(hoje_na_clinica(), cliente_mensageria=espiao)
+    primeira = job.processar_dia(referencia, cliente_mensageria=espiao)
+    segunda = job.processar_dia(referencia, cliente_mensageria=espiao)
 
     assert primeira["predicoes_gravadas"] == 1
     assert segunda["agendamentos_encontrados"] == 0
