@@ -446,6 +446,18 @@ def test_gatilho_do_job_d2_agendado_fechado_e_inerte_sem_o_token():
         """
     )
     assert papeis == []
+    # A fila do pg_net guarda o pedido com o cabeçalho Authorization (o token do
+    # GitHub) até ele sair: nenhum papel além do `postgres` lê o schema `net`.
+    leem_o_pg_net = _sql(
+        """
+        select papel
+        from unnest(array['anon', 'authenticated', 'service_role', 'grafana_leitura']) as papel
+        where has_schema_privilege(papel, 'net', 'usage')
+          and (has_table_privilege(papel, 'net.http_request_queue', 'select')
+               or has_table_privilege(papel, 'net._http_response', 'select'))
+        """
+    )
+    assert leem_o_pg_net == []
     assert _valor(
         "select count(*) from vault.decrypted_secrets where name like 'github_job_d2_%'"
     ) == "0"

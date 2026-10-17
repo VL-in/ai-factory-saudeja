@@ -37,6 +37,46 @@ create extension if not exists pg_net with schema extensions;
 grant usage on schema cron to postgres;
 grant all privileges on all tables in schema cron to postgres;
 
+-- O pg_net nasce aberto: `usage` no schema `net` e `select` nas tabelas dele
+-- chegam a todo papel (o teste de integracao do `grafana_leitura` pegou isso).
+-- `net.http_request_queue` guarda o pedido ate' ele sair, COM o cabecalho
+-- Authorization -- o token do GitHub --, e `net._http_response` guarda a
+-- resposta. O papel do Grafana tem login com senha e SQL livre: leria o token.
+-- Fica so' com o `postgres`, que e' quem chama `net.http_post` pelo pg_cron.
+revoke all on schema net from public, anon, authenticated, service_role;
+revoke all on all tables in schema net from public, anon, authenticated, service_role;
+revoke all on all sequences in schema net from public, anon, authenticated, service_role;
+revoke all on all functions in schema net from public, anon, authenticated, service_role;
+grant usage on schema net to postgres;
+grant execute on all functions in schema net to postgres;
+
+-- `revoke` sem privilegio para tirar so' avisa, nao falha. Se a concessao
+-- vier de um caminho que este arquivo nao alcanca, a migration para aqui
+-- (inteira, numa transacao) em vez de subir com o token legivel.
+do $$
+declare
+    papel text;
+begin
+    -- Alcancar uma tabela exige `usage` no schema E `select` nela, o mesmo
+    -- criterio do teste de integracao.
+    foreach papel in array array['anon', 'authenticated', 'service_role', 'grafana_leitura'] loop
+        if has_schema_privilege(papel, 'net', 'usage')
+            and (has_table_privilege(papel, 'net.http_request_queue', 'select')
+                 or has_table_privilege(papel, 'net._http_response', 'select')) then
+            raise exception 'o papel % ainda le as tabelas do pg_net', papel;
+        end if;
+    end loop;
+    -- Por nome, nao por assinatura: a lista de argumentos muda entre versoes.
+    if not has_schema_privilege('postgres', 'net', 'usage') or not exists (
+        select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'net' and p.proname = 'http_post'
+          and has_function_privilege('postgres', p.oid, 'execute')
+    ) then
+        raise exception 'o postgres nao alcanca net.http_post: o gatilho nao dispararia';
+    end if;
+end
+$$;
+
 -- Schema proprio, fora dos expostos pelo PostgREST e sem `usage` para ninguem
 -- alem do dono: a funcao le um segredo do Vault.
 create schema agendador;
