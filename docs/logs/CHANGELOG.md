@@ -33,7 +33,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
   - Em dev, o disparo manual só sai do branch `dev`. Ele cria cópias de verificação numa pasta própria, que notificam apenas o contact point de dev e são apagadas com `acao=remover`.
   - `acao=conferir` lista, sem alterar nada, quais métricas e rótulos chegaram ao stack.
 - **View `observabilidade.agendamentos_sem_processamento_por_dia`** (migration aditiva `20261017000000_observabilidade_alertas.sql`). Por dia de execução do job, conta os agendamentos que ele deveria ter processado e não processou. A view só traz a contagem, sem nenhuma linha por agendamento.
-- **O Supabase de produção pode disparar o job D-2 às 08h17** (migration aditiva `20261017010000_gatilho_job_d2.sql`, com `pg_cron` e `pg_net`). O agendamento do GitHub, num repositório fork, chegou com 3 a 9 horas de atraso entre 06/10 e 17/10, e o lembrete saía à tarde.
+- **O Supabase de produção pode disparar o job D-2 às 08h17** (migration aditiva `20261017010000_gatilho_job_d2.sql`, com as extensões `pg_cron` e `http`). O agendamento do GitHub, num repositório fork, chegou com 3 a 9 horas de atraso entre 06/10 e 17/10, e o lembrete saía à tarde.
   - O disparo só acontece depois de o token do GitHub ser cadastrado no Vault do Supabase de produção. Sem ele, como em dev e no CI, nada muda.
   - O agendamento do GitHub continua como reserva. Uma segunda execução no mesmo dia não envia SMS em dobro.
 

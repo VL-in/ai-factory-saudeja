@@ -24,58 +24,28 @@
 -- nada: o disparo diario existe so' em producao, sem nenhum `if` de ambiente no
 -- codigo. Em dev o job continua sendo so' por dispatch manual.
 --
--- A resposta do GitHub fica em `net._http_response` por 6 horas (204 = ok);
--- a regra P1 "fila D-2 nao processada" do Grafana e' quem avisa se o gatilho
--- parar (token expirado, por exemplo).
+-- Extensao `http` (sincrona), e nao `pg_net`. O pg_net enfileira o pedido em
+-- `net.http_request_queue` -- com o cabecalho Authorization, o token -- e o
+-- Supabase abre o schema `net` a todo papel, por concessao do `supabase_admin`
+-- que o `postgres` das migrations nao consegue revogar (tentado em 2026-10-17:
+-- o `revoke` passa em silencio e o acesso continua). O `grafana_leitura`, com
+-- login e SQL livre, leria o token. A `http` faz a chamada dentro da funcao e
+-- nao grava o pedido em tabela nenhuma; o teste de integracao do papel do
+-- Grafana confere que ele continua alcancando so' as views de agregados.
+--
+-- Resultado de cada execucao: `cron.job_run_details` (so' o `postgres` le). Status
+-- diferente de 2xx vira erro ali, com o codigo; a regra P1 "fila D-2 nao
+-- processada" do Grafana e' quem avisa se o gatilho parar (token expirado, por
+-- exemplo).
 
 create extension if not exists pg_cron with schema pg_catalog;
-create extension if not exists pg_net with schema extensions;
+create extension if not exists http with schema extensions;
 -- No Supabase, a extensao e' criada em nome do `supabase_admin`; o `postgres`
 -- (dono das migrations e de quem o pg_cron herda o papel ao rodar o comando)
 -- precisa destas concessoes para agendar (receita da documentacao do pg_cron
 -- no Supabase).
 grant usage on schema cron to postgres;
 grant all privileges on all tables in schema cron to postgres;
-
--- O pg_net nasce aberto: `usage` no schema `net` e `select` nas tabelas dele
--- chegam a todo papel (o teste de integracao do `grafana_leitura` pegou isso).
--- `net.http_request_queue` guarda o pedido ate' ele sair, COM o cabecalho
--- Authorization -- o token do GitHub --, e `net._http_response` guarda a
--- resposta. O papel do Grafana tem login com senha e SQL livre: leria o token.
--- Fica so' com o `postgres`, que e' quem chama `net.http_post` pelo pg_cron.
-revoke all on schema net from public, anon, authenticated, service_role;
-revoke all on all tables in schema net from public, anon, authenticated, service_role;
-revoke all on all sequences in schema net from public, anon, authenticated, service_role;
-revoke all on all functions in schema net from public, anon, authenticated, service_role;
-grant usage on schema net to postgres;
-grant execute on all functions in schema net to postgres;
-
--- `revoke` sem privilegio para tirar so' avisa, nao falha. Se a concessao
--- vier de um caminho que este arquivo nao alcanca, a migration para aqui
--- (inteira, numa transacao) em vez de subir com o token legivel.
-do $$
-declare
-    papel text;
-begin
-    -- Alcancar uma tabela exige `usage` no schema E `select` nela, o mesmo
-    -- criterio do teste de integracao.
-    foreach papel in array array['anon', 'authenticated', 'service_role', 'grafana_leitura'] loop
-        if has_schema_privilege(papel, 'net', 'usage')
-            and (has_table_privilege(papel, 'net.http_request_queue', 'select')
-                 or has_table_privilege(papel, 'net._http_response', 'select')) then
-            raise exception 'o papel % ainda le as tabelas do pg_net', papel;
-        end if;
-    end loop;
-    -- Por nome, nao por assinatura: a lista de argumentos muda entre versoes.
-    if not has_schema_privilege('postgres', 'net', 'usage') or not exists (
-        select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-        where n.nspname = 'net' and p.proname = 'http_post'
-          and has_function_privilege('postgres', p.oid, 'execute')
-    ) then
-        raise exception 'o postgres nao alcanca net.http_post: o gatilho nao dispararia';
-    end if;
-end
-$$;
 
 -- Schema proprio, fora dos expostos pelo PostgREST e sem `usage` para ninguem
 -- alem do dono: a funcao le um segredo do Vault.
@@ -91,6 +61,7 @@ as $$
 declare
     token text;
     repositorio text;
+    resposta extensions.http_response;
 begin
     select decrypted_secret into token
     from vault.decrypted_secrets where name = 'github_job_d2_token';
@@ -99,21 +70,29 @@ begin
     if token is null or repositorio is null then
         return;
     end if;
-    perform net.http_post(
-        url := 'https://api.github.com/repos/' || repositorio
+    perform extensions.http_set_curlopt('CURLOPT_TIMEOUT', '15');
+    resposta := extensions.http((
+        'POST',
+        'https://api.github.com/repos/' || repositorio
             || '/actions/workflows/job_d2.yml/dispatches',
-        body := jsonb_build_object(
+        array[
+            extensions.http_header('Authorization', 'Bearer ' || token),
+            extensions.http_header('Accept', 'application/vnd.github+json'),
+            extensions.http_header('X-GitHub-Api-Version', '2022-11-28'),
+            extensions.http_header('User-Agent', 'saudeja-pg-cron')
+        ],
+        'application/json',
+        jsonb_build_object(
             'ref', 'main',
             'inputs', jsonb_build_object('ambiente', 'production')
-        ),
-        headers := jsonb_build_object(
-            'Authorization', 'Bearer ' || token,
-            'Accept', 'application/vnd.github+json',
-            'X-GitHub-Api-Version', '2022-11-28',
-            'User-Agent', 'saudeja-pg-cron'
-        ),
-        timeout_milliseconds := 10000
-    );
+        )::text
+    )::extensions.http_request);
+    -- 204 e' o sucesso do dispatch. O corpo de erro do GitHub ("Bad
+    -- credentials", "Not Found") nao traz o token.
+    if resposta.status not between 200 and 299 then
+        raise exception 'dispatch do job D-2 recusado pelo GitHub: HTTP % %',
+            resposta.status, left(coalesce(resposta.content, ''), 200);
+    end if;
 end
 $$;
 

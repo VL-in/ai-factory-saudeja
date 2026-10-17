@@ -58,7 +58,7 @@ groups:
           description: >-
             Nenhuma execução `job_d2` com status ok em eventos_app desde 00h. Os
             lembretes de amanhã a D+2 não saíram. Conferir o Actions (job_d2.yml),
-            o Healthchecks do job D-2 e o gatilho do pg_cron (net._http_response no
+            o Healthchecks do job D-2 e o gatilho do pg_cron (cron.job_run_details no
             Supabase de produção). Resolve sozinho quando o job rodar ou à meia-noite.
 
       - uid: saudeja-fila-inteira-em-quarentena

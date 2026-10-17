@@ -433,7 +433,7 @@ def test_agendamento_criado_depois_da_execucao_e_da_proxima(banco):
 def test_gatilho_do_job_d2_agendado_fechado_e_inerte_sem_o_token():
     """O pg_cron agenda o disparo; a função não é executável por nenhum papel
     da API nem pelo do Grafana; e, sem o token no Vault (o caso do local, do CI
-    e do Supabase de dev), chamá-la não enfileira requisição nenhuma."""
+    e do Supabase de dev), chamá-la não faz requisição nenhuma."""
     assert _sql("select schedule, command from cron.job where jobname = 'job-d2'") == [
         ["17 11 * * *", "select agendador.disparar_job_d2()"]
     ]
@@ -446,22 +446,14 @@ def test_gatilho_do_job_d2_agendado_fechado_e_inerte_sem_o_token():
         """
     )
     assert papeis == []
-    # A fila do pg_net guarda o pedido com o cabeçalho Authorization (o token do
-    # GitHub) até ele sair: nenhum papel além do `postgres` lê o schema `net`.
-    leem_o_pg_net = _sql(
-        """
-        select papel
-        from unnest(array['anon', 'authenticated', 'service_role', 'grafana_leitura']) as papel
-        where has_schema_privilege(papel, 'net', 'usage')
-          and (has_table_privilege(papel, 'net.http_request_queue', 'select')
-               or has_table_privilege(papel, 'net._http_response', 'select'))
-        """
-    )
-    assert leem_o_pg_net == []
     assert _valor(
         "select count(*) from vault.decrypted_secrets where name like 'github_job_d2_%'"
     ) == "0"
-    antes = _valor("select count(*) from net.http_request_queue")
-    _sql("select agendador.disparar_job_d2()")
-    assert _valor("select count(*) from net.http_request_queue") == antes
+    # Sem os segredos, a função volta antes da chamada HTTP: termina na hora
+    # (a chamada ao GitHub levaria o timeout de rede, não 2 s) e sem erro.
+    _sql("set statement_timeout = '2s'; select agendador.disparar_job_d2()")
+    # A chamada é síncrona (extensão `http`) e não usa o pg_net, que guardaria o
+    # pedido, com o token no cabeçalho, numa tabela legível pelo Grafana.
+    corpo = _valor("select prosrc from pg_proc where proname = 'disparar_job_d2'") or ""
+    assert "extensions.http(" in corpo and "net." not in corpo
 
