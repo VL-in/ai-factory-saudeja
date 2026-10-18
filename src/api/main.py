@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
     # `configurar_logging` (além do que já nasce com ele).
     telemetria.configurar_telemetria(telemetria.SERVICO_API)
     configurar_logging()
-    # Span por request e `http.server.request.duration` (P3); no-op com a
+    # Span por request e `http.server.request.duration`; no-op com a
     # telemetria desligada. O `registrar_latencia` abaixo roda dentro do span do
     # request, e o evento de `/predict` leva o trace_id como `id_execucao`.
     telemetria.instrumentar_fastapi(app)

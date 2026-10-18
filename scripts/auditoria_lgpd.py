@@ -50,7 +50,7 @@ def auditar_linha(linha: str) -> list[tuple[str, str]]:
     resolve de graça o falso positivo da contagem de dígitos (um `duracao_ms`
     não é telefone, e a substituição devolve o trecho intacto).
 
-    Valor já redigido também não é achado: `nome=[REDIGIDO]` continua casando
+    Valor já redigido também não é achado: `nome=<REDIGIDO>` continua casando
     a regra de chave -- é a chave que ela procura --, mas é justamente a prova
     de que a blindagem funcionou.
     """
@@ -127,7 +127,7 @@ def main(argv=None) -> int:
     if achados:
         print(
             f"\n[falha] {len(achados)} possível(is) ocorrência(s) de PII -- "
-            "SLO §6 exige 0. Ver docs/LGPD.md.",
+            "SLO §6 exige 0. Ver docs/LGPD/LGPD.md.",
             file=sys.stderr,
         )
         return 1

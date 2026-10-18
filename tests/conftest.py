@@ -62,7 +62,7 @@ def eventos_capturados(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def telemetria_sem_exportar(monkeypatch):
-    """Nenhum teste exporta telemetria para o Grafana Cloud (Passo 8.9).
+    """Nenhum teste exporta telemetria para o Grafana Cloud.
 
     Mesmo motivo da fixture de cima: `config_projeto` carrega o `.env` local
     no import, e o `.env` de quem desenvolve pode ter o endpoint OTLP real.
@@ -84,6 +84,18 @@ def canario_sem_desligamento_do_env(monkeypatch):
     máquina de quem desenvolve e passavam no CI, que não tem `.env`. Quem testa
     o desligamento define a variável no próprio teste."""
     monkeypatch.delenv("CANARIO_DESLIGADO", raising=False)
+
+
+CHAVE_DO_IDENTIFICADOR_DE_TESTE = "i" * 32
+
+
+@pytest.fixture(autouse=True)
+def chave_do_identificador_de_teste(monkeypatch):
+    """O cadastro não roda sem `PACIENTE_CHAVE_IDENTIFICADOR` (ADR-011). Uma
+    chave fixa de teste, no lugar da que o `.env` local possa ter: a suíte
+    nunca calcula identificador com a chave real. Quem testa a chave ausente
+    a remove no próprio teste."""
+    monkeypatch.setenv("PACIENTE_CHAVE_IDENTIFICADOR", CHAVE_DO_IDENTIFICADOR_DE_TESTE)
 
 
 class TelemetriaEmMemoria:

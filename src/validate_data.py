@@ -25,7 +25,7 @@ E dois registros **não bloqueantes**: linhas fora do domínio do treino (o
 contrato manda marcar, nunca rejeitar) e PSI por feature entre a produção e a
 semente, que vira alerta no resumo do re-treino.
 
-**Completude de rótulo não mora aqui**, ao contrário do que o plano listava:
+**Completude de rótulo não mora aqui**, embora seja uma checagem de dados:
 este stage lê o CSV, que por construção só contém consultas com desfecho --
 a consulta passada ainda `agendado` só é visível no banco. Ela é contada no
 export (`src/export_treino.py`), que é quem fala com o Supabase.
@@ -46,6 +46,7 @@ import json
 import math
 import os
 import sys
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -131,9 +132,12 @@ def _checar_schema(df: pd.DataFrame, relatorio: Relatorio) -> bool:
     return not nulos and not rotulos
 
 
-def _checar_dominio(df: pd.DataFrame, relatorio: Relatorio, especialidades: list[str]) -> None:
+def _checar_dominio(
+    df: pd.DataFrame, relatorio: Relatorio, especialidades: list[str]
+) -> set[str]:
     """Regra de negócio linha a linha (bloqueia) e, para quem passa, a contagem
-    de campos fora do domínio do treino (só registra)."""
+    de campos fora do domínio do treino (só registra). Devolve o `id_consulta`
+    das linhas recusadas, que o PSI deixa de fora."""
     colunas = list(contrato_features.CAMPOS_DO_PAYLOAD)
     violacoes: list[tuple[str, contrato_features.ViolacaoDoContrato]] = []
     fora: dict[str, int] = {}
@@ -157,6 +161,7 @@ def _checar_dominio(df: pd.DataFrame, relatorio: Relatorio, especialidades: list
             f"domínio: {len(violacoes)} linha(s) fora da regra de negócio {por_regra} -- "
             f"primeiras: {[i for i, _ in violacoes[:5]]}"
         )
+    return {identificador for identificador, _ in violacoes}
 
 
 def _checar_distribuicao(df: pd.DataFrame, relatorio: Relatorio, params: dict[str, Any]) -> None:
@@ -225,8 +230,17 @@ def _com_features_temporais(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _registrar_psi(
-    df: pd.DataFrame, semente: pd.DataFrame | None, relatorio: Relatorio, limite: float
+    df: pd.DataFrame,
+    semente: pd.DataFrame | None,
+    relatorio: Relatorio,
+    limite: float,
+    recusadas: Collection[str] = (),
 ) -> None:
+    """PSI só sobre as linhas que passaram na regra de negócio (`recusadas`
+    fica de fora). Com uma data ilegível ou um número em texto no dataset, o
+    cálculo levantava exceção: o stage morria sem escrever o relatório -- que
+    é justamente o que diz por que o dataset foi barrado --, e a mensagem da
+    exceção levava o valor cru ao log público do re-treino."""
     if semente is None:
         relatorio.resumo["psi"] = None
         relatorio.alertas.append("PSI não calculado: semente indisponível")
@@ -234,11 +248,13 @@ def _registrar_psi(
     ids_semente = set(semente["id_consulta"].astype(str))
     producao = df[~df["id_consulta"].astype(str).isin(ids_semente)]
     relatorio.resumo["linhas_de_producao"] = len(producao)
-    if producao.empty:
+    producao = producao[~producao["id_consulta"].astype(str).isin(recusadas)]
+    referencia = semente[~semente["id_consulta"].astype(str).isin(recusadas)]
+    if producao.empty or referencia.empty:
         relatorio.resumo["psi"] = None
         return
 
-    ref = _com_features_temporais(semente)
+    ref = _com_features_temporais(referencia)
     cur = _com_features_temporais(producao)
     valores = {}
     for feature in (*FEATURES_NUMERICAS_PSI, *FEATURES_CATEGORICAS_PSI):
@@ -265,9 +281,9 @@ def validar(
     relatorio = Relatorio()
     if not _checar_schema(df, relatorio):
         return relatorio
-    _checar_dominio(df, relatorio, list(params["cadastro"]["especialidades"]))
+    recusadas = _checar_dominio(df, relatorio, list(params["cadastro"]["especialidades"]))
     _checar_distribuicao(df, relatorio, params)
-    _registrar_psi(df, semente, relatorio, float(params["dados"]["psi_alerta"]))
+    _registrar_psi(df, semente, relatorio, float(params["dados"]["psi_alerta"]), recusadas)
     return relatorio
 
 

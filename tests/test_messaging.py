@@ -100,6 +100,24 @@ def test_infobip_client_levanta_erro_proprio_em_falha_http():
         cliente.enviar_lembrete(telefone="5511987654321", mensagem="Confirma?")
 
 
+def test_infobip_fora_do_ar_vira_erro_proprio_so_com_a_classe():
+    """Timeout ou conexão recusada: o job conta como falha de envio daquele
+    paciente e segue a fila. A mensagem leva só a classe do erro de rede --
+    a do httpx pode citar a requisição, e com ela o destino."""
+    telefone = "5511987654321"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout(f"sem resposta ao enviar para {telefone}", request=request)
+
+    cliente = _cliente_infobip_com_transporte(handler)
+
+    with pytest.raises(ErroEnvioInfobip) as capturado:
+        cliente.enviar_lembrete(telefone=telefone, mensagem="Confirma?")
+
+    assert "ConnectTimeout" in str(capturado.value)
+    assert telefone not in str(capturado.value)
+
+
 def test_mensagem_de_erro_nao_carrega_o_corpo_da_resposta():
     """Blindagem LGPD do log. A Infobip ecoa o payload enviado no corpo de
     erro -- com o `to`, que é o telefone do paciente. Antes da blindagem essa string

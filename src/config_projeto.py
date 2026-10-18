@@ -16,6 +16,7 @@ tendo precedência -- é assim que o dvc.yaml aponta os caminhos para dentro
 do bind mount do container.
 """
 import os
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -71,13 +72,31 @@ def para_horario_da_clinica(valor: str | datetime) -> datetime:
     return convertido.astimezone(fuso_da_clinica())
 
 
+_FRACAO_DE_SEGUNDO = re.compile(r"\.(\d{1,6})(?=[+-]|$)")
+
+
+def ler_timestamptz(valor: str) -> datetime:
+    """`timestamptz` no formato que o PostgREST devolve.
+
+    O PostgREST corta os zeros finais da fração de segundo
+    ("...T12:00:00.12345+00:00"), e o `fromisoformat` do Python 3.10 só aceita
+    3 ou 6 dígitos. Com `now()`, ~1 em cada 10 valores termina em zero, então a
+    leitura direta falha só às vezes. A fração é completada antes da leitura.
+
+    Fica aqui, e não em `db.repositories`, porque `consentimento` lê o mesmo
+    formato sem banco e não deve importar o cliente do Supabase."""
+    return datetime.fromisoformat(
+        _FRACAO_DE_SEGUNDO.sub(lambda m: "." + m.group(1).ljust(6, "0"), valor)
+    )
+
+
 RETENCAO_DADOS_DERIVADOS_PADRAO_DIAS = 90
 
 
 def retencao_dados_derivados_dias() -> int:
     """Janela de retenção de `predicoes` e `mensagens_disparadas`
     (`RETENCAO_DADOS_DERIVADOS_DIAS`, default 90) -- princípio da necessidade
-    da LGPD (Art. 6º, III), detalhado em `docs/LGPD.md` §5.
+    da LGPD (Art. 6º, III), detalhado em `docs/LGPD/LGPD.md` §5.
 
     Só dado **derivado**: a probabilidade que o modelo calculou e o registro de
     que uma mensagem foi (ou não) disparada. `pacientes`/`agendamentos` ficam

@@ -137,13 +137,44 @@ def test_sem_producao_nao_ha_psi():
     assert relatorio.resumo["psi"] is None
 
 
-def _rodar_main(tmp_path, monkeypatch, df):
+def _producao_com_valor_ilegivel(coluna, valor):
+    producao = _dataset(n=60, inicio_id=10_000).astype({coluna: object})
+    producao.loc[0, coluna] = valor
+    return producao
+
+
+@pytest.mark.parametrize(
+    "coluna,valor",
+    [("data_hora_agendada", "ontem às três"), ("idade", "quarenta e cinco")],
+)
+def test_linha_de_producao_ilegivel_bloqueia_sem_derrubar_o_psi(coluna, valor):
+    """Uma data ou um número ilegível numa linha de produção derrubava o PSI
+    com exceção: o stage morria sem o relatório que diz por que barrou, e a
+    mensagem da exceção levava o valor cru ao log público do re-treino."""
+    semente = _dataset()
+    df = pd.concat([semente, _producao_com_valor_ilegivel(coluna, valor)], ignore_index=True)
+
+    relatorio = validate_data.validar(df, semente=semente)
+
+    assert not relatorio.aprovado
+    assert any(coluna in b and "10000" in b for b in relatorio.bloqueios)
+    assert not any(valor in b for b in relatorio.bloqueios)
+    assert relatorio.resumo["linhas_de_producao"] == 60
+    # Sobre as 59 linhas de produção que passaram no contrato.
+    assert relatorio.resumo["psi"] is not None
+
+
+def _rodar_main(tmp_path, monkeypatch, df, semente=None):
     dados = tmp_path / "consultas-treino.csv"
     df.to_csv(dados, index=False)
+    caminho_semente = dados
+    if semente is not None:
+        caminho_semente = tmp_path / "consultas-historicas.csv"
+        semente.to_csv(caminho_semente, index=False)
     selo = tmp_path / "interim" / "dados_validados.json"
     relatorio = tmp_path / "interim" / "relatorio_dados.json"
     monkeypatch.setattr(validate_data, "DATA_PATH", str(dados))
-    monkeypatch.setattr(validate_data, "SEMENTE_PATH", str(dados))
+    monkeypatch.setattr(validate_data, "SEMENTE_PATH", str(caminho_semente))
     monkeypatch.setattr(validate_data, "SELO_PATH", str(selo))
     monkeypatch.setattr(validate_data, "RELATORIO_PATH", str(relatorio))
     return validate_data.main(), selo, relatorio
@@ -169,3 +200,21 @@ def test_main_barrado_nao_escreve_selo_mas_escreve_o_relatorio(tmp_path, monkeyp
     assert codigo == 1
     assert not selo.exists()
     assert json.loads(relatorio.read_text(encoding="utf-8"))["aprovado"] is False
+
+
+def test_main_com_data_ilegivel_na_producao_escreve_o_relatorio(tmp_path, monkeypatch):
+    """O caso que o gate mais precisa explicar no resumo do run: o dataset
+    barrado por uma linha que nem se deixa ler."""
+    semente = _dataset()
+    df = pd.concat(
+        [semente, _producao_com_valor_ilegivel("data_hora_agendada", "ontem às três")],
+        ignore_index=True,
+    )
+
+    codigo, selo, relatorio = _rodar_main(tmp_path, monkeypatch, df, semente=semente)
+
+    assert codigo == 1
+    assert not selo.exists()
+    conteudo = json.loads(relatorio.read_text(encoding="utf-8"))
+    assert conteudo["aprovado"] is False
+    assert "ontem às três" not in json.dumps(conteudo, ensure_ascii=False)

@@ -1,6 +1,6 @@
 # SaudeJa — Classificador de no-show em agendamentos médicos
 
-> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.3.0](docs/logs/CHANGELOG.md). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
+> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.4.0](docs/logs/CHANGELOG.md). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
 
 Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia lembrete por SMS só para eles, dois dias antes do atendimento.
 
@@ -125,7 +125,7 @@ Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase t
 
 ### Proteções implementadas
 
-- **CPF não é gravado**: a tela converte o CPF em hash sha256 antes de chegar ao banco.
+- **CPF não é gravado**: a tela converte o CPF num identificador HMAC, com chave secreta guardada fora do banco, antes de chegar a ele. O sha256 sem chave, usado até então, se revertia em CPF por força bruta ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)).
 - **Nome só na fila do dia**: não vai para log, API, dataset de treino, SMS nem LLM, e cada uma dessas saídas tem um teste ([ADR-007](docs/adr/adr-007-nome-do-paciente.md)).
 - **Log sem dado pessoal**: filtro de redação em todos os handlers do processo, mais uma guarda estática sobre o código ([`src/logging_config.py`](src/logging_config.py)).
 - **Consultas ao Supabase sem dado pessoal na URL**: um teste barra filtros por CPF, telefone, nome ou data de nascimento, porque a URL fica no log do provedor.
@@ -214,7 +214,7 @@ supabase start    # sobe Postgres + Studio via Docker e aplica supabase/migratio
 supabase status   # mostra a URL e a chave secreta para o .env
 ```
 
-Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO` (ver `.env.example`); sem ela, o agendamento funciona e só a base de treino deixa de receber dados. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
+Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO` (ver `.env.example`); sem ela, o agendamento funciona e só a base de treino deixa de receber dados. O cadastro precisa de `PACIENTE_CHAVE_IDENTIFICADOR`, uma chave diferente da do treino ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)); sem ela, o cadastro falha. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
 
 ### 4. Subir a aplicação
 
@@ -468,7 +468,7 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
 - [x] Etapa 3: arquitetura C4 + ADR-002 + repositório
 - [x] Etapa 4: produto deployável — inferência, SHAP, API, interface, banco, job D-2, mensageria e blindagem LGPD
 - [x] Etapa 5: CI/CD, re-treino mensal com gate, canário do modelo e observabilidade com alertas
-- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 a v2.3.0)
+- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 a v2.4.0)
 - [x] Etapa 7: operação e ensaios
   - [x] Ensaio de rollback de código
 - [ ] Adequação à LGPD ([pendências](#pendências))

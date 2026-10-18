@@ -23,11 +23,11 @@ bases_legais:
   - finalidade: "Identificação do paciente e execução do agendamento (em nome da clínica-cliente, controladora)"
     base: "execução de contrato"
     artigo: "Art. 7, V"
-    dados: ["id_paciente_externo (hash sha256 do CPF)", "sexo", "nome_completo", "data_nascimento"]
+    dados: ["id_paciente_externo (HMAC com chave do hash do CPF)", "sexo", "nome_completo", "data_nascimento"]
   - finalidade: "Identificação do paciente no atendimento realizado pela clínica (em nome da clínica-cliente, controladora)"
     base: "tutela da saúde"
     artigo: "Art. 7, VIII"
-    dados: ["id_paciente_externo (hash sha256 do CPF)", "sexo", "nome_completo", "data_nascimento"]
+    dados: ["id_paciente_externo (HMAC com chave do hash do CPF)", "sexo", "nome_completo", "data_nascimento"]
   - finalidade: "Contato com o paciente sobre o atendimento agendado, inclusive o lembrete de confirmação por SMS (só data e hora, sem especialidade)"
     base: "execução de contrato"
     artigo: "Art. 7, V"
@@ -110,7 +110,7 @@ e) os elementos do Quadro 1A só mudam com nova aprovação da clínica. Uma fea
 
 ## 2 INVENTÁRIO E CLASSIFICAÇÃO DOS DADOS
 
-O schema foi desenhado com minimização de dados desde a origem ([architecture.md](../architecture.md), seção 4.1). O CPF nunca é persistido: a tela de cadastro o converte no hash sha256 que identifica o paciente (`src/ui/logic.py::_id_paciente_externo_de_cpf`). O nome completo é gravado desde 28/09/2026 ([ADR-007](../adr/adr-007-nome-do-paciente.md)); ver subseção 2.1.
+O schema foi desenhado com minimização de dados desde a origem ([architecture.md](../architecture.md), seção 4.1). O CPF nunca é persistido: a tela de cadastro o converte no identificador do paciente, um HMAC com chave secreta do hash sha256 do CPF (`src/id_paciente.py`, [ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)). O nome completo é gravado desde 28/09/2026 ([ADR-007](../adr/adr-007-nome-do-paciente.md)); ver subseção 2.1.
 
 **Critério de classificação.** Idade, sexo e distância, isolados, são dados pessoais comuns. A sensibilidade vem de dois elementos:
 
@@ -125,7 +125,7 @@ Por isso a classificação é feita pelo registro, não pela coluna isolada: o a
 
 | Dado | Local | Classificação | Observação |
 |---|---|---|---|
-| `id_paciente_externo` | `pacientes` (Supabase) | Pessoal pseudonimizado (arts. 12 e 13) | Hash sha256 do CPF. Não é anônimo: pode ser revertido por força bruta sobre o espaço de CPFs válidos |
+| `id_paciente_externo` | `pacientes` (Supabase) | Pessoal pseudonimizado (arts. 12 e 13) | `hmac1:` + HMAC-SHA256 do hash sha256 do CPF, com a chave `PACIENTE_CHAVE_IDENTIFICADOR`, guardada fora do banco ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)). Sem a chave, não se reverte em CPF. Linha gravada antes do ADR-011 guarda o sha256 sem chave, reversível por força bruta sobre os CPFs válidos, até ser migrada por `scripts/migrar_id_paciente.py` |
 | `sexo`, `data_nascimento` | `pacientes` | Pessoal | A idade é calculada na hora da predição e não é gravada |
 | `telefone` | `pacientes` | Pessoal, identificador direto | Exceção à minimização (subseção 2.1) |
 | `nome_completo` | `pacientes` | Pessoal, identificador direto | Exceção à minimização (subseção 2.1) |
@@ -412,7 +412,7 @@ O titular paciente exerce seus direitos pela clínica, que aciona a SaúdeJá. S
 
 | Direito | Como é atendido | Limitação |
 |---|---|---|
-| Confirmação e acesso (I, II) | Banco da clínica: consulta pelo `id_paciente_externo`, recalculado a partir do CPF. Base de treino: pelo pseudônimo HMAC, recalculado a partir do CPF com a chave | Busca por nome não identifica o titular com segurança (homônimos, grafia). Sem ferramenta dedicada para o acesso aos dados de treino |
+| Confirmação e acesso (I, II) | Banco da clínica: consulta pelo `id_paciente_externo`, recalculado a partir do CPF pela clínica, que guarda a chave do identificador (`src/id_paciente.py`, ADR-011). Base de treino: pelo pseudônimo HMAC, recalculado a partir do CPF com a chave | Busca por nome não identifica o titular com segurança (homônimos, grafia). Sem ferramenta dedicada para o acesso aos dados de treino |
 | Correção (III) | Alteração direta em `pacientes` ou `agendamentos` | — |
 | Portabilidade (V) | Export das linhas do titular | Sem ferramenta dedicada |
 | Eliminação (VI) | Banco da clínica: pedido em `pedidos_titular`, registrado e confirmado pela clínica na aba "Pedidos do titular" e executado pelo workflow de purga (`delete` em `pacientes`; o cascade remove agendamentos, predições e mensagens). Base de treino: pedido em `treino.pedidos_titular`, encaminhado pela clínica ou registrado pelo encarregado, executado pelo workflow na ordem DVC → base de treino → pedido. Os eventos de consentimento ficam 365 dias como prova ([ADR-010](../adr/adr-010-base-de-treino-separada.md)) | Os dois pedidos são independentes: a eliminação na clínica não apaga os dados de treino, salvo se o paciente pedir as duas |
@@ -431,7 +431,7 @@ O quadro lista apenas medidas implementadas e verificadas (art. 46).
 | Medida | Onde | Garantia |
 |---|---|---|
 | Minimização no schema | `supabase/migrations/` | CPF e e-mail de paciente não têm coluna. `telefone` e `nome_completo` são autorizados só na migration que os introduziu (`test_coerencia_repo.py::test_migrations_sql_sem_coluna_proibida_de_pii`) |
-| Pseudonimização | `src/ui/logic.py::_id_paciente_externo_de_cpf`; `src/pseudonimo.py` | O CPF vira hash sha256 antes de chegar ao banco da clínica. Na base de treino, titular e consulta são HMAC-SHA256 com chave secreta, que não se reverte sem a chave (`tests/test_pseudonimo.py`) |
+| Pseudonimização | `src/id_paciente.py`; `src/pseudonimo.py` | O CPF vira HMAC-SHA256 do hash dele, com chave secreta, antes de chegar ao banco da clínica (`tests/test_id_paciente.py`). Na base de treino, titular e consulta são HMAC-SHA256 com chave secreta, que não se reverte sem a chave (`tests/test_pseudonimo.py`) |
 | Base de treino fechada | Migration `20261011000000_schema_treino.sql` | Schema `treino` não exposto ao PostgREST e sem acesso direto de nenhum papel; só funções `treino_*`, executáveis só pela chave secreta (`tests/test_db_treino.py`). Linha de treino recusada pelo banco sem consentimento vigente |
 | Export sem o banco da clínica | `src/export_treino.py` | O export importa só o repositório da base de treino (`test_coerencia_repo.py::test_export_de_treino_le_so_a_base_de_treino`) |
 | Idade não persistida | `src/features.py::calcular_idade` | Guarda-se `data_nascimento`; a idade é calculada na predição |
@@ -538,6 +538,7 @@ Cada item deve constar do slide de risco do pitch.
 32. **Mesma chave secreta para os dois schemas.** O re-treino recebe a chave que também lê o banco da clínica. A fronteira é garantida por código e teste (o export só importa o repositório da base de treino), não por credencial. Um projeto Supabase próprio para o treino fecharia isso, ao custo do plano Pro.
 33. **A caixa desmarcada revoga e apaga.** Quem consentiu e esquece de marcar a caixa num agendamento novo perde os dados de treino. O aviso está nos Termos de uso (seção 5), não na tela, por decisão de 10/10/2026. A tela não pode mostrar o consentimento vigente, porque o revelaria a quem digitasse um CPF alheio.
 34. **Chave do pseudônimo.** Um vazamento reabre a ligação entre o CPF e as linhas de treino, por força bruta sobre os CPFs. A chave fica só nos secrets do Space e do job D-2 e no `.env` do encarregado, e não roda. Vazamento é incidente (seção 10). A consulta do consentimento vigente, a cada agendamento, envia o pseudônimo também de quem não consentiu, sem dado da consulta e no corpo da RPC.
+35. **Chave do identificador do paciente** ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)). Um vazamento da `PACIENTE_CHAVE_IDENTIFICADOR` junto com a tabela `pacientes` reabre a ligação com o CPF, por força bruta. A perda da chave é pior para a operação: o paciente que volta não reencontra a linha dele, ganha cadastro novo e o histórico de faltas recomeça do zero. A chave é da clínica, controladora: ela a gera e guarda a cópia oficial; a SaúdeJá a tem só no secret do Space, como operadora, e no `.env` do encarregado durante a migração. É separada da chave do pseudônimo do treino e não roda. **Pendência contratual**: o contrato entre a clínica e a SaúdeJá precisa prever a entrega da chave por canal seguro e a eliminação do secret do Space no fim do contrato.
 
 ## 10 INCIDENTES
 
@@ -586,6 +587,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 10/10/2026 | Frontmatter, 1, 1A, 2, 3, 4, 4.2, 5, 5.1, 6, 7, 8.1, 9, 9.5 | Agendamento sem consentimento e base de treino separada, controlada pela SaúdeJá ([ADR-010](../adr/adr-010-base-de-treino-separada.md)): schema `treino` fechado, pseudônimo HMAC com chave secreta, export só da base de treino, sincronização diária do desfecho, caixa de ciência da política e dos termos no lugar do consentimento da transferência, workflow de purga implementado; itens 4, 19 e 20 encerrados; riscos 30 a 34 |
 | 11/10/2026 | Frontmatter, 11 | Contato do controlador, canal dos titulares e encarregado padronizados (Vanessa Lin, `v.lin@gmail.com`); data de atualização da política corrigida para a revisão 0.2 |
 | 14/10/2026 | Frontmatter, 9.1 | SAS de exclusão da purga assinada com a key2 e presa à stored access policy `purga-lgpd`, revogável sem rotacionar chave (item 12) |
+| 18/10/2026 | Frontmatter, 2, 6, 7, 9.5 | Identificador do paciente no banco da clínica passa do sha256 do CPF ao HMAC com chave própria, sob guarda da clínica, com migração das linhas existentes ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)); item 35 |
 
 Fonte: elaboração própria (2026).
 

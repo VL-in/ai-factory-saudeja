@@ -1,6 +1,5 @@
 """
-SaúdeJá — alertas, políticas de notificação e painéis do Grafana como código
-(Passo 8.9, P7).
+SaúdeJá — alertas, políticas de notificação e painéis do Grafana como código.
 
 O que está no git (`infra/grafana/`):
 
@@ -25,7 +24,7 @@ próprio Grafana): o valor vem de `params.yaml` (blocos `observabilidade` e
 o resto do sistema não divergirem. Marcador que ocupa a string inteira vira
 número; marcador desconhecido é erro. A lista está em `constantes()`.
 
-Dois ambientes num stack só (decisão 8 do Passo 8.9):
+Dois ambientes num stack só, e só produção alerta:
 
 - `prod`: pasta "SaúdeJá", regras sobre `deployment_environment="prod"` e a
   fonte Supabase de produção, rotas na árvore padrão de notificação. Roda no
@@ -69,6 +68,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import alerta_observabilidade  # noqa: E402
 import logging_config  # noqa: E402
 import observabilidade  # noqa: E402
+from saida_actions import anexar_ao_resumo, imprimir  # noqa: E402
 
 DIR_GRAFANA = REPO_ROOT / "infra" / "grafana"
 DIR_ALERTAS = DIR_GRAFANA / "alertas"
@@ -99,8 +99,8 @@ class Ambiente:
     pasta_titulo: str
     sufixo_uid: str
     prefixo_titulo: str
-    # Nome do check do Synthetic Monitoring (feito à mão na P6, fora deste
-    # script): vira o rótulo `job` das métricas da sonda.
+    # Nome do check do Synthetic Monitoring (criado à mão no Grafana, fora
+    # deste script): vira o rótulo `job` das métricas da sonda.
     check_sm: str
 
 
@@ -641,9 +641,9 @@ def remover(grafana: Grafana, ambiente: Ambiente) -> list[str]:
 
 def conferir(grafana: Grafana, valores: dict[str, Any]) -> list[str]:
     """Só leitura: as métricas e os rótulos de que as regras dependem chegaram
-    ao Mimir e ao Loki? Responde a pergunta do plano sobre
-    `deployment_environment` (promovido a rótulo pelo Grafana Cloud, ou só em
-    `target_info`) com o que o stack de fato guarda nos últimos 14 dias."""
+    ao Mimir e ao Loki? Diz se `deployment_environment` virou rótulo no
+    Grafana Cloud ou ficou só em `target_info` -- as regras filtram por ele --
+    com o que o stack de fato guarda nos últimos 14 dias."""
     seletor = urllib.parse.quote('{__name__=~"saudeja_.+"}', safe="")
     mimir = f"/api/datasources/proxy/uid/{valores['DS_MIMIR']}/api/v1/label"
     _, nomes = grafana.pedir("GET", f"{mimir}/__name__/values?match[]={seletor}")
@@ -665,12 +665,15 @@ def conferir(grafana: Grafana, valores: dict[str, Any]) -> list[str]:
         return sorted(resposta.get("data") or []) if isinstance(resposta, dict) else []
 
     def series_de(resposta: Any) -> list[str]:
-        resultado = ((resposta or {}).get("data") or {}).get("result") or []
+        # Corpo que não é JSON chega como texto (`Grafana.pedir`): a checagem
+        # vem antes do `.get`, que num texto levantaria AttributeError.
+        if not isinstance(resposta, dict):
+            return []
+        resultado = (resposta.get("data") or {}).get("result") or []
         return sorted(
             f"{s['metric'].get('service_name')}/{s['metric'].get('deployment_environment')}"
             f"={s['value'][1]}"
             for s in resultado
-            if isinstance(resposta, dict)
         )
 
     usadas = sorted(
@@ -715,11 +718,8 @@ def _cliente() -> Grafana:
 
 def _publicar(titulo: str, linhas: list[str]) -> None:
     for linha in linhas:
-        print(f"[ok] {linha}")
-    destino = os.environ.get("GITHUB_STEP_SUMMARY")
-    if destino:
-        with open(destino, "a", encoding="utf-8") as f:
-            f.write(f"### {titulo}\n\n" + "".join(f"- {linha}\n" for linha in linhas))
+        imprimir(f"[ok] {linha}")
+    anexar_ao_resumo(f"### {titulo}\n\n" + "\n".join(f"- {linha}" for linha in linhas))
 
 
 def main(argv: list[str] | None = None) -> int:

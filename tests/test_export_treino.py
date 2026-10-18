@@ -130,6 +130,25 @@ def test_linha_fora_do_contrato_fica_fora_do_export_e_e_identificada():
     assert all("P1" not in str(v) and "P2" not in str(v) for _, v in quarentena)
 
 
+def test_data_ilegivel_vai_para_a_quarentena_sem_derrubar_o_export():
+    """A data era convertida antes do contrato: uma linha ilegível derrubava o
+    export mensal inteiro, com o valor na mensagem do ValueError (log público
+    do re-treino). Agora quem lê a data é o contrato, que só diz o campo."""
+    agendamentos = [
+        _consulta("A1", "P1", 36, "2026-01-05T13:00:00+00:00", "concluido"),
+        _consulta("A2", "P2", 36, "05/01/2026 às 10h", "no_show"),
+    ]
+
+    df, quarentena = export_treino.montar_dataset_producao_com_quarentena(agendamentos)
+
+    assert list(df["id_consulta"]) == ["A1"]
+    # A hora UTC do banco continua virando a hora da clínica no dataset.
+    assert list(df["data_hora_agendada"]) == ["2026-01-05 10:00:00"]
+    [(ident, violacao)] = quarentena
+    assert ident == "A2" and violacao.campo == "data_hora_agendada"
+    assert "05/01/2026" not in str(violacao)
+
+
 def test_producao_nunca_emite_coluna_de_telefone_ou_outra_pii():
     agendamentos = [
         _consulta(

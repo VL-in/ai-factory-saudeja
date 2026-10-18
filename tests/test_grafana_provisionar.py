@@ -1,12 +1,12 @@
 """
-SaúdeJá — alertas, políticas e painéis do Grafana como código (Passo 8.9, P7).
+SaúdeJá — alertas, políticas e painéis do Grafana como código.
 
 Sem rede: os arquivos de `infra/grafana/` são validados como o script os
 aplicaria, e o `aplicar` roda contra um Grafana falso em memória que registra
 cada pedido. O que se prova:
 
 1. Toda regra tem `severidade`, `area` e o filtro do ambiente; alerta só para
-   produção (regra do plano: "Alerta só para `prod`").
+   produção.
 2. Os limites vêm do `params.yaml` e das constantes do código, sem cópia.
 3. O modo dev nunca toca a árvore de notificação de produção.
 4. Configuração incompleta (contact point, fonte, preço) falha antes de
@@ -50,7 +50,7 @@ def test_arquivos_validos_nos_dois_ambientes(capsys):
 
 
 def test_toda_regra_tem_severidade_area_e_filtro_de_ambiente():
-    """Regra do Passo 8.9 ("Alerta só para `prod`"), conferida no arquivo
+    """Alerta só para `prod`, conferido no arquivo
     versionado, antes de qualquer marcador ser trocado."""
     regras = _regras_cruas()
     assert len(regras) >= 15
@@ -71,7 +71,7 @@ def test_toda_regra_tem_severidade_area_e_filtro_de_ambiente():
                 assert 'deployment_environment="${AMBIENTE}"' in consulta["model"]["expr"], onde
 
 
-def test_a_matriz_de_criticidade_tem_os_alertas_do_plano():
+def test_a_matriz_de_criticidade_tem_os_p1_esperados():
     """Os P1 da matriz que saem de regra do repositório (o do Space fora do ar
     é do Synthetic Monitoring, configurado à mão)."""
     severidades = {r["uid"]: r["labels"]["severidade"] for _a, r in _regras_cruas()}
@@ -356,12 +356,26 @@ def test_p3_so_notifica_na_segunda_das_9h_as_10h():
     (intervalo,) = gp.carregar_notificacoes()["intervalos"]
     janelas = intervalo["time_intervals"]
     assert all(j["location"] == "America/Sao_Paulo" for j in janelas)
-    assert janelas[0] == {"weekdays": ["tuesday:sunday"], "location": "America/Sao_Paulo"}
+    assert janelas[0] == {
+        "weekdays": ["sunday", "tuesday:saturday"],
+        "location": "America/Sao_Paulo",
+    }
     assert janelas[1]["weekdays"] == ["monday"]
     assert janelas[1]["times"] == [
         {"start_time": "00:00", "end_time": "09:00"},
         {"start_time": "10:00", "end_time": "24:00"},
     ]
+
+
+def test_faixas_de_dias_do_silencio_estao_na_ordem_do_alertmanager():
+    """A semana do Alertmanager vai de domingo a sábado e "a:b" exige a <= b;
+    faixa invertida ("tuesday:sunday") o Grafana recusa com 400."""
+    semana = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+    for intervalo in gp.carregar_notificacoes()["intervalos"]:
+        for janela in intervalo["time_intervals"]:
+            for dias in janela.get("weekdays", []):
+                inicio, _, fim = dias.partition(":")
+                assert semana.index(inicio) <= semana.index(fim or inicio), dias
 
 
 def test_contact_point_faltando_falha_antes_de_qualquer_escrita():
@@ -447,3 +461,57 @@ def test_aplicar_sem_a_fonte_do_supabase_no_ambiente_falha_com_instrucao(monkeyp
 
     assert gp.main(["aplicar", "--ambiente", "prod"]) == 1
     assert "GRAFANA_DS_SUPABASE" in capsys.readouterr().out
+
+
+# --- conferir (só leitura) ------------------------------------------------------
+
+METRICAS_NO_STACK = ["saudeja_acao_total", "saudeja_erro_total", "saudeja_sms_total"]
+
+
+def _transporte_de_conferencia(corpo_da_contagem_do_loki: str):
+    """Mimir e Loki como o `conferir` os consulta. A contagem do Loki chega
+    como veio: JSON, ou o texto de um proxy no meio do caminho."""
+
+    def transporte(metodo, url, cabecalhos, corpo):
+        assert metodo == "GET", "o conferir é só leitura"
+        caminho = urlsplit(url).path
+        if caminho.endswith("/label/__name__/values"):
+            return 200, json.dumps({"data": METRICAS_NO_STACK})
+        if caminho.endswith("/label/deployment_environment/values"):
+            return 200, json.dumps({"data": ["prod"]})
+        if caminho.endswith("/label/service_name/values"):
+            return 200, json.dumps({"data": ["saudeja-job-d2"]})
+        if caminho.endswith("/loki/api/v1/query"):
+            return 200, corpo_da_contagem_do_loki
+        raise AssertionError(f"GET inesperado: {caminho}")
+
+    return transporte
+
+
+def test_conferir_diz_o_que_chegou_e_o_que_falta_no_stack():
+    serie = {
+        "metric": {"service_name": "saudeja-job-d2", "deployment_environment": "prod"},
+        "value": [1760000000, "42"],
+    }
+    contagem = json.dumps({"data": {"result": [serie]}})
+    grafana = gp.Grafana("https://stack.exemplo", "t", _transporte_de_conferencia(contagem))
+
+    texto = "\n".join(gp.conferir(grafana, _valores()))
+
+    assert "deployment_environment: ['prod']" in texto
+    assert "`saudeja_sms_total`: presente" in texto
+    assert "`saudeja_job_d2_agendamentos_total`: AUSENTE" in texto
+    assert "saudeja-job-d2/prod=42" in texto
+
+
+def test_conferir_com_resposta_do_loki_que_nao_e_json_nao_quebra():
+    """`Grafana.pedir` devolve o texto cru quando o corpo não é JSON. A
+    contagem do Loki chamava `.get` antes de conferir o tipo, e o `conferir`
+    morria com AttributeError em vez de dizer que nada chegou."""
+    grafana = gp.Grafana(
+        "https://stack.exemplo", "t", _transporte_de_conferencia("<html>502 Bad Gateway</html>")
+    )
+
+    linhas = gp.conferir(grafana, _valores())
+
+    assert any(linha.startswith("Loki, linhas") and "NENHUMA" in linha for linha in linhas)

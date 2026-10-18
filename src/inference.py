@@ -22,18 +22,12 @@ import pandas as pd
 from campeao import calcular_model_version  # noqa: F401
 from config_projeto import carregar_params
 from features import extrair_features_temporais
-from preprocess import COLUNAS_CATEGORICAS
+
+# As mesmas listas do treino, importadas e não copiadas: a ordem das colunas é
+# parte do contrato com o modelo (ver `verificar_assinatura`).
+from preprocess import COLUNAS_BASE, COLUNAS_CATEGORICAS
 
 PARAMS = carregar_params()
-
-COLUNAS_BASE = [
-    "idade",
-    "sexo",
-    "especialidade",
-    "distancia_km",
-    "dias_entre_agendamento_consulta",
-    "historico_noshow",
-]
 
 
 class ModeloIncompativelError(Exception):

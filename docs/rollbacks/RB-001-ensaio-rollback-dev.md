@@ -143,4 +143,4 @@ Digests iguais significam conteúdo igual. É o critério de sucesso do rollback
 | RB-002: rollback de código com migration aditiva em commit separado. Confirmar que o código revertido funciona com o schema novo e que reverter o arquivo da migration faz o `db push` recusar | média |
 | Documentar no runbook a regra "reverter o código, nunca o arquivo de migration; para desfazer schema, migration nova" | média |
 | Levar o SHA do GitHub ao Space sem depender do log, por exemplo gravando-o num arquivo do staging | baixa |
-| Ensaio do rollback do modelo (canário), já previsto no Passo 10.7 do plano | média |
+| Ensaio do rollback do modelo (canário) | média |

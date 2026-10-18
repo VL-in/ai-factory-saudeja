@@ -176,7 +176,7 @@ def test_migrations_sql_sem_coluna_proibida_de_pii():
         assert not encontradas, (
             f"{migration.name} referencia coluna(s) proibida(s) por LGPD: {encontradas}. "
             "Exceção nova exige entrada em COLUNAS_DE_PII_PERMITIDAS_POR_MIGRATION, "
-            "ADR próprio e atualização de docs/LGPD.md §2."
+            "ADR próprio e atualização de docs/LGPD/LGPD.md §2."
         )
 
 
@@ -210,7 +210,7 @@ MARCADOR_DA_ALLOWLIST = "-- allowlist: observabilidade.CHAVES_DETALHE_PERMITIDAS
 
 
 def test_view_de_lgpd_usa_a_mesma_allowlist_de_eventos_app():
-    """A regra P1 "PII em eventos_app" (Passo 8.9) lê
+    """A regra P1 "PII em eventos_app" do Grafana lê
     `observabilidade.eventos_fora_da_allowlist_por_dia`, que repete em SQL a
     allowlist de `src/observabilidade.py`. Chave nova no Python sem a view
     nova faria cada evento legítimo disparar o P1; chave esquecida no Python e
@@ -237,7 +237,7 @@ def test_view_de_lgpd_usa_a_mesma_allowlist_de_eventos_app():
 
 
 def test_grafana_leitura_so_recebe_select_no_schema_observabilidade_e_sem_senha_no_git():
-    """O papel do Grafana só lê as views de agregados (Passo 8.9, P4). Toda
+    """O papel do Grafana só lê as views de agregados. Toda
     concessão a ele nas migrations é `usage` no schema `observabilidade` ou
     `select` em views dele. E o login com senha é passo manual da autora em
     cada projeto: senha de papel nunca entra no git."""
@@ -274,7 +274,7 @@ def test_views_de_observabilidade_usam_o_fuso_da_clinica(monkeypatch):
 
 def test_bloco_de_custo_do_params_e_a_fonte_unica_dos_precos():
     """O job lê `sms_unitario_usd` e o provisionamento do Grafana copia os três
-    números (Passo 8.9, P5). Vazio, texto ou zero no arquivo versionado
+    números. Vazio, texto ou zero no arquivo versionado
     desligaria a medição de custo em produção: no job, só com aviso no resumo
     do run, que ninguém lê todo dia."""
     import config_projeto
@@ -682,7 +682,7 @@ def test_job_d2_nao_morre_se_o_modelo_do_canario_nao_baixar():
 
 
 def test_job_d2_em_dev_e_so_por_dispatch_do_branch_dev_com_sms_em_stub():
-    """O disparo de dev (Passo 8.9) não pode mudar nada em produção: o cron e
+    """O disparo de dev não pode mudar nada em produção: o cron e
     o dispatch sem escolha caem em `production`, e o caminho de dev só sai do
     branch dev, com SMS em stub qualquer que seja a variável do environment."""
     workflow = yaml.safe_load((WORKFLOWS / "job_d2.yml").read_text(encoding="utf-8"))
@@ -703,7 +703,7 @@ MIGRATION_DO_GATILHO = "20261017010000_gatilho_job_d2.sql"
 
 
 def test_gatilho_do_pg_cron_dispara_o_job_d2_de_producao_no_horario_do_cron():
-    """O pg_cron do Supabase (problema 14 do plano: o cron do GitHub num fork
+    """O pg_cron do Supabase (o cron do GitHub num fork
     chegava horas atrasado) dispara o MESMO caminho do cron: o job_d2.yml em
     `main`, environment `production`, no mesmo horário. Se um dos dois mudar
     sozinho, o alerta P1 da fila passa a medir outra coisa."""
@@ -1014,6 +1014,16 @@ def test_so_o_job_d2_cita_a_chave_do_pseudonimo():
         assert ("TREINO_CHAVE_PSEUDONIMO" in _texto_do_workflow(arquivo)) == (
             arquivo.name == "job_d2.yml"
         ), arquivo.name
+
+
+def test_nenhum_workflow_cita_a_chave_do_identificador_do_paciente():
+    """A chave do identificador do banco da clínica (ADR-011) é da clínica
+    e chega à SaúdeJá só no Space, que cadastra, e no `.env` do encarregado
+    durante a migração. O job D-2 lê
+    o identificador pronto; nenhum workflow precisa recalculá-lo a partir de
+    um CPF."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        assert "PACIENTE_CHAVE_IDENTIFICADOR" not in _texto_do_workflow(arquivo), arquivo.name
 
 
 def test_nenhum_workflow_le_os_secrets_sem_dizer_o_nome():

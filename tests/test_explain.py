@@ -1,10 +1,54 @@
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
 
 import explain
 import inference
+
+
+class _ExplicadorFalso:
+    """Devolve `shap_values` numa das formas que versões diferentes do SHAP já
+    usaram para um classificador binário."""
+
+    def __init__(self, valores, valor_esperado):
+        self._valores = valores
+        self.expected_value = valor_esperado
+
+    def shap_values(self, X):
+        return self._valores
+
+
+@pytest.mark.parametrize(
+    ("valores", "valor_esperado"),
+    [
+        # lista [classe 0, classe 1]
+        ([np.array([[-1.0, -2.0]]), np.array([[1.0, 2.0]])], [-0.5, 0.5]),
+        # ndarray (linhas, features, classes)
+        (np.array([[[-1.0, 1.0], [-2.0, 2.0]]]), np.array([-0.5, 0.5])),
+        # ndarray (linhas, features), já da classe positiva -- o formato atual
+        (np.array([[1.0, 2.0]]), 0.5),
+    ],
+)
+def test_explicacao_e_da_classe_positiva_em_qualquer_formato_do_shap(valores, valor_esperado):
+    """Uma atualização do SHAP já trocou o formato da saída (o aviso "output has
+    changed to a list of ndarray" aparece nesta suíte). Os dois ramos que o
+    modelo atual não exercita não podem pegar a classe 0: a explicação diria o
+    contrário do que empurra o risco de falta."""
+    explicador = _ExplicadorFalso(valores, valor_esperado)
+    X = pd.DataFrame([[0, 0]], columns=["idade", "historico_noshow"])
+
+    contribuicoes, esperado = explain._valores_classe_positiva(explicador, X)
+
+    assert np.allclose(contribuicoes, [[1.0, 2.0]])
+    assert float(esperado) == 0.5
+    assert explain.explicar_lote(explicador, X) == [
+        [
+            {"feature": "historico_noshow", "contribuicao": 2.0},
+            {"feature": "idade", "contribuicao": 1.0},
+        ]
+    ]
 
 
 def _payload_da_linha(df, i):

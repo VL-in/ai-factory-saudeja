@@ -57,8 +57,15 @@ def _rodar(
 
     `perfil` é escolhido no seletor da sidebar depois do primeiro run, como
     a equipe faz: o app abre na visão do paciente, e a maioria dos testes é
-    sobre a do funcionário. Passe `None` para ficar na entrada padrão."""
-    monkeypatch.setenv("APP_ENV", app_env)
+    sobre a do funcionário. Passe `None` para ficar na entrada padrão.
+
+    `app_env=None` apaga a variável. Aqui apagar é seguro, ao contrário do
+    Supabase abaixo: o `.env` já foi carregado no import de `config_projeto`,
+    antes deste teste, e não volta a ser lido."""
+    if app_env is None:
+        monkeypatch.delenv("APP_ENV", raising=False)
+    else:
+        monkeypatch.setenv("APP_ENV", app_env)
     monkeypatch.setenv("PREDICT_BACKEND", backend)
     # Determinístico independente do .env do dev: os testes de UI não devem
     # gravar no Supabase real nem depender de rede -- src/db/ é exercitado de
@@ -152,6 +159,16 @@ def test_aba_de_dev_some_fora_do_ambiente_de_dev(monkeypatch):
     assert rotulos == ABAS_EM_PROD
 
 
+@pytest.mark.parametrize("app_env", [None, ""])
+def test_sem_app_env_declarado_a_aba_de_dev_nao_aparece(monkeypatch, app_env):
+    """O padrão é produção: a aba de dev dispara o job sem a pré-checagem do
+    campeão, e um ambiente que esqueceu de declarar APP_ENV não a ganha."""
+    at = _rodar(monkeypatch, app_env=app_env)
+
+    rotulos = [aba.label for aba in at.tabs]
+    assert rotulos == ABAS_EM_PROD
+
+
 def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
     """O cadastro usa a persistência de verdade -- sem SUPABASE_URL/
     SUPABASE_SECRET_KEY no ambiente de teste, submeter com um CPF válido e um
@@ -167,6 +184,9 @@ def test_visao_paciente_carrega_o_formulario_de_cadastro(monkeypatch):
 
     assert not at.exception
     assert any("cadastrar" in erro.value.lower() for erro in at.error)
+    # A tela do paciente é pública: o motivo técnico (aqui, variável de
+    # ambiente ausente) fica no log e em `eventos_app`, não na mensagem.
+    assert not any("SUPABASE" in erro.value or ".env" in erro.value for erro in at.error)
 
 
 def _preencher_cadastro_valido(at):

@@ -158,6 +158,11 @@ def coagir_data_hora(valor: object) -> datetime:
     UTC do banco é convertido, valor sem fuso é tratado como já local)."""
     if not isinstance(valor, str | datetime):
         raise ViolacaoDoContrato(CAMPO_DATA_HORA, "ausente ou de tipo inválido")
+    # `pd.NaT` é instância de datetime e o único diferente de si mesmo. Sem
+    # esta guarda ele passava pela conversão e levantava ValueError fora do
+    # contrato -- o "nulo nunca vira valor" vale para a data também.
+    if valor != valor:
+        raise ViolacaoDoContrato(CAMPO_DATA_HORA, "ausente (NaT)")
     try:
         return para_horario_da_clinica(valor)
     except ValueError:
@@ -191,7 +196,9 @@ def validar_payload(
     valores[CAMPO_SEXO] = sexo
 
     especialidade = payload.get(CAMPO_ESPECIALIDADE)
-    especialidade = especialidade.strip() if isinstance(especialidade, str) else especialidade
+    # Só texto chega à comparação: um valor não hashable (lista, dict)
+    # levantaria TypeError no `in` de um set, fora do contrato.
+    especialidade = especialidade.strip() if isinstance(especialidade, str) else None
     if especialidade not in especialidades_validas:
         raise ViolacaoDoContrato(CAMPO_ESPECIALIDADE, "fora da lista de especialidades válidas")
     valores[CAMPO_ESPECIALIDADE] = especialidade

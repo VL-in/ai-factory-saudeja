@@ -35,10 +35,11 @@ scripts do pipeline de treino (`preprocess`/`train`/`validate`) seguem usando
 `print`: rodam sobre dataset pseudonimizado, fora do caminho de qualquer dado
 de paciente vivo, e sua saída é lida por humano no terminal/MLflow.
 
-O que **não** é redigido, de propósito: `id_paciente_externo` (hash sha256 de
-CPF -- é a forma minimizada que o banco guarda, e sem ela não há como
-correlacionar nada em diagnóstico), `id_agendamento`/`id_paciente` (uuid
-interno) e `model_version` (hash do artefato).
+O que **não** é redigido, de propósito: `id_paciente_externo` (HMAC com chave
+do hash do CPF, ADR-011 -- é a forma minimizada que o banco guarda, e sem ela
+não há como correlacionar nada em diagnóstico; hoje nenhum log o registra),
+`id_agendamento`/`id_paciente` (uuid interno) e `model_version` (hash do
+artefato).
 """
 import json
 import logging
@@ -204,7 +205,7 @@ def _redigir_valor_de_campo(chave: str, valor):
     olhar o conteúdo: `extra={"nome": "Ana"}` não tem como ser pego pela regra
     de texto, porque no JSON de saída a chave e o valor são serializados
     separadamente e nunca formam a string `nome=Ana`."""
-    if _chave_proibida(chave):
+    if chave_de_pii(chave):
         return MARCADOR
     if isinstance(valor, str):
         return redigir(valor)
@@ -231,10 +232,6 @@ def chave_de_pii(chave: str) -> bool:
         or alvo.endswith(f"_{proibida}")
         for proibida in CHAVES_PROIBIDAS
     )
-
-
-def _chave_proibida(chave: str) -> bool:
-    return chave_de_pii(chave)
 
 
 class FiltroRedacaoPII(logging.Filter):

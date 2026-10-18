@@ -52,7 +52,7 @@ CHAVE_SESSAO_TELEMETRIA = "_telemetria_sessao"
 
 
 def _id_da_sessao() -> str:
-    """`session.id` dos spans (P3 do Passo 8.9): aleatório, criado na primeira
+    """`session.id` dos spans: aleatório, criado na primeira
     ação da aba do navegador, sem ligação com o e-mail de quem fez login. Lido
     do `session_state` porque as ações em callback (`on_click`) rodam antes do
     corpo do script."""
@@ -61,10 +61,12 @@ def _id_da_sessao() -> str:
 
 telemetria.definir_sessao(_id_da_sessao)
 
-# 'dev' como default: em produção a imagem do Space define APP_ENV=prod
-# explicitamente, e rodar local não exige configurar nada para ver
-# a aba de acompanhamento do job.
-APP_ENV = os.environ.get("APP_ENV", "dev")
+# 'prod' como default: a aba de dev dispara o job D-2 sem a pré-checagem do
+# campeão (e com SMS de verdade, se MESSAGING_PROVIDER=infobip), então um
+# ambiente que esqueceu de declarar APP_ENV não pode ganhá-la. A imagem do
+# Space define APP_ENV=prod; o `.env.example` e o docker-compose.yml declaram
+# APP_ENV=dev para o uso local.
+APP_ENV = os.environ.get("APP_ENV") or "prod"
 
 PERFIL_PACIENTE = "Paciente"
 PERFIL_FUNCIONARIO = "Funcionário da clínica"
@@ -479,13 +481,14 @@ def _aba_fila_do_dia():
             )
         _mostrar_contribuicoes(item.explicacao, item.explicacao_texto)
 
-    # O hash continua acessível: é por ele que se rastreia o paciente no banco
-    # e nos logs (onde o nome nunca aparece), então sem ele o suporte perde o
-    # único identificador comum entre tela e diagnóstico.
+    # O identificador continua acessível: é por ele que se rastreia o paciente
+    # no banco e nos logs (onde o nome nunca aparece), então sem ele o suporte
+    # perde o único identificador comum entre tela e diagnóstico.
     with st.expander("Detalhes técnicos"):
         # O código do agendamento é o que vai num pedido de revisão à SaúdeJá
         # (_orientacao_revisao_de_decisao): uuid interno, sem dado pessoal.
-        # O identificador do paciente não vai, porque o hash do CPF é reversível.
+        # O identificador do paciente não vai: é dado pessoal pseudonimizado,
+        # e uma linha ainda não migrada guarda o sha256 sem chave (ADR-011).
         st.caption(f"código do agendamento: `{item.id_agendamento}`")
         st.caption(f"identificador interno: `{item.id_paciente_externo}`")
         if item.tem_predicao:
@@ -700,7 +703,7 @@ def _aba_pedidos():
         col_info.markdown(
             f"{logic.ROTULOS_TIPO_PEDIDO.get(pedido['tipo'], pedido['tipo'])} -- "
             f"{logic.ROTULOS_SITUACAO_PEDIDO.get(pedido['situacao'], pedido['situacao'])} "
-            f"(desde {pedido['criado_em'][:10]})"
+            f"(desde {logic.data_na_clinica(pedido['criado_em']).isoformat()})"
         )
         if pedido["situacao"] == "pendente":
             acoes = [("confirmar", "Confirmar"), ("recusar", "Recusar")]
@@ -831,6 +834,11 @@ def _mostrar_confirmacao(mensagem: str):
     st.button("Fazer outro agendamento", on_click=_novo_agendamento)
 
 
+MENSAGEM_FALHA_NO_CADASTRO = (
+    "Não foi possível cadastrar agora. Tente de novo em alguns minutos ou fale com a clínica."
+)
+
+
 def _visao_paciente():
     documento = st.session_state.get(CHAVE_DOCUMENTO_ABERTO)
     if documento is not None:
@@ -870,8 +878,12 @@ def _visao_paciente():
             + "\n".join(f"- {problema}" for problema in exc.problemas)
         )
         return
-    except logic.ErroPersistencia as exc:
-        st.error(f"Não foi possível cadastrar: {exc}")
+    except logic.ErroPersistencia:
+        # A tela do paciente é pública: o detalhe da falha (variável de
+        # ambiente ausente, erro do PostgREST, instrução de migration) é da
+        # equipe técnica, que o recebe pelo log e por `eventos_app`
+        # (`logic._relatar_falha_persistencia`), não de quem está agendando.
+        st.error(MENSAGEM_FALHA_NO_CADASTRO)
         return
 
     # Mensagem neutra: nem todo agendamento recebe lembrete (só os

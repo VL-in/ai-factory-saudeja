@@ -11,6 +11,11 @@ target-version = "py310"
 # briga com a ordem real dos imports.
 src = ["src", "tests", "scripts"]
 
+# O notebook herdado fica como chegou (docs/herdado/ é o registro do que foi
+# adotado, não código mantido): sem isto, `ruff check .` acusava o estilo dele,
+# enquanto o CI, que roda `ruff check src tests scripts`, nunca o via.
+extend-exclude = ["docs/herdado"]
+
 [lint]
 select = [
     "E",    # pycodestyle (erros)

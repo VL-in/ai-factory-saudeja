@@ -1,5 +1,5 @@
 """
-SaúdeJá — schema `observabilidade` e papel `grafana_leitura` (Passo 8.9, P4)
+SaúdeJá — schema `observabilidade` e papel `grafana_leitura`
 contra o Supabase CLI local. Mesmo pré-requisito de tests/test_db.py:
 `supabase start` na raiz.
 
@@ -127,7 +127,7 @@ def banco(monkeypatch):
 
 @pytest.mark.integracao
 def test_grafana_leitura_so_alcanca_as_views_de_agregados():
-    """Regra do Passo 8.9: o papel do Grafana só lê agregados. Alcançar uma
+    """O papel do Grafana só lê agregados. Alcançar uma
     relação exige `usage` no schema E `select` nela; a lista de tudo que o
     papel alcança tem de ser exatamente as views de `observabilidade` --
     nenhuma tabela de `public` (pacientes, agendamentos, predicoes,
