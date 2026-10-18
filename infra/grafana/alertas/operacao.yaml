@@ -110,7 +110,7 @@ groups:
             contrato de features ou dado). O job também falha o run e chama o /fail
             do Healthchecks.
 
-      - uid: saudeja-agendamentos-sem-processamento
+      - uid: saudeja-agendamentos-esquecidos
         title: Agendamentos deixados para trás pelo job D-2
         condition: C
         data:

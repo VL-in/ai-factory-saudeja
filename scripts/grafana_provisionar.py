@@ -85,7 +85,10 @@ SEVERIDADES = frozenset({"P1", "P2", "P3"})
 AREAS = frozenset({"operacao", "modelo", "custo", "lgpd"})
 _MARCADOR = re.compile(r"\$\{([A-Z0-9_]+)\}")
 _HORARIO = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-_UID = re.compile(r"^[a-zA-Z0-9_-]{1,40}$")
+_UID = re.compile(r"^[a-zA-Z0-9_-]+$")
+# O Grafana recusa UID de regra ou de painel com mais de 40 caracteres, e o
+# modo dev acrescenta o sufixo do ambiente: o limite vale para o UID com ele.
+TAMANHO_MAXIMO_UID = 40
 _DURACAO = re.compile(r"^(\d+)([smh])$")
 
 
@@ -237,6 +240,10 @@ def _consultas(regra: dict[str, Any]) -> list[dict[str, Any]]:
     return [d for d in regra.get("data") or [] if d.get("datasourceUid") != DS_EXPRESSAO]
 
 
+def _maior_sufixo() -> int:
+    return max(len(a.sufixo_uid) for a in AMBIENTES.values())
+
+
 def validar_grupos(grupos: list[dict[str, Any]], valores: dict[str, Any]) -> None:
     """O que o Grafana não confere e o projeto exige: toda regra com
     `severidade`, `area` e `ambiente`; toda consulta de métrica ou de log
@@ -257,6 +264,11 @@ def validar_grupos(grupos: list[dict[str, Any]], valores: dict[str, Any]) -> Non
             onde = f"{grupo['_arquivo']}::{uid}"
             if not _UID.match(uid) or uid in uids:
                 problemas.append(f"{onde}: uid inválido ou repetido")
+            if len(uid) + _maior_sufixo() > TAMANHO_MAXIMO_UID:
+                problemas.append(
+                    f"{onde}: uid com mais de {TAMANHO_MAXIMO_UID} caracteres com o sufixo "
+                    f"de ambiente ({len(uid) + _maior_sufixo()})"
+                )
             uids.add(uid)
             rotulos = regra.get("labels") or {}
             if rotulos.get("severidade") not in SEVERIDADES:
@@ -343,6 +355,11 @@ def carregar_paineis(valores: dict[str, Any], ambiente: Ambiente) -> list[dict[s
     paineis = []
     for arquivo in sorted(DIR_PAINEIS.glob("*.json")):
         painel = substituir(json.loads(arquivo.read_text(encoding="utf-8")), valores)
+        if len(painel["uid"]) + _maior_sufixo() > TAMANHO_MAXIMO_UID:
+            raise ErroDeProvisionamento(
+                f"{arquivo.name}: uid com mais de {TAMANHO_MAXIMO_UID} caracteres com o "
+                "sufixo de ambiente"
+            )
         painel["uid"] = painel["uid"] + ambiente.sufixo_uid
         painel["title"] = ambiente.prefixo_titulo + painel["title"]
         painel["id"] = None

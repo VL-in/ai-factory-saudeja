@@ -78,7 +78,7 @@ def test_a_matriz_de_criticidade_tem_os_alertas_do_plano():
     assert {
         "saudeja-fila-d2-nao-processada",
         "saudeja-fila-inteira-em-quarentena",
-        "saudeja-agendamentos-sem-processamento",
+        "saudeja-agendamentos-esquecidos",
         "saudeja-pii-em-log",
         "saudeja-pii-em-eventos-app",
     } == {uid for uid, s in severidades.items() if s == "P1"}
@@ -97,6 +97,18 @@ def test_validacao_recusa_consulta_sem_filtro_de_ambiente(ambiente):
     consulta["expr"] = consulta["expr"].replace(f'deployment_environment="{ambiente}"', "")
     with pytest.raises(gp.ErroDeProvisionamento, match="sem o filtro"):
         gp.validar_grupos(grupos, valores)
+
+
+def test_validacao_recusa_uid_que_estoura_40_caracteres_com_o_sufixo_de_dev():
+    """O Grafana recusa UID com mais de 40 caracteres, e o de dev ganha `-dev`:
+    pegar isso no `validar` do CI, não no meio de um `aplicar`."""
+    valores = _valores("prod")
+    grupos = gp.carregar_grupos(valores)
+    grupos[0]["rules"][0]["uid"] = "saudeja-" + "x" * 29  # 37 + "-dev" = 41
+    with pytest.raises(gp.ErroDeProvisionamento, match="mais de 40 caracteres"):
+        gp.validar_grupos(grupos, valores)
+    grupos[0]["rules"][0]["uid"] = "saudeja-" + "x" * 28  # 36 + "-dev" = 40
+    gp.validar_grupos(grupos, valores)
 
 
 def test_validacao_recusa_rotulo_fora_da_matriz():
