@@ -125,7 +125,7 @@ Por isso a classificação é feita pelo registro, não pela coluna isolada: o a
 
 | Dado | Local | Classificação | Observação |
 |---|---|---|---|
-| `id_paciente_externo` | `pacientes` (Supabase) | Pessoal pseudonimizado (arts. 12 e 13) | `hmac1:` + HMAC-SHA256 do hash sha256 do CPF, com a chave `PACIENTE_CHAVE_IDENTIFICADOR`, guardada fora do banco ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)). Sem a chave, não se reverte em CPF. Linha gravada antes do ADR-011 guarda o sha256 sem chave, reversível por força bruta sobre os CPFs válidos, até ser migrada por `scripts/migrar_id_paciente.py` |
+| `id_paciente_externo` | `pacientes` (Supabase) | Pessoal pseudonimizado (arts. 12 e 13) | `hmac1:` + HMAC-SHA256 do hash sha256 do CPF, com a chave `PACIENTE_CHAVE_IDENTIFICADOR`, guardada fora do banco ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)). Sem a chave, não se reverte em CPF. As linhas gravadas antes, com o sha256 sem chave, foram migradas em 18/10/2026 nos dois ambientes (`scripts/migrar_id_paciente.py`) |
 | `sexo`, `data_nascimento` | `pacientes` | Pessoal | A idade é calculada na hora da predição e não é gravada |
 | `telefone` | `pacientes` | Pessoal, identificador direto | Exceção à minimização (subseção 2.1) |
 | `nome_completo` | `pacientes` | Pessoal, identificador direto | Exceção à minimização (subseção 2.1) |
@@ -587,7 +587,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 10/10/2026 | Frontmatter, 1, 1A, 2, 3, 4, 4.2, 5, 5.1, 6, 7, 8.1, 9, 9.5 | Agendamento sem consentimento e base de treino separada, controlada pela SaúdeJá ([ADR-010](../adr/adr-010-base-de-treino-separada.md)): schema `treino` fechado, pseudônimo HMAC com chave secreta, export só da base de treino, sincronização diária do desfecho, caixa de ciência da política e dos termos no lugar do consentimento da transferência, workflow de purga implementado; itens 4, 19 e 20 encerrados; riscos 30 a 34 |
 | 11/10/2026 | Frontmatter, 11 | Contato do controlador, canal dos titulares e encarregado padronizados (Vanessa Lin, `v.lin@gmail.com`); data de atualização da política corrigida para a revisão 0.2 |
 | 14/10/2026 | Frontmatter, 9.1 | SAS de exclusão da purga assinada com a key2 e presa à stored access policy `purga-lgpd`, revogável sem rotacionar chave (item 12) |
-| 18/10/2026 | Frontmatter, 2, 6, 7, 9.5 | Identificador do paciente no banco da clínica passa do sha256 do CPF ao HMAC com chave própria, sob guarda da clínica, com migração das linhas existentes ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)); item 35 |
+| 18/10/2026 | Frontmatter, 2, 6, 7, 9.5 | Identificador do paciente no banco da clínica passa do sha256 do CPF ao HMAC com chave própria, sob guarda da clínica, com migração das linhas existentes, executada em dev e produção no mesmo dia ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)); item 35 |
 
 Fonte: elaboração própria (2026).
 
