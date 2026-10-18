@@ -71,6 +71,17 @@ def test_notas_sao_o_corpo_da_secao_sem_o_cabecalho():
     assert vr.notas(texto) == "### Adicionado\n- deploy\n"
 
 
+def test_notas_de_cabecalho_sem_autor_nem_data_guardam_a_primeira_linha():
+    """`## [v2.4.0]` sozinho na linha: o corte da linha do cabeçalho caía na
+    primeira linha das notas, e a Release saía sem o "### Adicionado"."""
+    texto = _changelog("## [v2.4.0]\n\n### Adicionado\n- alertas\n")
+    assert vr.notas(texto) == "### Adicionado\n- alertas\n"
+
+
+def test_secao_so_com_cabecalho_nao_tem_notas():
+    assert vr.notas(_changelog("## [v2.4.0] (Vanessa) - 2026-10-18\n")) == ""
+
+
 def test_subir_patch_entra_acima_da_ultima_versao():
     texto = _changelog("## [v2.0.0] (Vanessa) - 2026-10-03\n\n- x\n")
     novo = vr.inserir_patch(
@@ -98,3 +109,65 @@ def test_changelog_real_e_legivel():
     versao = vr.versao_atual(texto)
     if versao is not None:
         assert vr.notas(texto).strip()
+
+
+# --- linha de comando: o que o deploy.yml e os PRs automáticos executam --------
+
+
+def _changelog_em_disco(tmp_path, monkeypatch, *secoes):
+    caminho = tmp_path / "CHANGELOG.md"
+    caminho.write_text(_changelog(*secoes), encoding="utf-8")
+    monkeypatch.setattr(vr, "CHANGELOG", caminho)
+    return caminho
+
+
+def test_conferir_escreve_versao_e_situacao_na_saida_do_passo(tmp_path, monkeypatch):
+    """O `deploy.yml` lê `steps.versao.outputs.situacao` para decidir se cria
+    a Release: é a única saída do script que muda o que vai ao ar."""
+    _changelog_em_disco(tmp_path, monkeypatch, "## [v2.1.0] (Vanessa) - 2026-10-05\n\n- x\n")
+    monkeypatch.setattr(vr, "_tags_do_git", lambda: {"v2.0.0": "aaa"})
+    saida = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(saida))
+
+    assert vr.main(["conferir", "--sha", "bbb"]) == 0
+    assert saida.read_text(encoding="utf-8") == "versao=2.1.0\nsituacao=nova\n"
+
+
+def test_conferir_recusado_sai_com_1_sem_escrever_a_saida(tmp_path, monkeypatch, capsys):
+    _changelog_em_disco(tmp_path, monkeypatch, "## [v2.1.0] (Vanessa) - 2026-10-05\n\n- x\n")
+    monkeypatch.setattr(vr, "_tags_do_git", lambda: {"v2.1.0": "outro-commit"})
+    saida = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(saida))
+
+    assert vr.main(["conferir", "--sha", "bbb"]) == 1
+    assert "::error::" in capsys.readouterr().err
+    assert not saida.exists()
+
+
+def test_subir_patch_reescreve_o_changelog_em_disco(tmp_path, monkeypatch, capsys):
+    caminho = _changelog_em_disco(
+        tmp_path, monkeypatch, "## [v2.1.0] (Vanessa) - 2026-10-05\n\n- x\n"
+    )
+    monkeypatch.setattr(vr, "_tags_do_git", lambda: {"v2.1.0": "aaa"})
+
+    assert vr.main(["subir-patch", "--item", "Modelo promovido."]) == 0
+
+    novo = caminho.read_text(encoding="utf-8")
+    assert vr.versao_atual(novo) == (2, 1, 1)
+    assert "(github-actions)" in novo
+    assert capsys.readouterr().out.strip() == "v2.1.1"
+
+
+def test_tags_do_git_resolvem_a_tag_anotada_para_o_commit(monkeypatch):
+    """`%(*objectname)` só existe na tag anotada: é o commit para onde ela
+    aponta, e não o objeto da tag. Na tag leve, o próprio objeto é o commit."""
+    import subprocess
+
+    saida = "v2.0.0 objeto-da-tag commit-anotado\nv2.1.0 commit-leve \n"
+    monkeypatch.setattr(
+        vr.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=saida),
+    )
+
+    assert vr._tags_do_git() == {"v2.0.0": "commit-anotado", "v2.1.0": "commit-leve"}

@@ -81,9 +81,15 @@ def notas(texto: str) -> str:
     achado = _CABECALHO_SEMVER.search(texto)
     if achado is None:
         raise VersaoInvalida("nenhuma seção `## [vX.Y.Z]` no CHANGELOG")
-    # A linha do cabeçalho traz autor e data; as notas começam na seguinte.
-    resto = _secao(texto, achado)
-    return resto.split("\n", 1)[1].strip() + "\n" if "\n" in resto else ""
+    # O resto da linha do cabeçalho traz autor e data, ou nada (`## [v2.4.0]`);
+    # as notas começam na linha seguinte. O corte é feito antes de tirar as
+    # linhas em branco: depois, num cabeçalho sem autor, a primeira linha das
+    # notas ("### Adicionado") é que seria descartada.
+    proximo = _CABECALHO.search(texto, achado.end())
+    fim = proximo.start() if proximo else len(texto)
+    _, _, corpo = texto[achado.end() : fim].partition("\n")
+    corpo = corpo.strip()
+    return corpo + "\n" if corpo else ""
 
 
 def tags_semver(tags: dict[str, str]) -> dict[Versao, str]:
