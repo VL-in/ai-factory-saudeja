@@ -8,7 +8,7 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [Não publicado]
+## [v2.5.0] (Vanessa + Claude) - 2026-10-18
 
 ### Segurança
 - **O identificador do paciente no banco da clínica deixa de ser reversível em CPF** ([ADR-011](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-011-identificador-do-paciente-com-chave.md)). Era o sha256 do CPF, que se reverte por força bruta em minutos. Passa a ser `hmac1:` + HMAC-SHA256 desse hash, com a chave `PACIENTE_CHAVE_IDENTIFICADOR`, guardada fora do banco, diferente da chave do treino e sob guarda da clínica, que a entrega à SaúdeJá só para o Space. **O cadastro passa a exigir essa chave** no Space e no `.env` local. As linhas existentes são migradas por `scripts/migrar_id_paciente.py`, sem precisar do CPF; o procedimento está no ADR-011.
@@ -25,7 +25,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 ### Modificado
 - **Sem `APP_ENV` definido, a interface assume produção** e não mostra a aba "Dev: disparo manual", que dispara o job D-2 sem a checagem do campeão. Para usá-la localmente, declare `APP_ENV=dev`, como já fazem o `.env.example` e o `docker-compose.yml`.
 
-## [v2.4.0]
+## [v2.4.0] (Vanessa + Claude) - 2026-10-17
 
 ### Adicionado
 - **Alertas do Grafana por criticidade, mantidos como código** (`infra/grafana/alertas/`, aplicados por `scripts/grafana_provisionar.py`). São 17 regras, cada uma com os rótulos `severidade` (P1, P2 ou P3), `area` (operação, modelo, custo ou LGPD) e `ambiente`. Só as de produção notificam.
