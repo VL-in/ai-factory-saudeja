@@ -43,7 +43,6 @@ dataset fica enviesado para o no-show, e isso precisa aparecer no resumo.
 Nunca inclui `telefone` nem outra PII -- guardado automaticamente por
 `tests/test_coerencia_repo.py::test_export_treino_sem_coluna_proibida_de_pii`.
 """
-import os
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
@@ -59,6 +58,7 @@ from config_projeto import (
     para_horario_da_clinica,
 )
 from db import repositorio_treino
+from saida_actions import publicar
 
 PARAMS = carregar_params()
 
@@ -110,28 +110,26 @@ def montar_dataset_producao_com_quarentena(
     if consultas is None:
         consultas = repositorio_treino.consultas_para_export(inicio_da_janela())
 
-    linhas = []
-    for c in consultas:
-        # Hora da CLÍNICA, não a UTC que o Postgres devolve: a semente guarda
-        # hora local, e misturar as duas ensinaria ao modelo horários (11h-21h)
-        # que a clínica não atende.
-        quando = para_horario_da_clinica(c["data_hora_agendada"])
-        linhas.append(
-            {
-                "id_consulta": c["id_consulta"],
-                "id_paciente": c["id_titular"],
-                "idade": c["idade"],
-                "sexo": c["sexo"],
-                "especialidade": c["especialidade"],
-                "distancia_km": c["distancia_km"],
-                "dias_entre_agendamento_consulta": c["dias_entre_agendamento_consulta"],
-                # O valor com que o job D-2 predisse -- ver docstring do módulo.
-                "historico_noshow": c["historico_noshow"],
-                "no_show": int(c["status"] == "no_show"),
-                "data_hora_agendada": quando,
-                "lembrete_enviado": int(bool(c.get("lembrete_enviado"))),
-            }
-        )
+    linhas = [
+        {
+            "id_consulta": c["id_consulta"],
+            "id_paciente": c["id_titular"],
+            "idade": c["idade"],
+            "sexo": c["sexo"],
+            "especialidade": c["especialidade"],
+            "distancia_km": c["distancia_km"],
+            "dias_entre_agendamento_consulta": c["dias_entre_agendamento_consulta"],
+            # O valor com que o job D-2 predisse -- ver docstring do módulo.
+            "historico_noshow": c["historico_noshow"],
+            "no_show": int(c["status"] == "no_show"),
+            # Cru, como o banco devolveu: quem lê a data é o contrato, logo
+            # abaixo. Convertida antes dele, uma data ilegível derrubava o
+            # export inteiro, com o valor na mensagem de erro do log público.
+            "data_hora_agendada": c["data_hora_agendada"],
+            "lembrete_enviado": int(bool(c.get("lembrete_enviado"))),
+        }
+        for c in consultas
+    ]
 
     if not linhas:
         return pd.DataFrame(columns=COLUNAS_SAIDA), []
@@ -143,8 +141,15 @@ def montar_dataset_producao_com_quarentena(
     if quarentena:
         fora = {identificador for identificador, _ in quarentena}
         df = df[~df["id_consulta"].isin(fora)]
+    # Hora da CLÍNICA, não a UTC que o Postgres devolve: a semente guarda hora
+    # local, e misturar as duas ensinaria ao modelo horários (11h-21h) que a
+    # clínica não atende. Toda linha que sobrou passou pelo contrato, que já
+    # leu a data com esta mesma conversão.
     df = df.assign(
-        data_hora_agendada=[q.strftime("%Y-%m-%d %H:%M:%S") for q in df["data_hora_agendada"]]
+        data_hora_agendada=[
+            para_horario_da_clinica(q).strftime("%Y-%m-%d %H:%M:%S")
+            for q in df["data_hora_agendada"]
+        ]
     )
     return df[COLUNAS_SAIDA].reset_index(drop=True), quarentena
 
@@ -184,14 +189,6 @@ def medir_completude_de_rotulo(com_desfecho: int) -> dict[str, Any]:
     }
 
 
-def _publicar(texto: str) -> None:
-    print(texto)
-    destino = os.environ.get("GITHUB_STEP_SUMMARY")
-    if destino:
-        with open(destino, "a", encoding="utf-8") as f:
-            f.write(texto + "\n")
-
-
 def main(caminho_saida: str | None = None) -> int:
     caminho_saida = caminho_saida or CONSULTAS_TREINO_PATH
     consultas = repositorio_treino.consultas_para_export(inicio_da_janela())
@@ -217,7 +214,7 @@ def main(caminho_saida: str | None = None) -> int:
             f"({completude['proporcao_sem_desfecho']:.0%} das consultas passadas) -- se a "
             "clínica registra só as faltas, o dataset fica enviesado para o no-show"
         )
-    _publicar("\n".join(linhas))
+    publicar("\n".join(linhas))
     return len(dataset)
 
 

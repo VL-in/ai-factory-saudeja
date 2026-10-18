@@ -80,8 +80,13 @@ def test_inteiro_invalido_e_recusado_nunca_truncado(valor):
         ("sexo", "X"),
         ("sexo", None),
         ("especialidade", "neurologia"),
+        # Não-texto: a lista (não hashable) levantava TypeError fora do contrato.
+        ("especialidade", ["cardiologia"]),
+        ("especialidade", 3),
         ("data_hora_agendada", None),
         ("data_hora_agendada", "ontem"),
+        # NaT é datetime: passava pela conversão e levantava ValueError adiante.
+        ("data_hora_agendada", pd.NaT),
     ],
 )
 def test_fora_da_regra_de_negocio_e_recusado(campo, valor):
@@ -152,6 +157,18 @@ def test_dataframe_lista_todas_as_violacoes_pelo_id_da_linha():
 
     assert [(i, v.campo) for i, v in violacoes] == [(2, "idade"), (3, "sexo")]
     assert "2 linha(s)" in contrato.resumir_violacoes(violacoes)
+
+
+def test_dataframe_com_data_ausente_conta_a_violacao_em_vez_de_parar():
+    """Numa coluna de datas do pandas, a data ausente é `NaT`: a varredura do
+    dataset tem de contá-la como violação e seguir para a próxima linha."""
+    df = pd.DataFrame([{**_payload(), "id_consulta": 1}, {**_payload(), "id_consulta": 2}])
+    df["data_hora_agendada"] = pd.to_datetime(df["data_hora_agendada"])
+    df.loc[1, "data_hora_agendada"] = pd.NaT
+
+    violacoes = contrato.violacoes_do_dataframe(df, ESPECIALIDADES)
+
+    assert [(i, v.campo) for i, v in violacoes] == [(2, "data_hora_agendada")]
 
 
 def test_coercao_de_colunas_nao_toca_no_dataframe_ja_tipado():
