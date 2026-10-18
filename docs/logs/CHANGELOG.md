@@ -20,6 +20,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 - **A tela de agendamento não mostra mais ao paciente o detalhe técnico de uma falha do banco**, como nome de variável de ambiente ou erro do PostgREST. A mensagem passa a ser genérica, e o detalhe continua no log e em `eventos_app`.
 - **A data dos pedidos do titular aparece no fuso da clínica.** Um pedido registrado depois das 21h aparecia com a data do dia seguinte, e é dessa data que a equipe conta o prazo de 15 dias.
 - **`grafana.yml` com `acao=conferir` não quebra mais quando o Loki responde com algo que não é JSON**, como a página de erro de um proxy.
+- **O provisionamento do Grafana em produção não para mais no silêncio do resumo semanal** (`infra/grafana/notificacoes.yaml`). A faixa de dias `tuesday:sunday` era recusada pelo Grafana com 400, porque a semana do Alertmanager começa no domingo e a faixa exige início antes do fim. Como o silêncio é gravado depois das regras, produção ficava com as regras ativas, sem as rotas por criticidade e sem os painéis. A faixa passa a ser `[sunday, "tuesday:saturday"]`, com a mesma janela, e um teste novo recusa faixa de dias invertida. Em dev o erro não aparecia, porque a verificação em dev não grava silêncio nem rotas.
 
 ### Modificado
 - **Sem `APP_ENV` definido, a interface assume produção** e não mostra a aba "Dev: disparo manual", que dispara o job D-2 sem a checagem do campeão. Para usá-la localmente, declare `APP_ENV=dev`, como já fazem o `.env.example` e o `docker-compose.yml`.
