@@ -552,6 +552,73 @@ def test_falha_de_banco_comum_nao_vira_conselho_sobre_migration(monkeypatch):
     assert "supabase db push" not in str(capturado.value)
 
 
+def _predicao(criado_em, probabilidade, model_version, **extra):
+    return {
+        "criado_em": criado_em,
+        "probabilidade": probabilidade,
+        "classe_prevista": int(probabilidade >= 0.6),
+        "explicacao_shap": [{"feature": "idade", "contribuicao": 0.1}],
+        "explicacao_texto": None,
+        "model_version": model_version,
+        "fora_do_dominio": False,
+        **extra,
+    }
+
+
+def test_fila_do_dia_mostra_a_hora_da_clinica_e_a_predicao_mais_recente(monkeypatch):
+    """O banco devolve UTC, e a fila mostra a hora de São Paulo (11:30 UTC é
+    08:30 lá). Com duas predições para o mesmo agendamento, vale a mais
+    recente, não a de maior risco; sem predição, nada de risco inventado."""
+    linhas = [
+        {
+            "id": "ag-1",
+            "especialidade": "cardiologia",
+            "data_hora_agendada": "2026-10-02T11:30:00+00:00",
+            "status": "agendado",
+            "pacientes": {"id_paciente_externo": "a" * 64, "nome_completo": "Paciente Um"},
+            "predicoes": [
+                _predicao("2026-09-30T11:17:00.5+00:00", 0.9, "antigo"),
+                _predicao("2026-10-01T11:17:00.25+00:00", 0.2, "novo", fora_do_dominio=True),
+            ],
+        },
+        {
+            "id": "ag-2",
+            "especialidade": "pediatria",
+            "data_hora_agendada": "2026-10-02T20:00:00+00:00",
+            "status": "agendado",
+            "pacientes": {"id_paciente_externo": "b" * 64, "nome_completo": None},
+            "predicoes": [],
+        },
+    ]
+    monkeypatch.setattr(logic.repositories, "buscar_fila_do_dia", lambda dia: linhas)
+
+    com_predicao, sem_predicao = logic.buscar_fila_do_dia(date(2026, 10, 2))
+
+    horario = com_predicao.data_hora_agendada
+    assert (horario.hour, horario.minute) == (8, 30)
+    assert horario.utcoffset() == datetime(2026, 10, 2, tzinfo=logic.fuso_da_clinica()).utcoffset()
+    assert (com_predicao.model_version, com_predicao.probabilidade) == ("novo", 0.2)
+    assert com_predicao.fora_do_dominio is True
+    assert com_predicao.rotulo_paciente == "Paciente Um"
+    assert not sem_predicao.tem_predicao
+    assert sem_predicao.explicacao == [] and sem_predicao.fora_do_dominio is None
+    assert sem_predicao.data_hora_agendada.hour == 17
+    assert sem_predicao.rotulo_paciente.startswith("(cadastro sem nome)")
+
+
+@pytest.mark.parametrize(
+    ("criado_em", "esperado"),
+    [
+        ("2026-10-02T13:00:00+00:00", date(2026, 10, 2)),
+        # 23h30 de 01/10 em São Paulo: a string em UTC já diz 02/10.
+        ("2026-10-02T02:30:00.5+00:00", date(2026, 10, 1)),
+    ],
+)
+def test_data_do_pedido_e_a_do_fuso_da_clinica(criado_em, esperado):
+    """A equipe conta o prazo de 15 dias a partir desta data."""
+    assert logic.data_na_clinica(criado_em) == esperado
+
+
 def test_fila_do_dia_nao_pede_telefone_ao_banco():
     """`buscar_fila_do_dia` deixou o `select("*")` para trás (ADR-007): numa
     tabela que guarda PII por exceção, a lista de colunas é a fronteira, e o
@@ -1162,13 +1229,13 @@ def test_decisao_desconhecida_e_erro():
         logic.decidir_pedido_da_clinica("p1", "apagar")
 
 
-# --- observabilidade das ações da UI (Passo 8.9) ----------------------------------
+# --- observabilidade das ações da UI ---------------------------------------------
 
 
 def test_falha_de_banco_na_ui_deixa_evento_de_erro_e_acao_com_erro(
     monkeypatch, eventos_capturados
 ):
-    """Até o Passo 8.9 a falha virava só a mensagem na tela: sem log nem
+    """Antes da v2.2.0 a falha virava só a mensagem na tela: sem log nem
     evento, o alerta diário não a via."""
 
     def _indisponivel(_dia):

@@ -52,7 +52,7 @@ CHAVE_SESSAO_TELEMETRIA = "_telemetria_sessao"
 
 
 def _id_da_sessao() -> str:
-    """`session.id` dos spans (P3 do Passo 8.9): aleatório, criado na primeira
+    """`session.id` dos spans: aleatório, criado na primeira
     ação da aba do navegador, sem ligação com o e-mail de quem fez login. Lido
     do `session_state` porque as ações em callback (`on_click`) rodam antes do
     corpo do script."""
@@ -61,10 +61,12 @@ def _id_da_sessao() -> str:
 
 telemetria.definir_sessao(_id_da_sessao)
 
-# 'dev' como default: em produção a imagem do Space define APP_ENV=prod
-# explicitamente, e rodar local não exige configurar nada para ver
-# a aba de acompanhamento do job.
-APP_ENV = os.environ.get("APP_ENV", "dev")
+# 'prod' como default: a aba de dev dispara o job D-2 sem a pré-checagem do
+# campeão (e com SMS de verdade, se MESSAGING_PROVIDER=infobip), então um
+# ambiente que esqueceu de declarar APP_ENV não pode ganhá-la. A imagem do
+# Space define APP_ENV=prod; o `.env.example` e o docker-compose.yml declaram
+# APP_ENV=dev para o uso local.
+APP_ENV = os.environ.get("APP_ENV") or "prod"
 
 PERFIL_PACIENTE = "Paciente"
 PERFIL_FUNCIONARIO = "Funcionário da clínica"
@@ -700,7 +702,7 @@ def _aba_pedidos():
         col_info.markdown(
             f"{logic.ROTULOS_TIPO_PEDIDO.get(pedido['tipo'], pedido['tipo'])} -- "
             f"{logic.ROTULOS_SITUACAO_PEDIDO.get(pedido['situacao'], pedido['situacao'])} "
-            f"(desde {pedido['criado_em'][:10]})"
+            f"(desde {logic.data_na_clinica(pedido['criado_em']).isoformat()})"
         )
         if pedido["situacao"] == "pendente":
             acoes = [("confirmar", "Confirmar"), ("recusar", "Recusar")]
@@ -831,6 +833,11 @@ def _mostrar_confirmacao(mensagem: str):
     st.button("Fazer outro agendamento", on_click=_novo_agendamento)
 
 
+MENSAGEM_FALHA_NO_CADASTRO = (
+    "Não foi possível cadastrar agora. Tente de novo em alguns minutos ou fale com a clínica."
+)
+
+
 def _visao_paciente():
     documento = st.session_state.get(CHAVE_DOCUMENTO_ABERTO)
     if documento is not None:
@@ -870,8 +877,12 @@ def _visao_paciente():
             + "\n".join(f"- {problema}" for problema in exc.problemas)
         )
         return
-    except logic.ErroPersistencia as exc:
-        st.error(f"Não foi possível cadastrar: {exc}")
+    except logic.ErroPersistencia:
+        # A tela do paciente é pública: o detalhe da falha (variável de
+        # ambiente ausente, erro do PostgREST, instrução de migration) é da
+        # equipe técnica, que o recebe pelo log e por `eventos_app`
+        # (`logic._relatar_falha_persistencia`), não de quem está agendando.
+        st.error(MENSAGEM_FALHA_NO_CADASTRO)
         return
 
     # Mensagem neutra: nem todo agendamento recebe lembrete (só os

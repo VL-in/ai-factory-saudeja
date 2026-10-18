@@ -47,7 +47,12 @@ import inference  # noqa: E402
 import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
 import observabilidade  # noqa: E402
 import pseudonimo  # noqa: E402
-from config_projeto import caminho_de_env, fuso_da_clinica, hoje_na_clinica  # noqa: E402
+from config_projeto import (  # noqa: E402
+    caminho_de_env,
+    fuso_da_clinica,
+    hoje_na_clinica,
+    ler_timestamptz,
+)
 from db.client import ConfiguracaoSupabaseAusente  # noqa: E402
 from explain import ExplicadorLLMDesativado, construir_explicador, explicar  # noqa: E402
 from features import calcular_idade  # noqa: E402
@@ -337,7 +342,7 @@ _CODIGOS_DE_SCHEMA_DESATUALIZADO = frozenset({"42703", "42P01"})
 
 def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoReturn:
     """Traduz a falha do banco na mensagem que a tela mostra -- e, antes,
-    deixa rastro dela (Passo 8.9): até aqui a falha virava só a mensagem
+    deixa rastro dela: antes da v2.2.0 a falha virava só a mensagem
     amigável, sem log nem evento, e o alerta diário não tinha como vê-la.
 
     `rota` é o rótulo fixo da operação. Só ele e o **nome da classe** da
@@ -371,7 +376,7 @@ def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoRetur
 
 def _acao_ui(acao: str, *recusas: type[BaseException]):
     """Mede uma ação da interface de ponta a ponta (latência, volume e
-    desfecho), em `eventos_app` e no Grafana (Passo 8.9). `recusas` são as
+    desfecho), em `eventos_app` e no Grafana. `recusas` são as
     exceções que significam "o sistema funcionou e recusou" (senha errada,
     formulário inválido): viram `recusado`, não `erro`, e não entram na taxa
     de erro que alerta a mantenedora."""
@@ -401,9 +406,9 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
                 # O Postgres devolve timestamptz normalizado em UTC; sem o
                 # astimezone, a fila mostraria 11:30 para uma consulta das
                 # 08:30 da clínica.
-                data_hora_agendada=repositories.ler_timestamptz(
-                    linha["data_hora_agendada"]
-                ).astimezone(fuso_da_clinica()),
+                data_hora_agendada=ler_timestamptz(linha["data_hora_agendada"]).astimezone(
+                    fuso_da_clinica()
+                ),
                 probabilidade=float(ultima["probabilidade"]) if ultima else None,
                 classe_prevista=ultima["classe_prevista"] if ultima else None,
                 explicacao=(ultima.get("explicacao_shap") or []) if ultima else [],
@@ -958,6 +963,14 @@ def encaminhar_pedido_ao_treino(cpf: str) -> None:
         )
 
 
+def data_na_clinica(timestamptz: str) -> date:
+    """Data civil, no fuso da clínica, de um `timestamptz` do banco. O
+    PostgREST devolve em UTC: cortar a string ("2026-10-02T01:00:00+00:00"[:10])
+    mostraria o dia seguinte para o que aconteceu depois das 21h em São Paulo
+    -- e é dessa data que a equipe conta o prazo de 15 dias de um pedido."""
+    return ler_timestamptz(timestamptz).astimezone(fuso_da_clinica()).date()
+
+
 @_acao_ui("listar_pedidos")
 def listar_pedidos_da_clinica() -> list[dict]:
     try:
@@ -1062,7 +1075,7 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
             "percentual": (com_explicacao / total_predicoes) if total_predicoes else None,
         },
         "ultimo_job_d2": (
-            repositories.ler_timestamptz(ultimo_job["criado_em"]).astimezone(fuso_da_clinica())
+            ler_timestamptz(ultimo_job["criado_em"]).astimezone(fuso_da_clinica())
             if ultimo_job
             else None
         ),
@@ -1119,7 +1132,7 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
     if exc.status == 429 or exc.code == "over_request_rate_limit":
         # O limite do Supabase Auth é por IP, e todos os funcionários chegam
         # pelo mesmo IP (o do servidor do Streamlit) -- quem aparece aqui pode
-        # nem ter errado a própria senha. Ver docs/LGPD.md §9, risco 6.
+        # nem ter errado a própria senha. Ver docs/LGPD/LGPD.md §9, risco 6.
         return ErroAutenticacaoIndisponivel(
             "muitas tentativas de login em pouco tempo. Aguarde alguns minutos e tente de novo."
         )

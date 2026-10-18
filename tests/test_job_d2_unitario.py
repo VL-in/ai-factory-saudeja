@@ -138,6 +138,101 @@ def test_falha_de_envio_nao_marca_lembrete_para_o_dia_seguinte_tentar_de_novo(re
     assert resultado["mensagens_disparadas"] == 0
 
 
+def test_lembrete_enviado_e_marcado_antes_da_auditoria(repositorio, monkeypatch):
+    """O job roda duas vezes por dia (gatilho do Supabase e cron de reserva).
+    No lembrete sem predição, a marca `lembrete_enviado` é a única coisa que
+    tira o agendamento da fila: se o banco falhar depois do SMS sair, a marca
+    já tem de estar gravada, ou a segunda execução manda outro SMS."""
+    falso = repositorio([_agendamento("a01", especialidade="neurologia")], threshold=1.01)
+
+    def _auditoria_fora_do_ar(**kwargs):
+        raise RuntimeError("PostgREST fora do ar")
+
+    monkeypatch.setattr(job.repositories, "registrar_mensagem", _auditoria_fora_do_ar)
+    espiao = _Espiao()
+
+    with pytest.raises(RuntimeError):
+        job.processar_dia(cliente_mensageria=espiao)
+
+    assert espiao.telefones == ["5511987654301"]
+    assert falso.lembretes == ["a01"]
+
+
+# --- provedor de mensageria ------------------------------------------------------
+
+
+@pytest.mark.parametrize("provedor", [None, "stub", " Stub "])
+def test_sem_provedor_declarado_o_job_usa_o_stub_que_nao_envia(monkeypatch, provedor):
+    if provedor is None:
+        monkeypatch.delenv("MESSAGING_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("MESSAGING_PROVIDER", provedor)
+
+    assert isinstance(job.obter_cliente_mensageria(), job.StubMessagingClient)
+
+
+def test_infobip_sem_credencial_falha_ao_criar_o_cliente(monkeypatch):
+    """Antes do primeiro agendamento, não como falha de rede no meio da fila."""
+    from messaging.client import ConfiguracaoInfobipAusente
+
+    monkeypatch.setenv("MESSAGING_PROVIDER", "infobip")
+    monkeypatch.setenv("INFOBIP_BASE_URL", "")
+    monkeypatch.setenv("INFOBIP_CHAVE_API", "")
+
+    with pytest.raises(ConfiguracaoInfobipAusente):
+        job.obter_cliente_mensageria()
+
+
+def test_provedor_desconhecido_e_erro_e_nunca_cai_no_stub(monkeypatch):
+    """Um erro de digitação em produção não pode virar "envio" pelo stub, que
+    marca `lembrete_enviado` sem SMS nenhum ter saído."""
+    monkeypatch.setenv("MESSAGING_PROVIDER", "infobipp")
+
+    with pytest.raises(job.ProvedorMensageriaDesconhecido):
+        job.obter_cliente_mensageria()
+
+
+# --- retenção (LGPD, art. 6º, III) ------------------------------------------------
+
+
+def test_purgas_cortam_na_janela_de_retencao_configurada(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("OBSERVABILIDADE_RETENCAO_DIAS", "30")
+    monkeypatch.setenv("RETENCAO_DADOS_DERIVADOS_DIAS", "90")
+    cortes = {}
+
+    def _eventos(anteriores_a):
+        cortes["eventos_app"] = anteriores_a
+        return 7
+
+    def _derivados(anteriores_a):
+        cortes["derivados"] = anteriores_a
+        return {"predicoes": 2, "mensagens_disparadas": 3}
+
+    monkeypatch.setattr(job.repositories, "purgar_eventos_app", _eventos)
+    monkeypatch.setattr(job.repositories, "purgar_dados_derivados", _derivados)
+
+    assert job.purgar_eventos_antigos() == 7
+    assert job.purgar_dados_derivados_antigos() == {"predicoes": 2, "mensagens_disparadas": 3}
+    agora = datetime.now(timezone.utc)
+    assert abs(cortes["eventos_app"] - (agora - timedelta(days=30))) < timedelta(minutes=5)
+    assert abs(cortes["derivados"] - (agora - timedelta(days=90))) < timedelta(minutes=5)
+
+
+def test_falha_das_purgas_nao_derruba_o_job(monkeypatch):
+    """Perder a limpeza de um dia é irrelevante perto de perder a fila."""
+
+    def _fora_do_ar(anteriores_a):
+        raise RuntimeError("PostgREST fora do ar")
+
+    monkeypatch.setattr(job.repositories, "purgar_eventos_app", _fora_do_ar)
+    monkeypatch.setattr(job.repositories, "purgar_dados_derivados", _fora_do_ar)
+
+    assert job.purgar_eventos_antigos() == 0
+    assert job.purgar_dados_derivados_antigos() == {}
+
+
 # --- contrato de features no job ----------------------------------------------
 
 
@@ -325,13 +420,13 @@ def test_resumo_mostra_a_sincronizacao_do_treino(tmp_path, monkeypatch):
     assert "| sincronizados_treino | 3 |" in destino.read_text(encoding="utf-8")
 
 
-# --- observabilidade do job (Passo 8.9) --------------------------------------
+# --- observabilidade do job ---------------------------------------------------
 
 
 def test_falha_de_envio_vira_evento_de_erro_so_com_a_classe(
     repositorio, eventos_capturados, telemetria_em_memoria
 ):
-    """Até o Passo 8.9 a falha de envio era só aviso no run, e não alertava."""
+    """Antes da v2.2.0 a falha de envio era só aviso no run, e não alertava."""
     repositorio([_agendamento("a01", pacientes={"sexo": "F"})], threshold=1.01)
     job.processar_dia(cliente_mensageria=_Espiao())
 
@@ -370,7 +465,7 @@ def test_job_mede_resultado_probabilidade_e_envio_por_braco(repositorio, telemet
     assert envios == {"enviado": 2, job.STATUS_ENVIADO_SEM_PREDICAO: 1}
 
 
-# --- custo da mensageria (Passo 8.9, P5) --------------------------------------
+# --- custo da mensageria -------------------------------------------------------
 
 
 class _Sms:

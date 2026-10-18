@@ -75,6 +75,7 @@ from messaging.client import (  # noqa: E402
     StubMessagingClient,
     segmentos_sms,
 )
+from saida_actions import anexar_ao_resumo  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +293,7 @@ def _processar_fila(
         if contadores is not None:
             contadores["agendamentos"] += 1
 
-        # Spans por agendamento (P3), com o uuid interno como identificador de
+        # Spans por agendamento, com o uuid interno como identificador de
         # span -- nunca como atributo de métrica.
         identificadores = {"id_agendamento": agendamento.get("id")}
         inicio = time.perf_counter()
@@ -457,10 +458,10 @@ def _enviar_lembrete(
     resultado: dict[str, Any],
     status: str,
 ) -> None:
-    """Envia o lembrete, registra a auditoria (`docs/LGPD/LGPD.md` §5) e marca
-    `agendamentos.lembrete_enviado` -- o registro que o re-treino usa para não
-    confundir "compareceu" com "compareceu porque foi lembrado", e que impede
-    reenvio na janela de três dias do job."""
+    """Envia o lembrete, marca `agendamentos.lembrete_enviado` e registra a
+    auditoria (`docs/LGPD/LGPD.md` §5). A marca é o registro que o re-treino
+    usa para não confundir "compareceu" com "compareceu porque foi lembrado",
+    e o que impede reenvio na janela de três dias do job."""
     canal = cliente_mensageria.canal
     mensagem = _mensagem_de_lembrete(agendamento)
     try:
@@ -488,7 +489,7 @@ def _enviar_lembrete(
         repositories.registrar_mensagem(
             id_agendamento=agendamento["id"], canal=canal, status_envio="falha_envio"
         )
-        # Até o Passo 8.9 a falha de envio era só aviso no run. Agora é evento
+        # Antes da v2.2.0 a falha de envio era só aviso no run. Agora é evento
         # `erro` (alerta P2), com a classe da exceção e nunca o motivo: o de
         # `ErroEnvioInfobip` pode trazer o messageId e o status do provedor.
         observabilidade.registrar_evento(
@@ -499,6 +500,14 @@ def _enviar_lembrete(
         )
         telemetria.contar("saudeja_sms_total", {"status_envio": "falha_envio"})
         return
+    # A marca vem logo depois do envio, antes de qualquer outra gravação: é ela
+    # que tira o agendamento da fila. O job roda duas vezes por dia (gatilho do
+    # Supabase e, de reserva, o cron do GitHub), e no lembrete sem predição a
+    # marca é a única coisa que impede o segundo SMS. Se o banco falhasse entre
+    # a auditoria e a marca, a segunda execução lembraria o paciente de novo;
+    # nesta ordem, o pior caso é uma linha de auditoria a menos num run que já
+    # termina vermelho.
+    repositories.marcar_lembrete_enviado(agendamento["id"])
     segmentos = segmentos_sms(mensagem)
     repositories.registrar_mensagem(
         id_agendamento=agendamento["id"], canal=canal, status_envio=status, segmentos=segmentos
@@ -511,7 +520,6 @@ def _enviar_lembrete(
         telemetria.contar(
             "saudeja_sms_custo_usd_total", {"status_envio": status}, valor=preco * segmentos
         )
-    repositories.marcar_lembrete_enviado(agendamento["id"])
     resultado["mensagens_disparadas"] += 1
     if status == STATUS_ENVIADO_SEM_PREDICAO:
         resultado["lembretes_sem_predicao"] += 1
@@ -534,7 +542,7 @@ def purgar_eventos_antigos() -> int:
 
 
 def purgar_dados_derivados_antigos() -> dict[str, int]:
-    """Retenção de `predicoes`/`mensagens_disparadas` (`docs/LGPD.md`
+    """Retenção de `predicoes`/`mensagens_disparadas` (`docs/LGPD/LGPD.md`
     §5) -- LGPD Art. 6º, III: dado derivado não fica guardado indefinidamente
     só porque o banco aguenta.
 
@@ -691,9 +699,6 @@ def _publicar_resumo(
         print(f"::error::{falha}")
     for aviso in avisos:
         print(f"::warning::{aviso}")
-    destino = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not destino:
-        return
     titulo = "com falha" if falhas else "concluído"
     linhas = [
         f"### Job D-2 — {titulo}",
@@ -709,8 +714,7 @@ def _publicar_resumo(
         *(f"- **falha:** {f}" for f in falhas),
         *(f"- aviso: {a}" for a in avisos),
     ]
-    with open(destino, "a", encoding="utf-8") as f:
-        f.write("\n".join(linhas) + "\n")
+    anexar_ao_resumo("\n".join(linhas))
 
 
 def _linhas_do_canario(resultado: dict[str, Any], canario_version: str | None) -> list[str]:
@@ -804,7 +808,7 @@ def main(argv: list[str] | None = None) -> int:
     # antes, para o handler OTLP também passar pelo filtro.
     telemetria.configurar_telemetria(telemetria.SERVICO_JOB_D2)
     configurar_logging()
-    # Span raiz da execução (P3): pré-checagem, canário, a fila (`job_d2`, com
+    # Span raiz da execução: pré-checagem, canário, a fila (`job_d2`, com
     # `buscar_fila`, `predizer`, `gravar` e `enviar_lembrete`), purgas e
     # sincronização viram um trace só, marcado com o run do Actions.
     with telemetria.span(

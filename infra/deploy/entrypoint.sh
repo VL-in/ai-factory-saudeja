@@ -21,7 +21,7 @@ encerrar() {
 }
 trap encerrar TERM INT
 
-echo "[entrypoint] APP_ENV=${APP_ENV:-dev} PREDICT_BACKEND=${PREDICT_BACKEND:-processo}"
+echo "[entrypoint] APP_ENV=${APP_ENV:-prod} PREDICT_BACKEND=${PREDICT_BACKEND:-processo}"
 echo "[entrypoint] API em :${API_PORT:-8000} | UI em :${UI_PORT:-7860}"
 
 python -m uvicorn api.main:app \
