@@ -356,12 +356,26 @@ def test_p3_so_notifica_na_segunda_das_9h_as_10h():
     (intervalo,) = gp.carregar_notificacoes()["intervalos"]
     janelas = intervalo["time_intervals"]
     assert all(j["location"] == "America/Sao_Paulo" for j in janelas)
-    assert janelas[0] == {"weekdays": ["tuesday:sunday"], "location": "America/Sao_Paulo"}
+    assert janelas[0] == {
+        "weekdays": ["sunday", "tuesday:saturday"],
+        "location": "America/Sao_Paulo",
+    }
     assert janelas[1]["weekdays"] == ["monday"]
     assert janelas[1]["times"] == [
         {"start_time": "00:00", "end_time": "09:00"},
         {"start_time": "10:00", "end_time": "24:00"},
     ]
+
+
+def test_faixas_de_dias_do_silencio_estao_na_ordem_do_alertmanager():
+    """A semana do Alertmanager vai de domingo a sábado e "a:b" exige a <= b;
+    faixa invertida ("tuesday:sunday") o Grafana recusa com 400."""
+    semana = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+    for intervalo in gp.carregar_notificacoes()["intervalos"]:
+        for janela in intervalo["time_intervals"]:
+            for dias in janela.get("weekdays", []):
+                inicio, _, fim = dias.partition(":")
+                assert semana.index(inicio) <= semana.index(fim or inicio), dias
 
 
 def test_contact_point_faltando_falha_antes_de_qualquer_escrita():

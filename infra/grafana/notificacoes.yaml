@@ -24,11 +24,13 @@ contatos:
 contato_dev: saudeja-dev  # so' quem verifica em dev; exigido tambem em producao (1a rota)
 
 # Resumo semanal: o P3 fica silenciado fora de segunda, 09h-10h em Sao Paulo
-# (formato do endpoint de "mute timings" do Grafana).
+# (formato do endpoint de "mute timings" do Grafana). A semana do Alertmanager
+# comeca no domingo e a faixa "a:b" exige a <= b: "tuesday:sunday" e' recusada
+# com 400, por isso domingo vai separado.
 intervalos:
   - name: saudeja-fora-do-resumo-semanal
     time_intervals:
-      - weekdays: ["tuesday:sunday"]
+      - weekdays: [sunday, "tuesday:saturday"]
         location: America/Sao_Paulo
       - weekdays: [monday]
         times:
