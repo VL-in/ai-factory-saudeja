@@ -24,7 +24,6 @@ Uso:
     python src/alerta_observabilidade.py [--janela-horas 24]
 """
 import argparse
-import os
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -35,6 +34,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import observabilidade  # noqa: E402
+from saida_actions import anexar_ao_resumo  # noqa: E402
 
 # Mesmo teto da aba "Observabilidade" (src/ui/logic.py): acima dele, o p95
 # seria o do pedaço mais recente da janela, e `truncado` avisa isso.
@@ -168,9 +168,6 @@ def publicar(m: Medicoes, alertas: list[str]) -> None:
         print(
             f"::warning::janela truncada em {LIMITE_EVENTOS} eventos -- p95 do trecho mais recente"
         )
-    destino = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not destino:
-        return
 
     def fmt(valor: float | None, sufixo: str = "") -> str:
         return "n/d" if valor is None else f"{valor:.0f}{sufixo}"
@@ -196,8 +193,7 @@ def publicar(m: Medicoes, alertas: list[str]) -> None:
         *(f"- exceção `{nome}`: {n}" for nome, n in sorted(m.excecoes.items())),
         *(f"- **alerta:** {a}" for a in alertas),
     ]
-    with open(destino, "a", encoding="utf-8") as f:
-        f.write("\n".join(linhas) + "\n")
+    anexar_ao_resumo("\n".join(linhas))
 
 
 def main(argv: list[str] | None = None) -> int:

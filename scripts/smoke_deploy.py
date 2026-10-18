@@ -39,6 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from campeao import calcular_model_version  # noqa: E402
+from saida_actions import anexar_ao_resumo  # noqa: E402
 
 API_HF = "https://huggingface.co/api/spaces"
 
@@ -216,10 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             url = verificar_space(args.space_id, os.environ.get("HF_TOKEN"), timeout=args.timeout)
             print(f"[ok] Space no commit novo e saudável em {url}")
-            destino = os.environ.get("GITHUB_STEP_SUMMARY")
-            if destino:
-                with open(destino, "a", encoding="utf-8") as f:
-                    f.write(f"Space publicado e saudável: {url}\n")
+            anexar_ao_resumo(f"Space publicado e saudável: {url}")
     except FalhaSmoke as exc:
         print(f"::error::{exc}")
         return 1

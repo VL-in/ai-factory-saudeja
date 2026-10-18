@@ -24,11 +24,11 @@ A caixa de **ciência** da Política de privacidade e dos Termos de uso, antes d
 formulário, não é consentimento: é informação (art. 9º). Ela fica em
 `documentos_legais`.
 """
-import re
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 from typing import Any
 
+from config_projeto import ler_timestamptz
 from features import calcular_idade
 
 FINALIDADE_TREINO = "treino"
@@ -109,20 +109,11 @@ def _ordem(evento: Evento) -> tuple[datetime, bool]:
     """Chave de "mais recente": o instante e, no empate, a revogação depois da
     concessão. Empatar é improvável (dois cliques no mesmo microssegundo), mas,
     se acontecer, ficar sem consentimento é o lado seguro: o ônus de provar o
-    consentimento é do controlador (art. 8º, § 2º)."""
-    return _instante(evento["registrado_em"]), evento["acao"] == ACAO_REVOGADO
+    consentimento é do controlador (art. 8º, § 2º).
 
-
-def _instante(registrado_em: str) -> datetime:
-    """Instante do `timestamptz`, comparável entre offsets diferentes.
-
-    Mesma normalização de `repositories.ler_timestamptz` (o PostgREST corta os
-    zeros finais da fração, e o `fromisoformat` do Python 3.10 só aceita 3 ou 6
-    dígitos), repetida aqui de propósito: importar `db.repositories` puxaria o
-    cliente do Supabase para um módulo que o resto do código usa sem banco."""
-    return datetime.fromisoformat(
-        re.sub(r"\.(\d{1,6})(?=[+-]|$)", lambda m: "." + m.group(1).ljust(6, "0"), registrado_em)
-    )
+    O instante vem com o offset que o PostgREST devolveu, então dois eventos
+    com offsets diferentes continuam comparáveis."""
+    return ler_timestamptz(evento["registrado_em"]), evento["acao"] == ACAO_REVOGADO
 
 
 def tem_consentimento(eventos: Iterable[Evento], finalidade: str) -> bool:

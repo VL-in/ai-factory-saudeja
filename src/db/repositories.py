@@ -7,13 +7,14 @@ Cada função encapsula uma consulta/gravação específica que a UI e o
 job D-2 precisam -- nada de query builder genérico aqui, só os
 acessos que o produto de fato usa.
 """
-import re
 from datetime import date, datetime, timedelta
 from typing import Any, cast
 
 from postgrest.types import CountMethod
 
-from config_projeto import fuso_da_clinica, hoje_na_clinica
+# `ler_timestamptz` continua acessível como `repositories.ler_timestamptz`: é
+# daqui que quem lê linhas do banco costuma importá-la.
+from config_projeto import fuso_da_clinica, hoje_na_clinica, ler_timestamptz
 from db.client import obter_client
 
 Linha = dict[str, Any]
@@ -499,7 +500,7 @@ def contar_predicoes_e_explicacoes(desde: datetime) -> tuple[int, int]:
 
 def purgar_dados_derivados(anteriores_a: datetime) -> dict[str, int]:
     """Retenção das tabelas **derivadas** (`predicoes`,
-    `mensagens_disparadas`), política de `docs/LGPD.md` §5.
+    `mensagens_disparadas`), política de `docs/LGPD/LGPD.md` §5.
 
     Pendurada na mesma purga diária de `eventos_app` pelo mesmo motivo do
     ADR-006: o job já roda uma vez por dia, e agendador novo é peça de infra a
@@ -599,17 +600,6 @@ def estatisticas_de_modelo(model_version: str, desde: datetime) -> dict[str, Any
         ),
         "primeira_predicao": ler_timestamptz(primeira[0]["criado_em"]) if primeira else None,
     }
-
-
-def ler_timestamptz(valor: str) -> datetime:
-    """O PostgREST devolve `timestamptz` com a fração de segundo sem os zeros
-    finais ("...T12:00:00.12345+00:00"), e o `fromisoformat` do Python 3.10 só
-    aceita 3 ou 6 dígitos. Completa a fração antes de ler. Toda leitura de
-    `timestamptz` vinda do banco passa por aqui: com `now()`, ~1 em cada 10
-    valores termina em zero, então o `fromisoformat` direto falha só às vezes."""
-    return datetime.fromisoformat(
-        re.sub(r"\.(\d{1,6})(?=[+-]|$)", lambda m: "." + m.group(1).ljust(6, "0"), valor)
-    )
 
 
 def canario_revertido(model_version: str) -> Linha | None:

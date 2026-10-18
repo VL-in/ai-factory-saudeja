@@ -204,7 +204,7 @@ def _redigir_valor_de_campo(chave: str, valor):
     olhar o conteúdo: `extra={"nome": "Ana"}` não tem como ser pego pela regra
     de texto, porque no JSON de saída a chave e o valor são serializados
     separadamente e nunca formam a string `nome=Ana`."""
-    if _chave_proibida(chave):
+    if chave_de_pii(chave):
         return MARCADOR
     if isinstance(valor, str):
         return redigir(valor)
@@ -231,10 +231,6 @@ def chave_de_pii(chave: str) -> bool:
         or alvo.endswith(f"_{proibida}")
         for proibida in CHAVES_PROIBIDAS
     )
-
-
-def _chave_proibida(chave: str) -> bool:
-    return chave_de_pii(chave)
 
 
 class FiltroRedacaoPII(logging.Filter):

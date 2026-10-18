@@ -76,6 +76,7 @@ from typing import Any
 
 import campeao
 from config_projeto import caminho_de_env, carregar_params, fuso_da_clinica
+from saida_actions import escrever_json_atomico, escrever_saida, publicar
 
 # Lidos em tempo de chamada (não capturados em default de argumento): os
 # testes apontam tudo para `tmp_path` trocando estes atributos do módulo.
@@ -190,16 +191,6 @@ def sha256_de_arquivo(path: str | Path) -> str:
         return hashlib.sha256(f.read()).hexdigest()
 
 
-def _escrever_json(caminho: str | Path, conteudo: dict[str, Any]) -> None:
-    # Atômica, como a do campeão em src/retrain_gate.py: o arquivo é lido pelo
-    # passo seguinte do workflow (commit/PR) e pelo job do dia seguinte.
-    tmp = f"{caminho}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(conteudo, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    os.replace(tmp, caminho)
-
-
 def carregar_historico() -> dict[str, Any]:
     caminho = Path(HISTORICO_PATH)
     if not caminho.exists():
@@ -232,7 +223,7 @@ def modelos_revertidos() -> set[str]:
 def _registrar_no_historico(entrada: dict[str, Any]) -> None:
     historico = carregar_historico()
     historico.setdefault("canarios", []).append(entrada)
-    _escrever_json(HISTORICO_PATH, historico)
+    escrever_json_atomico(HISTORICO_PATH, historico)
 
 
 def _remover_arquivos_do_canario() -> None:
@@ -295,7 +286,7 @@ def iniciar(
         "dvc_lock_base_sha256": dvc_lock_base_sha256,
         "fracao": cfg["fracao"],
     }
-    _escrever_json(CANARIO_PATH, canario)
+    escrever_json_atomico(CANARIO_PATH, canario)
     return canario
 
 
@@ -368,7 +359,7 @@ def promover(evidencia: dict[str, Any] | None = None) -> dict[str, Any]:
             "critério de promoção (SLO §3.1)."
         ),
     }
-    _escrever_json(CHAMPION_PATH, novo)
+    escrever_json_atomico(CHAMPION_PATH, novo)
     shutil.copyfile(lock_salvo, DVC_LOCK_PATH)
     dataset_salvo = _dir() / DATASET_DVC_SALVO
     if dataset_salvo.exists():
@@ -844,25 +835,6 @@ def formatar_avaliacao(avaliacao: Avaliacao, registro: dict[str, Any]) -> str:
     return "\n".join(linhas) + "\n"
 
 
-def _publicar(texto: str) -> None:
-    try:
-        print(texto)
-    except UnicodeEncodeError:
-        codec = sys.stdout.encoding or "ascii"
-        print(texto.encode(codec, errors="replace").decode(codec, errors="replace"))
-    destino = os.environ.get("GITHUB_STEP_SUMMARY")
-    if destino:
-        with open(destino, "a", encoding="utf-8") as f:
-            f.write(texto + "\n")
-
-
-def _saida_do_workflow(chave: str, valor: str) -> None:
-    destino = os.environ.get("GITHUB_OUTPUT")
-    if destino:
-        with open(destino, "a", encoding="utf-8") as f:
-            f.write(f"{chave}={valor}\n")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Canário do modelo (ADR-008)")
     sub = parser.add_subparsers(dest="comando", required=True)
@@ -925,16 +897,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.comando == "avaliar":
             registro = carregar()
             if registro is None:
-                _publicar("Nenhum canário ativo.")
-                _saida_do_workflow("acao", "nenhum")
+                publicar("Nenhum canário ativo.")
+                escrever_saida("acao", "nenhum")
                 return 0
             avaliacao = avaliar()
             resumo = formatar_avaliacao(avaliacao, registro)
-            _publicar(resumo)
+            publicar(resumo)
             if args.resumo_md:
                 Path(args.resumo_md).write_text(resumo, encoding="utf-8")
-            _saida_do_workflow("acao", avaliacao.acao)
-            _saida_do_workflow("model_version", str(registro.get("model_version")))
+            escrever_saida("acao", avaliacao.acao)
+            escrever_saida("model_version", str(registro.get("model_version")))
             if args.relatorio_json:
                 with open(args.relatorio_json, "w", encoding="utf-8") as f:
                     json.dump(avaliacao.como_dict(), f, indent=2, ensure_ascii=False)

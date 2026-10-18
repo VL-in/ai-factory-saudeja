@@ -86,6 +86,7 @@ import inference
 import sanidade_modelo
 from config_projeto import REPO_ROOT, caminho_de_env, carregar_params, fuso_da_clinica
 from inference import calcular_model_version
+from saida_actions import escrever_json_atomico, publicar
 
 PARAMS = carregar_params()
 
@@ -415,11 +416,7 @@ def escrever_champion(champion: dict[str, Any], path: str | None = None) -> str:
     caminho = path or CHAMPION_PATH
     # Escrita atômica, mesma razão de src/train.py: este arquivo é lido pelo
     # passo seguinte do workflow (commit/PR) e por quem inspeciona o repo.
-    tmp = f"{caminho}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(champion, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-    os.replace(tmp, caminho)
+    escrever_json_atomico(caminho, champion)
     return caminho
 
 
@@ -434,7 +431,7 @@ def formatar_resumo(
     # Sem emoji de propósito: o resumo é impresso no console de quem roda o
     # gate à mão, e o console do Windows em cp1252 levanta UnicodeEncodeError
     # em emoji/"Δ" -- o que transformava o código de saída do gate num
-    # traceback (visto na verificação de 2026-09-21). O `_publicar_resumo`
+    # traceback (visto na verificação de 2026-09-21). `saida_actions.publicar`
     # ainda protege o caso geral; aqui a escolha é não criar o problema.
     if decisao.codigo_saida == SAIDA_SEM_RETREINO:
         titulo = "sem re-treino efetivo"
@@ -512,21 +509,6 @@ def formatar_resumo(
             "",
         ]
     return "\n".join(linhas)
-
-
-def _publicar_resumo(texto: str) -> None:
-    try:
-        print(texto)
-    except UnicodeEncodeError:
-        # Resumo ilegível é ruim; gate que morre ao IMPRIMIR o resumo é pior --
-        # o workflow lê o código de saída, e um traceback aqui apagaria a
-        # decisão já tomada. O arquivo do summary é sempre gravado em utf-8.
-        codec = sys.stdout.encoding or "ascii"
-        print(texto.encode(codec, errors="replace").decode(codec, errors="replace"))
-    destino = os.environ.get("GITHUB_STEP_SUMMARY")
-    if destino:
-        with open(destino, "a", encoding="utf-8") as f:
-            f.write(texto + "\n")
 
 
 def _escrever_relatorio(
@@ -682,7 +664,7 @@ def main(argv: list[str] | None = None) -> int:
                 "revertido. Ver o último run do `canario.yml` e os PRs `canario/*` abertos."
             ),
         )
-        _publicar_resumo(formatar_resumo(decisao))
+        publicar(formatar_resumo(decisao))
         if args.relatorio_json:
             _escrever_relatorio(args.relatorio_json, decisao, None)
         return decisao.codigo_saida
@@ -717,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
                     "comparar -- o campeão segue intacto."
                 ),
             )
-            _publicar_resumo(formatar_resumo(decisao))
+            publicar(formatar_resumo(decisao))
             if args.relatorio_json:
                 _escrever_relatorio(args.relatorio_json, decisao, None)
             return decisao.codigo_saida
@@ -773,7 +755,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[gate] campeão atualizado em {caminho}")
 
     dados = ler_relatorio_de_dados()
-    _publicar_resumo(formatar_resumo(decisao, metricas, dados))
+    publicar(formatar_resumo(decisao, metricas, dados))
     if args.relatorio_json:
         _escrever_relatorio(args.relatorio_json, decisao, metricas, dados)
     return decisao.codigo_saida
@@ -792,7 +774,7 @@ def _falha_do_pipeline(exc: subprocess.CalledProcessError, relatorio_json: str |
     else:
         motivo = f"`dvc repro` falhou (código {exc.returncode}) -- ver o log do passo"
     decisao = Decisao(promover=False, codigo_saida=SAIDA_FALHA_PIPELINE, motivo=motivo)
-    _publicar_resumo(formatar_resumo(decisao, dados=dados))
+    publicar(formatar_resumo(decisao, dados=dados))
     if relatorio_json:
         _escrever_relatorio(relatorio_json, decisao, None, dados)
     return decisao.codigo_saida

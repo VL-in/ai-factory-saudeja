@@ -36,7 +36,6 @@ paciente. O repositório é público e o log do Actions também.
 """
 import argparse
 import logging
-import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Iterator
@@ -55,6 +54,7 @@ import db.repositories as repositories  # noqa: E402
 import db.repositorio_treino as repositorio_treino  # noqa: E402
 from config_projeto import REPO_ROOT, janela_treino_dias  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
+from saida_actions import anexar_ao_resumo  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -468,10 +468,7 @@ def _publicar(resultado: Resultado, escrever: Callable[[str], Any] = print) -> N
     ]
     texto = "\n".join(linhas)
     escrever(texto)
-    destino = os.environ.get("GITHUB_STEP_SUMMARY")
-    if destino:
-        with open(destino, "a", encoding="utf-8") as f:
-            f.write(texto + "\n")
+    anexar_ao_resumo(texto)
     for falha in resultado.falhas:
         escrever(f"::error::{falha}")
 

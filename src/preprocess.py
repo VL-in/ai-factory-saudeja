@@ -28,6 +28,19 @@ MAPA_ESPECIALIDADE_PATH = caminho_de_env(
 RANDOM_STATE = 42
 TEST_SIZE = 0.20
 
+# Features do modelo, na ordem em que o treino as monta. A inferência
+# (`src/inference.py`) importa esta mesma lista: duas cópias poderiam divergir
+# em silêncio, e a ordem das colunas é parte do contrato com o modelo.
+# dia_de_semana/horario entram depois, só com `features.temporais`.
+COLUNAS_BASE = [
+    "idade",
+    "sexo",
+    "especialidade",
+    "distancia_km",
+    "dias_entre_agendamento_consulta",
+    "historico_noshow",
+]
+
 # Colunas categoricas (label-encoded como inteiros, nao numericas de verdade) --
 # usadas tanto pelo SMOTENC (evita interpolar valores fracionarios que nao
 # existem, ex. dia_de_semana=2.7) quanto pelo LightGBM (categorical_feature).
@@ -76,14 +89,7 @@ def preprocessar(df):
     mapa_esp = {e: i for i, e in enumerate(especialidades)}
     df["especialidade"] = df["especialidade"].map(mapa_esp)
 
-    features = [
-        "idade",
-        "sexo",
-        "especialidade",
-        "distancia_km",
-        "dias_entre_agendamento_consulta",
-        "historico_noshow",
-    ]
+    features = list(COLUNAS_BASE)
 
     if PARAMS.get("features", {}).get("temporais", False):
         df = extrair_features_temporais(df)
