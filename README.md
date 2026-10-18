@@ -1,6 +1,6 @@
 # SaudeJa — Classificador de no-show em agendamentos médicos
 
-> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.3.0](docs/logs/CHANGELOG.md). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
+> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.4.0](docs/logs/CHANGELOG.md). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
 
 Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia lembrete por SMS só para eles, dois dias antes do atendimento.
 
@@ -468,7 +468,7 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
 - [x] Etapa 3: arquitetura C4 + ADR-002 + repositório
 - [x] Etapa 4: produto deployável — inferência, SHAP, API, interface, banco, job D-2, mensageria e blindagem LGPD
 - [x] Etapa 5: CI/CD, re-treino mensal com gate, canário do modelo e observabilidade com alertas
-- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 a v2.3.0)
+- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 a v2.4.0)
 - [x] Etapa 7: operação e ensaios
   - [x] Ensaio de rollback de código
 - [ ] Adequação à LGPD ([pendências](#pendências))

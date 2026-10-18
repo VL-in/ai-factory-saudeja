@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       ambiente:
-        # Disparo manual em dev (Passo 8.9, P3): roda o caminho agendado
+        # Disparo manual em dev: roda o caminho agendado
         # inteiro (pre-checagem, canario, fila, purgas, sincronizacao) contra o
         # Supabase de dev, com SMS em stub. So' para verificar mudancas antes
         # de producao. O agendamento nao tem inputs e cai sempre em production;
@@ -82,7 +82,7 @@ jobs:
       INFOBIP_REMETENTE: ${{ vars.INFOBIP_REMETENTE }}
       HEALTHCHECKS_JOB_D2_URL: ${{ secrets.HEALTHCHECKS_JOB_D2_URL }}
       APP_ENV: ${{ inputs.ambiente == 'dev' && 'dev' || 'prod' }}
-      # Telemetria (Passo 8.9): logs, metricas e traces ao Grafana Cloud, com
+      # Telemetria: logs, metricas e traces ao Grafana Cloud, com
       # `deployment.environment` = APP_ENV. Sem os secrets, o job roda igual e
       # nao exporta nada.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}

@@ -1,5 +1,5 @@
 """
-SaúdeJá — testes da telemetria OpenTelemetry (`src/telemetria.py`, Passo 8.9).
+SaúdeJá — testes da telemetria OpenTelemetry (`src/telemetria.py`).
 
 Três coisas são provadas aqui:
 
@@ -10,7 +10,7 @@ Três coisas são provadas aqui:
    (`uvicorn.access`). O Loki é a primeira cópia de log que não é efêmera.
 3. **Os pontos de entrada chamam a telemetria antes do logging**, e o job
    esvazia o lote no fim.
-4. **Tracing (P3)**: os spans da instrumentação automática (httpx, FastAPI)
+4. **Tracing**: os spans da instrumentação automática (httpx, FastAPI)
    saem sem query string, sem IP e sem a mensagem da exceção; identificadores
    vão ao span e nunca à métrica; `id_execucao` liga `eventos_app` ao trace ou
    ao run do Actions.
@@ -420,7 +420,7 @@ def test_chamadas_de_src_usam_metricas_e_atributos_do_catalogo():
     assert vistas > 0
 
 
-# --- tracing (P3) ---------------------------------------------------------------
+# --- tracing --------------------------------------------------------------------
 
 
 def _todo_o_span(span) -> str:

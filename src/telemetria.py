@@ -1,6 +1,6 @@
 """
 SaúdeJá — telemetria OpenTelemetry com envio OTLP direto ao Grafana Cloud
-(Passo 8.9 do plano; revê os descartes do [ADR-006]).
+(revê os descartes do [ADR-006]).
 
 Este módulo **configura** os três provedores (logs, métricas e traces), liga
 o `logging` do processo ao exportador de logs e oferece as primitivas
@@ -31,13 +31,13 @@ Cinco propriedades que o resto do módulo existe para garantir:
    e o passeio de `aplicar_filtro_em_handlers_existentes` também o alcança --
    duas barreiras, porque o Loki é a primeira cópia de log que **não** é
    efêmera, e o que entrar lá fica 14 dias.
-5. **Span sai sanitizado, venha de onde vier.** Desde a P3, FastAPI e `httpx`
-   são instrumentados automaticamente, e esses spans trazem URL com query
+5. **Span sai sanitizado, venha de onde vier.** FastAPI e `httpx` são
+   instrumentados automaticamente, e esses spans trazem URL com query
    string, IP de quem chamou e a mensagem da exceção. O exportador de spans é
    envolvido por `_ExportadorSanitizado`, que reescreve todo span antes de ele
    sair do processo.
 
-Tracing (P3): `span` aceita `identificadores` (`IDENTIFICADORES_DE_SPAN`), que
+Tracing: `span` aceita `identificadores` (`IDENTIFICADORES_DE_SPAN`), que
 nunca chegam a métrica; `id_execucao()` liga `eventos_app` ao trace (UI e API)
 ou ao run do Actions (job); `definir_sessao` dá o `session.id` da UI.
 
@@ -75,8 +75,8 @@ BUCKETS_DE_PROBABILIDADE = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 CONTADOR = "contador"
 HISTOGRAMA = "histograma"
 
-# Catálogo fechado das métricas do projeto (Passo 8.9, "Métricas: nomes,
-# atributos e definições"). Nome fora daqui é ignorado em runtime e recusado
+# Catálogo fechado das métricas do projeto: nome, tipo e definição. Nome
+# fora daqui é ignorado em runtime e recusado
 # pela guarda estática de tests/test_telemetria.py.
 #
 # Sem unidade declarada de propósito: o Grafana Cloud traduz OTLP para nomes
@@ -114,7 +114,7 @@ METRICAS = {
 # Atributos permitidos em métrica e em span: cardinalidade FECHADA. O plano
 # gratuito do Grafana Cloud corta em 10 mil séries, e cada valor distinto de
 # atributo é uma série nova. Identificador de agendamento, paciente, sessão ou
-# trace nunca entra em métrica -- vai só em span (P3) e em log.
+# trace nunca entra em métrica -- vai só em span e em log.
 ATRIBUTOS_PERMITIDOS = frozenset(
     {
         "acao",
@@ -130,7 +130,7 @@ ATRIBUTOS_PERMITIDOS = frozenset(
 )
 TAMANHO_MAXIMO_ATRIBUTO = 120
 
-# Identificadores que só um SPAN pode levar (P3): ligam o trace ao agendamento,
+# Identificadores que só um SPAN pode levar: ligam o trace ao agendamento,
 # à execução do job e à sessão do Streamlit. Ficam FORA de
 # `ATRIBUTOS_PERMITIDOS` de propósito -- aquela allowlist vale também para
 # métrica, e um uuid por agendamento lá viraria uma série por agendamento.
@@ -144,7 +144,7 @@ IDENTIFICADORES_DE_SPAN = frozenset({"id_agendamento", "id_execucao", "session.i
 # nelas de minutos em minutos, e cada batida seria um trace sem diagnóstico.
 ROTAS_FORA_DO_TRACING = "health"
 
-# --- sanitização dos spans de instrumentação automática (P3) ------------------
+# --- sanitização dos spans de instrumentação automática -----------------------
 # Os spans que o projeto abre já nascem limpos (`span`, allowlist acima). Os da
 # instrumentação automática (FastAPI, httpx) não: trazem a URL com a query
 # string -- a do PostgREST carrega o VALOR dos filtros (`?telefone=eq....`) --,
@@ -352,7 +352,7 @@ def id_do_run() -> str | None:
 
 
 def id_execucao() -> str | None:
-    """O que liga `eventos_app`, Loki e Tempo (P3): `id_do_run()` no job; na
+    """O que liga `eventos_app`, Loki e Tempo: `id_do_run()` no job; na
     UI e na API, o trace_id do span corrente (32 hex). `None` sem os dois --
     telemetria desligada fora do Actions, ou evento registrado fora de span."""
     if _id_execucao_do_processo:
@@ -465,7 +465,7 @@ def _instrumento(nome: str, tipo: str) -> Any:
 
 def recurso(servico: str) -> dict[str, str]:
     """Atributos do recurso OTel. `deployment.environment` é o que separa dev
-    de prod num stack só (decisão 8 do Passo 8.9): alerta só dispara para `prod`."""
+    de prod num stack só: alerta só dispara para `prod`."""
     return {
         "service.name": servico,
         "service.version": _versao(),
@@ -591,7 +591,7 @@ class _ExportadorSanitizado:
 
 def _preparar_instrumentacao_http() -> None:
     """Convenções HTTP estáveis (`url.full`, `http.server.request.duration`,
-    o nome que o plano usa) em vez das antigas, cuja métrica de servidor leva
+    o nome que os painéis usam) em vez das antigas, cuja métrica de servidor leva
     `http.target` -- caminho com query string -- como atributo. Precisa estar
     no ambiente antes da primeira instrumentação do processo."""
     os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
@@ -703,7 +703,7 @@ def _montar(servico: str) -> logging.Handler:
     provedor_logs = LoggerProvider(resource=resource)
     provedor_logs.add_log_record_processor(BatchLogRecordProcessor(exportador_logs))
 
-    # Globais para a instrumentação automática (P3) e para `trace.get_tracer`
+    # Globais para a instrumentação automática e para `trace.get_tracer`
     # achá-los sem receber o provedor. O SDK só aceita definir uma vez por
     # processo; o módulo usa as referências guardadas em `_provedores`.
     trace.set_tracer_provider(provedor_traces)

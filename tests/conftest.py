@@ -62,7 +62,7 @@ def eventos_capturados(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def telemetria_sem_exportar(monkeypatch):
-    """Nenhum teste exporta telemetria para o Grafana Cloud (Passo 8.9).
+    """Nenhum teste exporta telemetria para o Grafana Cloud.
 
     Mesmo motivo da fixture de cima: `config_projeto` carrega o `.env` local
     no import, e o `.env` de quem desenvolve pode ter o endpoint OTLP real.

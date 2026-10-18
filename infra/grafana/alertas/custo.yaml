@@ -21,7 +21,7 @@ groups:
               format: table
               editorMode: code
               rawQuery: true
-              # Segmentos projetados do mes (view da P5) x preco de um segmento.
+              # Segmentos projetados do mes (envios_cobrados_por_mes) x preco de um segmento.
               # So' o canal `sms` custa; o stub de dev nunca.
               rawSql: |
                 select round(coalesce(sum(segmentos_projetados), 0)

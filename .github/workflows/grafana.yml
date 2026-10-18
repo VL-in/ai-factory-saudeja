@@ -1,12 +1,12 @@
-# Alertas, politicas de notificacao e paineis do Grafana como codigo (Passo 8.9,
-# P7): aplica infra/grafana/ no stack pelo scripts/grafana_provisionar.py.
+# Alertas, politicas de notificacao e paineis do Grafana como codigo: aplica
+# infra/grafana/ no stack pelo scripts/grafana_provisionar.py.
 #
 # Producao: chamado no fim do deploy em main (deploy.yml) e por dispatch em
 # main. Dev: so' por dispatch do branch dev, para verificar regras e paineis
 # com dado de dev -- copias numa pasta propria, que entregam direto ao contact
 # point de dev e nunca tocam a arvore de notificacao de producao. Ao fim da
-# verificacao, `acao=remover` apaga as copias (decisao 8 do plano: dev nao
-# alerta fora da verificacao).
+# verificacao, `acao=remover` apaga as copias: dev nao alerta fora da
+# verificacao.
 #
 # Nada de dado de paciente passa por aqui: o script so' escreve configuracao e,
 # em `conferir`, le nomes de metrica e valores de rotulo.

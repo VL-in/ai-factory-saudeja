@@ -25,7 +25,7 @@ Três propriedades que o resto do módulo existe para garantir:
    por nome de coluna de `tests/test_coerencia_repo.py` não teria como pegar
    isso dentro de um jsonb.
 
-Desde o Passo 8.9, cada evento também vira métrica e cada `medir` abre um
+Desde a v2.2.0, cada evento também vira métrica e cada `medir` abre um
 span no Grafana Cloud (`src/telemetria.py`, no-op sem endpoint OTLP), e o
 `detalhe` ganha o `id_execucao` que liga a linha ao trace ou ao run do job.
 `eventos_app` continua sendo a fonte de verdade de longo prazo.
@@ -51,7 +51,7 @@ TIPO_PREDICAO = "predicao"
 TIPO_JOB_D2 = "job_d2"
 TIPO_ERRO = "erro"
 # Ação da interface medida de ponta a ponta (carregar a fila, registrar
-# desfecho, cadastro, login...). Passo 8.9: a UI quase não era medida.
+# desfecho, cadastro, login...). Antes da v2.2.0 a UI quase não era medida.
 TIPO_ACAO_UI = "acao_ui"
 # O que a aba "Observabilidade" e o alerta diário leem. `acao_ui` fica de
 # fora: a cada interação o Streamlit recarrega a fila, e esses eventos
@@ -84,7 +84,7 @@ CHAVES_DETALHE_PERMITIDAS = frozenset(
         # Nome da ação de `TIPO_ACAO_UI` -- um de um conjunto fechado de rótulos
         # escritos no código (`ui/logic.py`).
         "acao",
-        # Correlação com o run do Actions e com o trace (P3 do Passo 8.9).
+        # Correlação com o run do Actions e com o trace (`telemetria.id_execucao`).
         "id_execucao",
         # Braço do canário que fez a predição (`campeao`/`canario`).
         "braco",
@@ -178,7 +178,7 @@ def registrar_evento(
     if not ativa() or _indisponivel_no_processo:
         return False
 
-    # Correlação (P3 do Passo 8.9): o trace da ação ou da requisição, ou o run
+    # Correlação: o trace da ação ou da requisição, ou o run
     # do Actions no job. Quem já trouxe um `id_execucao` próprio fica com ele.
     if not (detalhe or {}).get("id_execucao"):
         with suppress(Exception):
@@ -217,7 +217,7 @@ def _registrar_metricas(
     model_version: str | None,
     detalhe: dict[str, Any],
 ) -> None:
-    """O mesmo evento, como métrica (Passo 8.9). `telemetria` descarta em
+    """O mesmo evento, como métrica no Grafana. `telemetria` descarta em
     silêncio o que não estiver na allowlist de atributos dela, então um
     `detalhe` com chave desconhecida não vira série nova."""
     if tipo == TIPO_ERRO:

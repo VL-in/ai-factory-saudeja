@@ -1,10 +1,10 @@
-# Para onde vai cada alerta, por criticidade (matriz do Passo 8.9).
+# Para onde vai cada alerta, por criticidade (P1, P2 e P3).
 #
 # scripts/grafana_provisionar.py escreve estas rotas na arvore de politicas
 # PADRAO do Alertmanager do Grafana, como filhas da raiz. A raiz (contact point
 # padrao e agrupamento) e as rotas de terceiros sao preservadas; as rotas que
 # entregam a um dos contact points abaixo sao trocadas por estas -- inclusive
-# a filha provisoria do Synthetic Monitoring criada a mao na P6, que vira
+# a filha provisoria do Synthetic Monitoring, criada a mao com o check, que vira
 # redundante: o check de producao manda `severidade=P1` no proprio rotulo.
 #
 # Os contact points NAO estao no git: e-mails e Telegram sao identificadores de

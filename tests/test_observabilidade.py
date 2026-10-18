@@ -186,7 +186,7 @@ def test_registro_nao_bloqueia_quando_a_fila_enche(monkeypatch, eventos_capturad
     assert observabilidade.registrar_evento(observabilidade.TIPO_PREDICAO) is False
 
 
-# --- um ponto de chamada, três destinos (Passo 8.9) ---------------------------
+# --- um ponto de chamada, três destinos ----------------------------------------
 
 
 def test_medir_vira_evento_span_e_metricas(eventos_capturados, telemetria_em_memoria):
@@ -355,7 +355,7 @@ def test_predict_registra_evento_de_latencia(eventos_capturados):
 def test_predict_com_telemetria_vira_span_e_o_evento_leva_o_trace(
     eventos_capturados, telemetria_em_memoria
 ):
-    """P3 do Passo 8.9: o `lifespan` instrumenta o FastAPI, o request vira um
+    """O `lifespan` instrumenta o FastAPI, o request vira um
     span de servidor, e a linha de `eventos_app` aponta para ele pelo
     `id_execucao` -- é a ponte entre a tabela (90 dias) e o Tempo (14 dias)."""
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
