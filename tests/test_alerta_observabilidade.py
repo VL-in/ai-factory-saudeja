@@ -99,6 +99,29 @@ def test_p95_interativo_lento_nao_alerta():
     assert alerta.avaliar(lento) == []
 
 
+def test_medir_le_so_os_tipos_do_slo_ate_o_teto_e_conta_a_cobertura(monkeypatch):
+    """O teto e os tipos são os mesmos da aba "Observabilidade": os eventos
+    `acao_ui` (um por clique) não podem ocupar as linhas que o p95 usa."""
+    import db.repositories as repositories
+
+    lidos = {}
+
+    def _eventos(desde, limite, tipos):
+        lidos.update(limite=limite, tipos=tipos)
+        return [_evento(observabilidade.TIPO_JOB_D2, "job", 30_000)]
+
+    monkeypatch.setattr(repositories, "buscar_eventos_app", _eventos)
+    monkeypatch.setattr(repositories, "contar_predicoes_e_explicacoes", lambda desde: (10, 9))
+
+    medicoes = alerta.medir(24)
+
+    assert lidos == {"limite": alerta.LIMITE_EVENTOS, "tipos": observabilidade.TIPOS_DO_SLO}
+    assert observabilidade.TIPO_ACAO_UI not in lidos["tipos"]
+    assert medicoes.execucoes_job_d2 == 1
+    assert medicoes.cobertura_explicacao == 0.9
+    assert any("cobertura" in a for a in alerta.avaliar(medicoes))
+
+
 def test_resumo_so_tem_numeros(tmp_path, monkeypatch):
     destino = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(destino))
