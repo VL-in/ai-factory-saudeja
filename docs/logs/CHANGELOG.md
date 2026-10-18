@@ -8,7 +8,7 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [Não publicado]
+## [v2.4.0]
 
 ### Adicionado
 - **Alertas do Grafana por criticidade, mantidos como código** (`infra/grafana/alertas/`, aplicados por `scripts/grafana_provisionar.py`). São 17 regras, cada uma com os rótulos `severidade` (P1, P2 ou P3), `area` (operação, modelo, custo ou LGPD) e `ambiente`. Só as de produção notificam.
