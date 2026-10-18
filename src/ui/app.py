@@ -481,13 +481,14 @@ def _aba_fila_do_dia():
             )
         _mostrar_contribuicoes(item.explicacao, item.explicacao_texto)
 
-    # O hash continua acessível: é por ele que se rastreia o paciente no banco
-    # e nos logs (onde o nome nunca aparece), então sem ele o suporte perde o
-    # único identificador comum entre tela e diagnóstico.
+    # O identificador continua acessível: é por ele que se rastreia o paciente
+    # no banco e nos logs (onde o nome nunca aparece), então sem ele o suporte
+    # perde o único identificador comum entre tela e diagnóstico.
     with st.expander("Detalhes técnicos"):
         # O código do agendamento é o que vai num pedido de revisão à SaúdeJá
         # (_orientacao_revisao_de_decisao): uuid interno, sem dado pessoal.
-        # O identificador do paciente não vai, porque o hash do CPF é reversível.
+        # O identificador do paciente não vai: é dado pessoal pseudonimizado,
+        # e uma linha ainda não migrada guarda o sha256 sem chave (ADR-011).
         st.caption(f"código do agendamento: `{item.id_agendamento}`")
         st.caption(f"identificador interno: `{item.id_paciente_externo}`")
         if item.tem_predicao:

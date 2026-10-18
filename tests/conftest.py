@@ -86,6 +86,18 @@ def canario_sem_desligamento_do_env(monkeypatch):
     monkeypatch.delenv("CANARIO_DESLIGADO", raising=False)
 
 
+CHAVE_DO_IDENTIFICADOR_DE_TESTE = "i" * 32
+
+
+@pytest.fixture(autouse=True)
+def chave_do_identificador_de_teste(monkeypatch):
+    """O cadastro não roda sem `PACIENTE_CHAVE_IDENTIFICADOR` (ADR-011). Uma
+    chave fixa de teste, no lugar da que o `.env` local possa ter: a suíte
+    nunca calcula identificador com a chave real. Quem testa a chave ausente
+    a remove no próprio teste."""
+    monkeypatch.setenv("PACIENTE_CHAVE_IDENTIFICADOR", CHAVE_DO_IDENTIFICADOR_DE_TESTE)
+
+
 class TelemetriaEmMemoria:
     """O que teria saído por OTLP, lido em memória."""
 

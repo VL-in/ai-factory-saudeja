@@ -69,8 +69,8 @@ def inserir_paciente(
     """Upsert por `id_paciente_externo` (unique -- ver migration): recadastrar
     o mesmo paciente atualiza os dados em vez de duplicar a linha.
 
-    `id_paciente_externo` já chega como o hash do CPF (gerado em
-    `ui/logic.py::_id_paciente_externo_de_cpf`), nunca o CPF em si -- esta
+    `id_paciente_externo` já chega como o identificador HMAC do CPF (gerado em
+    `ui/logic.py::_id_paciente_externo_de_cpf`, ADR-011), nunca o CPF em si -- esta
     função só persiste o que recebe. `data_nascimento` substitui `idade`
     (Sec4.1/cadastro realista): a idade em si é calculada sob demanda por
     `features.calcular_idade`, nunca gravada. `telefone` (migration
@@ -351,6 +351,42 @@ def buscar_desfechos_para_treino(desde: datetime) -> list[Linha]:
         linhas += pagina
         if len(pagina) < _PAGINA:
             return linhas
+
+
+def listar_identificadores_de_pacientes() -> list[Linha]:
+    """`id` e `id_paciente_externo` de todos os pacientes, para a migração do
+    identificador (ADR-011, `scripts/migrar_id_paciente.py`). Paginado pelo
+    mesmo motivo de `buscar_desfechos_para_treino`: uma página cortada
+    deixaria linhas sem migrar sem nenhum erro."""
+    linhas: list[Linha] = []
+    while True:
+        pagina = _linhas(
+            obter_client()
+            .table("pacientes")
+            .select("id, id_paciente_externo")
+            .order("id")
+            .range(len(linhas), len(linhas) + _PAGINA - 1)
+            .execute()
+            .data
+        )
+        linhas += pagina
+        if len(pagina) < _PAGINA:
+            return linhas
+
+
+def trocar_identificador_do_paciente(id_paciente: str, novo: str) -> bool:
+    """Grava o identificador novo de um paciente. Filtra só pelo uuid
+    interno: o valor antigo é o sha256 reversível e não pode ir na URL, que
+    fica no log da API do Supabase (LGPD.md §8.1). Devolve se a linha existia."""
+    linhas = (
+        obter_client()
+        .table("pacientes")
+        .update({"id_paciente_externo": novo})
+        .eq("id", id_paciente)
+        .execute()
+        .data
+    )
+    return bool(linhas)
 
 
 # Lista explícita, em vez do `*, pacientes(*), predicoes(*)` que vigorava até

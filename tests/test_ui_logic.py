@@ -8,6 +8,7 @@ usa um TestClient do próprio app FastAPI como transporte -- a API de verdade,
 sem subir servidor nem forjar a resposta. Só os caminhos de FALHA de rede são
 simulados, porque não dá para desligar um servidor que não existe.
 """
+import hashlib
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 
@@ -746,8 +747,40 @@ def test_id_paciente_externo_de_cpf_e_deterministico_e_nao_e_o_cpf_em_si():
     hash2 = logic._id_paciente_externo_de_cpf("11144477735")  # mesma pessoa, formatação diferente
 
     assert hash1 == hash2
-    assert hash1 not in (cpf, "11144477735")  # nunca o CPF cru, formatado ou não
-    assert len(hash1) == 64  # sha256 em hexadecimal
+    assert "11144477735" not in hash1  # nunca o CPF cru, formatado ou não
+    # Nunca o sha256 sem chave, que se reverte em CPF (ADR-011).
+    assert hashlib.sha256(b"11144477735").hexdigest() not in hash1
+    assert hash1.startswith(logic.id_paciente.PREFIXO)
+
+
+def test_cadastro_sem_chave_do_identificador_falha_sem_gravar(monkeypatch):
+    """Sem a chave, o cadastro não volta ao sha256 sem chave: falha antes de
+    tocar o banco, e a tela mostra o erro de persistência."""
+    monkeypatch.delenv(logic.id_paciente.VARIAVEL_CHAVE)
+    gravados = []
+    _banco_falso(monkeypatch)
+    monkeypatch.setattr(
+        logic.repositories, "inserir_paciente", lambda **kw: gravados.append(kw) or {"id": "p1"}
+    )
+    monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
+
+    with pytest.raises(logic.ErroPersistencia):
+        _cadastrar(date(2026, 9, 30))
+
+    assert gravados == []
+
+
+def test_rotulo_de_cadastro_sem_nome_nao_mostra_o_prefixo_do_formato():
+    item = logic.ItemFila(
+        id_agendamento="a1",
+        id_paciente_externo=logic.id_paciente.PREFIXO + "abcdef0123" + "0" * 54,
+        especialidade="Clínica geral",
+        data_hora_agendada=datetime(2026, 9, 30, 9, tzinfo=timezone.utc),
+        probabilidade=None,
+        classe_prevista=None,
+    )
+
+    assert item.rotulo_paciente == "(cadastro sem nome) abcdef01"
 
 
 # --- telefone: contato de envio real do lembrete ----------------------------

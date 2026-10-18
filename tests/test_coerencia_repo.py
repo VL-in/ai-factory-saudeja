@@ -1016,6 +1016,16 @@ def test_so_o_job_d2_cita_a_chave_do_pseudonimo():
         ), arquivo.name
 
 
+def test_nenhum_workflow_cita_a_chave_do_identificador_do_paciente():
+    """A chave do identificador do banco da clínica (ADR-011) é da clínica
+    e chega à SaúdeJá só no Space, que cadastra, e no `.env` do encarregado
+    durante a migração. O job D-2 lê
+    o identificador pronto; nenhum workflow precisa recalculá-lo a partir de
+    um CPF."""
+    for arquivo in sorted(WORKFLOWS.glob("*.yml")):
+        assert "PACIENTE_CHAVE_IDENTIFICADOR" not in _texto_do_workflow(arquivo), arquivo.name
+
+
 def test_nenhum_workflow_le_os_secrets_sem_dizer_o_nome():
     """`toJSON(secrets)` entrega ao passo todos os secrets do environment de
     uma vez, inclusive a chave do pseudônimo, sem citar nome nenhum; um

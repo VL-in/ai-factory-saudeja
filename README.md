@@ -125,7 +125,7 @@ Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase t
 
 ### Proteções implementadas
 
-- **CPF não é gravado**: a tela converte o CPF em hash sha256 antes de chegar ao banco.
+- **CPF não é gravado**: a tela converte o CPF num identificador HMAC, com chave secreta guardada fora do banco, antes de chegar a ele. O sha256 sem chave, usado até então, se revertia em CPF por força bruta ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)).
 - **Nome só na fila do dia**: não vai para log, API, dataset de treino, SMS nem LLM, e cada uma dessas saídas tem um teste ([ADR-007](docs/adr/adr-007-nome-do-paciente.md)).
 - **Log sem dado pessoal**: filtro de redação em todos os handlers do processo, mais uma guarda estática sobre o código ([`src/logging_config.py`](src/logging_config.py)).
 - **Consultas ao Supabase sem dado pessoal na URL**: um teste barra filtros por CPF, telefone, nome ou data de nascimento, porque a URL fica no log do provedor.
@@ -214,7 +214,7 @@ supabase start    # sobe Postgres + Studio via Docker e aplica supabase/migratio
 supabase status   # mostra a URL e a chave secreta para o .env
 ```
 
-Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO` (ver `.env.example`); sem ela, o agendamento funciona e só a base de treino deixa de receber dados. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
+Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO` (ver `.env.example`); sem ela, o agendamento funciona e só a base de treino deixa de receber dados. O cadastro precisa de `PACIENTE_CHAVE_IDENTIFICADOR`, uma chave diferente da do treino ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)); sem ela, o cadastro falha. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
 
 ### 4. Subir a aplicação
 

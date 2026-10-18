@@ -10,6 +10,9 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
 ## [Não publicado]
 
+### Segurança
+- **O identificador do paciente no banco da clínica deixa de ser reversível em CPF** ([ADR-011](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-011-identificador-do-paciente-com-chave.md)). Era o sha256 do CPF, que se reverte por força bruta em minutos. Passa a ser `hmac1:` + HMAC-SHA256 desse hash, com a chave `PACIENTE_CHAVE_IDENTIFICADOR`, guardada fora do banco, diferente da chave do treino e sob guarda da clínica, que a entrega à SaúdeJá só para o Space. **O cadastro passa a exigir essa chave** no Space e no `.env` local. As linhas existentes são migradas por `scripts/migrar_id_paciente.py`, sem precisar do CPF; o procedimento está no ADR-011.
+
 ### Corrigido
 - **As notas da Release perdiam a primeira linha quando o cabeçalho da versão não tinha autor e data** (`scripts/versao_release.py`). Foi o caso da v2.4.0: a Release no GitHub começa direto na lista, sem o "### Adicionado".
 - **Uma linha ilegível no dataset do re-treino não derruba mais o pipeline sem explicação.** O stage `validate_data` calculava o PSI também sobre a linha que o contrato de features recusou e parava antes de escrever o relatório que diz por que o dataset foi barrado. O export lia a data antes do contrato e parava inteiro. Nos dois casos, a mensagem do erro levava o valor cru ao log do Actions, que é público. Agora a linha vai para o bloqueio (`validate_data`) ou para a quarentena (export), identificada só pelo `id_consulta`.

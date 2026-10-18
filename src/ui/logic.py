@@ -21,7 +21,6 @@ de paridade em tests/test_ui_logic.py trava isso: mesmo payload, mesma
 probabilidade nos dois backends.
 """
 import contextlib
-import hashlib
 import logging
 import os
 import re
@@ -43,6 +42,7 @@ import consentimento  # noqa: E402
 import db.client as db_client  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import db.repositorio_treino as repositorio_treino  # noqa: E402
+import id_paciente  # noqa: E402
 import inference  # noqa: E402
 import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
 import observabilidade  # noqa: E402
@@ -324,13 +324,15 @@ class ItemFila:
     @property
     def rotulo_paciente(self) -> str:
         """O que a coluna "Paciente" da fila mostra (ADR-007). Nome quando
-        existe; senão os primeiros caracteres do hash, rotulados como cadastro
-        antigo -- essas linhas foram criadas antes de a coluna existir e
-        realmente não têm nome para recuperar. Inventar um placeholder que
-        pareça nome seria pior que admitir a lacuna."""
+        existe; senão os primeiros caracteres do identificador, rotulados como
+        cadastro antigo -- essas linhas foram criadas antes de a coluna existir
+        e realmente não têm nome para recuperar. Inventar um placeholder que
+        pareça nome seria pior que admitir a lacuna. O prefixo do formato
+        (`hmac1:`, ADR-011) sai, porque é igual em todas as linhas."""
         if self.nome_completo:
             return self.nome_completo
-        return f"(cadastro sem nome) {self.id_paciente_externo[:8]}"
+        identificador = self.id_paciente_externo.removeprefix(id_paciente.PREFIXO)
+        return f"(cadastro sem nome) {identificador[:8]}"
 
 
 # Códigos do Postgres que significam a MESMA causa operacional: o banco em que
@@ -559,11 +561,11 @@ def cpf_valido(cpf: str) -> bool:
 
 def _id_paciente_externo_de_cpf(cpf: str) -> str:
     """O CPF nunca é persistido (minimização de PII por design,
-    architecture.md §4.1) -- o identificador que o banco guarda é o hash dele,
-    gerado automaticamente, não mais um texto livre digitado pelo paciente.
-    sha256 em vez de md5, mesmo motivo de inference.calcular_model_version
-    (md5 levanta ValueError em host com OpenSSL em modo FIPS)."""
-    return hashlib.sha256(normalizar_cpf(cpf).encode()).hexdigest()
+    architecture.md §4.1): o banco guarda o HMAC do hash dele, com a chave
+    `PACIENTE_CHAVE_IDENTIFICADOR` (ADR-011, `src/id_paciente.py`). Sem a
+    chave, levanta `ChaveIdentificadorAusente`: o cadastro falha em vez de
+    voltar ao sha256 sem chave, que se reverte em CPF."""
+    return id_paciente.de_cpf(normalizar_cpf(cpf))
 
 
 def normalizar_telefone(telefone: str) -> str:
@@ -753,8 +755,8 @@ def cadastrar_paciente_e_agendamento(
     não quebrar quem chama sem ele, e `None` nunca apaga um nome já gravado
     (ver `repositories.inserir_paciente`).
 
-    **CPF segue não sendo gravado**: vira só o hash que identifica o paciente
-    (`_id_paciente_externo_de_cpf`). `telefone` é a primeira exceção
+    **CPF segue não sendo gravado**: vira só o identificador HMAC do paciente
+    (`_id_paciente_externo_de_cpf`, ADR-011). `telefone` é a primeira exceção
     deliberada à minimização de PII -- é gravado (normalizado), porque sem
     contato o job D-2 não tem para onde mandar o lembrete real via Infobip.
 

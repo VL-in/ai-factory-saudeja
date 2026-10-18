@@ -35,10 +35,11 @@ scripts do pipeline de treino (`preprocess`/`train`/`validate`) seguem usando
 `print`: rodam sobre dataset pseudonimizado, fora do caminho de qualquer dado
 de paciente vivo, e sua saída é lida por humano no terminal/MLflow.
 
-O que **não** é redigido, de propósito: `id_paciente_externo` (hash sha256 de
-CPF -- é a forma minimizada que o banco guarda, e sem ela não há como
-correlacionar nada em diagnóstico), `id_agendamento`/`id_paciente` (uuid
-interno) e `model_version` (hash do artefato).
+O que **não** é redigido, de propósito: `id_paciente_externo` (HMAC com chave
+do hash do CPF, ADR-011 -- é a forma minimizada que o banco guarda, e sem ela
+não há como correlacionar nada em diagnóstico; hoje nenhum log o registra),
+`id_agendamento`/`id_paciente` (uuid interno) e `model_version` (hash do
+artefato).
 """
 import json
 import logging
