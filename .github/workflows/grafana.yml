@@ -1,0 +1,82 @@
+# Alertas, politicas de notificacao e paineis do Grafana como codigo (Passo 8.9,
+# P7): aplica infra/grafana/ no stack pelo scripts/grafana_provisionar.py.
+#
+# Producao: chamado no fim do deploy em main (deploy.yml) e por dispatch em
+# main. Dev: so' por dispatch do branch dev, para verificar regras e paineis
+# com dado de dev -- copias numa pasta propria, que entregam direto ao contact
+# point de dev e nunca tocam a arvore de notificacao de producao. Ao fim da
+# verificacao, `acao=remover` apaga as copias (decisao 8 do plano: dev nao
+# alerta fora da verificacao).
+#
+# Nada de dado de paciente passa por aqui: o script so' escreve configuracao e,
+# em `conferir`, le nomes de metrica e valores de rotulo.
+name: Grafana (alertas e paineis)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ambiente:
+        description: "Ambiente (dev: so' do branch dev, copias de verificacao)"
+        type: choice
+        options: [production, dev]
+        default: production
+      acao:
+        description: "aplicar, conferir (so' leitura) ou remover (so' dev)"
+        type: choice
+        options: [aplicar, conferir, remover]
+        default: aplicar
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grafana-${{ inputs.ambiente || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  grafana:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: ${{ inputs.ambiente || 'production' }}
+      deployment: false
+    env:
+      GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+      GRAFANA_SA_TOKEN: ${{ secrets.GRAFANA_SA_TOKEN }}
+      # UIDs das fontes de dados: variaveis do environment, nao valores
+      # versionados. Mimir e Loki tem padrao no script.
+      GRAFANA_DS_SUPABASE: ${{ vars.GRAFANA_DS_SUPABASE }}
+      GRAFANA_DS_MIMIR: ${{ vars.GRAFANA_DS_MIMIR }}
+      GRAFANA_DS_LOKI: ${{ vars.GRAFANA_DS_LOKI }}
+      AMBIENTE: ${{ inputs.ambiente == 'dev' && 'dev' || 'prod' }}
+      ACAO: ${{ inputs.acao || 'aplicar' }}
+    steps:
+      - name: Dev so' a partir do branch dev, producao so' de main
+        # Redundante com a politica de cada environment de proposito, como no
+        # job_d2.yml: se alguem afrouxar a politica, a arvore de notificacao de
+        # producao continua sem receber nada de outro branch.
+        run: |
+          if [ "$AMBIENTE" = "dev" ] && [ "$GITHUB_REF" != "refs/heads/dev" ]; then
+            echo "::error::ambiente=dev so' pode ser disparado a partir do branch dev (ref: $GITHUB_REF)"
+            exit 1
+          fi
+          if [ "$AMBIENTE" = "prod" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::producao so' a partir de main (ref: $GITHUB_REF)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Instalar PyYAML
+        # So' biblioteca padrao e PyYAML; o pin vem de requirements/base.txt.
+        run: pip install "$(grep -i '^pyyaml==' requirements/base.txt)"
+
+      - name: Provisionar
+        run: python scripts/grafana_provisionar.py "$ACAO" --ambiente "$AMBIENTE"

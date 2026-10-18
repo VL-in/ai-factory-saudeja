@@ -199,6 +199,17 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python scripts/smoke_deploy.py space --space-id "$HF_SPACE_ID" --timeout 1200
 
+  grafana:
+    # Alertas, politicas e paineis do Grafana (Passo 8.9, P7), so' em
+    # producao e depois do deploy: as regras leem as views que a migration
+    # deste deploy acabou de criar. Falha aqui deixa o run vermelho, mas nao
+    # desfaz o deploy -- o Space ja' esta' no ar com o codigo novo.
+    name: alertas e paineis do Grafana
+    needs: deploy
+    if: github.ref_name == 'main'
+    uses: ./.github/workflows/grafana.yml
+    secrets: inherit
+
   release:
     # Depois do Space no ar, nunca antes: a tag marca o que esta' em producao.
     # Reenvio (a tag ja' aponta para este commit) nao cria outra.

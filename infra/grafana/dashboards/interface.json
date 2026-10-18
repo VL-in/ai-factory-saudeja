@@ -1,0 +1,305 @@
+{
+  "uid": "saudeja-interface",
+  "title": "SaúdeJá — Interface (Streamlit)",
+  "description": "Cada ação da interface: volume, erro e latência (14 dias no Mimir; o mês, no banco).",
+  "tags": [
+    "saudeja"
+  ],
+  "timezone": "America/Sao_Paulo",
+  "schemaVersion": 39,
+  "editable": true,
+  "refresh": "5m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Ações por minuto",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "sum by (acao) (rate(saudeja_acao_total{job=\"saudeja-ui\", deployment_environment=\"${AMBIENTE}\"}[$__rate_interval])) * 60",
+          "editorMode": "code",
+          "legendFormat": "{{acao}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Taxa de erro por ação",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "sum by (acao) (rate(saudeja_acao_total{job=\"saudeja-ui\", deployment_environment=\"${AMBIENTE}\", status=\"erro\"}[$__rate_interval]))\n/ sum by (acao) (rate(saudeja_acao_total{job=\"saudeja-ui\", deployment_environment=\"${AMBIENTE}\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "legendFormat": "{{acao}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Recusa esperada (senha errada, formulário inválido) conta no total e nunca no numerador."
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Latência das ações (p50, p95, p99)",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(saudeja_acao_duracao_ms_bucket{job=\"saudeja-ui\", deployment_environment=\"${AMBIENTE}\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(saudeja_acao_duracao_ms_bucket{job=\"saudeja-ui\", deployment_environment=\"${AMBIENTE}\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "legendFormat": "p95",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(saudeja_acao_duracao_ms_bucket{job=\"saudeja-ui\", deployment_environment=\"${AMBIENTE}\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "p95 por ação",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, acao) (rate(saudeja_acao_duracao_ms_bucket{job=\"saudeja-ui\", deployment_environment=\"${AMBIENTE}\"}[$__rate_interval])))",
+          "editorMode": "code",
+          "legendFormat": "{{acao}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Erros por rota e classe",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "refId": "A",
+          "expr": "sum by (rota, excecao) (increase(saudeja_erro_total{job=\"saudeja-ui\", deployment_environment=\"${AMBIENTE}\"}[$__rate_interval]))",
+          "editorMode": "code",
+          "legendFormat": "{{rota}} · {{excecao}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60
+          }
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Ações da interface no mês (banco)",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "${DS_SUPABASE}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "${DS_SUPABASE}"
+          },
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select acao, eventos, erros, recusados, taxa_de_erro,\n       round(p50_ms) as p50_ms, round(p95_ms) as p95_ms, round(p99_ms) as p99_ms\nfrom observabilidade.eventos_por_mes\nwhere tipo = 'acao_ui' and mes = date_trunc('month', now() at time zone 'America/Sao_Paulo')::date\norder by eventos desc"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "taxa_de_erro"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Log da interface (já sem dado pessoal)",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "refId": "A",
+          "expr": "{service_name=\"saudeja-ui\"} | deployment_environment=\"${AMBIENTE}\"",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}

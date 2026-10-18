@@ -1,0 +1,53 @@
+# Alerta de custo: o mes vai passar do orcamento?
+# Formato e marcadores ${...}: ver o cabecalho de operacao.yaml. O preco e o
+# orcamento vem do bloco `custo` do params.yaml; o provisionamento falha se
+# algum estiver vazio, em vez de criar uma regra que nunca dispara.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: custo-banco
+    folder: "${PASTA}"
+    interval: 30m
+    rules:
+      - uid: saudeja-custo-projetado
+        title: Custo projetado do SMS acima de ${FRACAO_DE_ALERTA_PCT}% do orçamento
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              # Segmentos projetados do mes (view da P5) x preco de um segmento.
+              # So' o canal `sms` custa; o stub de dev nunca.
+              rawSql: |
+                select round(coalesce(sum(segmentos_projetados), 0)
+                             * ${CUSTO_SMS_UNITARIO_USD}, 2) as custo_projetado_usd
+                from observabilidade.envios_cobrados_por_mes
+                where canal = 'sms'
+                  and mes = date_trunc('month', now() at time zone 'America/Sao_Paulo')::date
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: ["${CUSTO_LIMITE_USD}"]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P2
+          area: custo
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "Custo de SMS projetado para o mês: US$ {{ $values.A.Value }} (orçamento: US$ ${CUSTO_ORCAMENTO_USD})."
+          description: >-
+            Projeção = segmentos do mês até hoje ÷ dias decorridos × dias do mês,
+            a US$ ${CUSTO_SMS_UNITARIO_USD} por segmento. O lembrete com acento
+            sai em dois segmentos; encurtá-lo para caber em um corta o custo pela
+            metade. A infraestrutura está em planos gratuitos (custo fixo zero).

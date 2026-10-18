@@ -121,3 +121,31 @@ custo:
   sms_unitario_usd: 0.0291
   cambio_usd_brl: 5.07
   orcamento_mensal_usd: 100
+
+# Limites dos alertas do Grafana (infra/grafana/alertas/). O provisionamento
+# (scripts/grafana_provisionar.py) copia estes numeros para as regras: um lugar
+# so', revisado em PR como os outros limites deste arquivo.
+#
+# - fila_d2_horario_limite: hora de Sao Paulo a partir da qual a falta de uma
+#   execucao `ok` do job D-2 no dia e' alerta critico (P1). O job e' disparado
+#   as 08h17 pelo pg_cron do Supabase de producao (o cron do GitHub, num fork,
+#   chegava com 3 a 9 horas de atraso e ficou como reserva).
+# - disparos: regra dos +-40%. Os disparos do dia contra a media dos
+#   `janela_dias` anteriores com fila; fora da faixa, a taxa de disparo decide o
+#   nivel (moveu junto, na mesma direcao e alem da mesma faixa: P2, o modelo;
+#   senao: P3, a agenda). Abaixo de `piso_media_diaria` disparos/dia de media, ou
+#   sem `janela_dias` de historico, a regra fica em silencio.
+# - fracao_de_alerta: custo projetado do mes acima desta fracao do orcamento
+#   (P2) e uso de cota do plano gratuito acima dela (P3).
+# - cota_banco_supabase_mb: limite do banco no plano gratuito do Supabase.
+# - p95_predicao_ms: indicador de desenvolvimento do SLO §2 (fora do
+#   compromisso de producao): acima dele, P3.
+observabilidade:
+  fila_d2_horario_limite: "13:00"
+  disparos:
+    variacao: 0.40
+    piso_media_diaria: 10
+    janela_dias: 7
+  fracao_de_alerta: 0.80
+  cota_banco_supabase_mb: 500
+  p95_predicao_ms: 2000

@@ -1,0 +1,362 @@
+# Alertas de operacao: o job D-2 rodou, processou a fila e mandou os lembretes?
+#
+# Formato de provisionamento de regras do Grafana (o mesmo do "Export" da tela
+# de alertas), com marcadores ${...} que scripts/grafana_provisionar.py
+# preenche antes de aplicar -- ver a lista no docstring do script. Toda regra
+# tem os rotulos `severidade` (P1/P2/P3), `area` e `ambiente`; as de metrica e
+# de log filtram `deployment_environment="${AMBIENTE}"`, e as de banco leem a
+# fonte Supabase do ambiente (${DS_SUPABASE}). O ambiente e' `prod`, salvo na
+# verificacao em dev (`--ambiente dev`), que cria copias numa pasta propria.
+#
+# Dia = dia civil da clinica, como nas views do schema `observabilidade`.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: operacao-banco
+    folder: "${PASTA}"
+    interval: 5m
+    rules:
+      - uid: saudeja-fila-d2-nao-processada
+        title: Fila D-2 não processada até ${FILA_D2_HORARIO_LIMITE}
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: |
+                select case
+                    when (now() at time zone 'America/Sao_Paulo')::time
+                            >= time '${FILA_D2_HORARIO_LIMITE}'
+                     and coalesce((ultimo_ok at time zone 'America/Sao_Paulo')::date,
+                                  date '2000-01-01')
+                            < (now() at time zone 'America/Sao_Paulo')::date
+                    then 1 else 0
+                end as fila_nao_processada
+                from observabilidade.ultimo_job_d2
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P1
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: O job D-2 não terminou com sucesso hoje até ${FILA_D2_HORARIO_LIMITE} (horário de São Paulo).
+          description: >-
+            Nenhuma execução `job_d2` com status ok em eventos_app desde 00h. Os
+            lembretes de amanhã a D+2 não saíram. Conferir o Actions (job_d2.yml),
+            o Healthchecks do job D-2 e o gatilho do pg_cron (cron.job_run_details no
+            Supabase de produção). Resolve sozinho quando o job rodar ou à meia-noite.
+
+      - uid: saudeja-fila-inteira-em-quarentena
+        title: Fila D-2 inteira em quarentena
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: |
+                with hoje as (select (now() at time zone 'America/Sao_Paulo')::date as dia)
+                select case
+                    when coalesce(d.agendamentos_processados, 0) > 0
+                     and coalesce(p.predicoes, 0) = 0
+                    then 1 else 0
+                end as fila_inteira_em_quarentena
+                from hoje
+                left join observabilidade.disparos_por_dia d on d.dia = hoje.dia
+                left join (
+                    select dia, sum(predicoes) as predicoes
+                    from observabilidade.predicoes_por_dia
+                    group by dia
+                ) p on p.dia = hoje.dia
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P1
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: O job D-2 processou a fila de hoje sem gravar nenhuma predição.
+          description: >-
+            Todo agendamento processado hoje foi para a quarentena e recebeu o
+            lembrete por exceção (enviado_sem_predicao): defeito sistêmico (modelo,
+            contrato de features ou dado). O job também falha o run e chama o /fail
+            do Healthchecks.
+
+      - uid: saudeja-agendamentos-esquecidos
+        title: Agendamentos deixados para trás pelo job D-2
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: |
+                select coalesce(sum(agendamentos), 0) as agendamentos
+                from observabilidade.agendamentos_sem_processamento_por_dia
+                where dia = (now() at time zone 'America/Sao_Paulo')::date
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P1
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "{{ $values.A.Value }} agendamento(s) da janela de hoje ficaram sem predição e sem mensagem."
+          description: >-
+            O job D-2 terminou com sucesso hoje, mas agendamentos criados antes
+            dele, com consulta entre amanhã e D+2, não foram processados: nem
+            predição, nem lembrete, nem falha de envio. A busca da fila não os
+            encontrou (fuso, filtro de status ou de data).
+
+      - uid: saudeja-job-d2-lento
+        title: Job D-2 acima de ${JOB_D2_DURACAO_MAXIMA_MIN} min
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: |
+                select coalesce(max(p99_ms), 0) as duracao_ms
+                from observabilidade.eventos_por_dia
+                where tipo = 'job_d2'
+                  and dia >= (now() at time zone 'America/Sao_Paulo')::date - 1
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: ["${JOB_D2_DURACAO_MAXIMA_MS}"]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P3
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "O job D-2 levou {{ $values.A.Value }} ms (limite: ${JOB_D2_DURACAO_MAXIMA_MS} ms)."
+          description: >-
+            Metade do timeout de 20 min do job_d2.yml: aviso antes de o GitHub
+            interromper o job. Mesmo limite do alerta diário (alerta_observabilidade.py).
+
+      - uid: saudeja-janela-do-slo-truncada
+        title: Leitura do SLO perto do teto de ${LIMITE_LEITURA_SLO} eventos
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: |
+                select coalesce(sum(eventos), 0) as eventos
+                from observabilidade.eventos_por_dia
+                where tipo in (${TIPOS_DO_SLO_SQL})
+                  and dia >= (now() at time zone 'America/Sao_Paulo')::date - 1
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: math
+              expression: "$A >= ${LIMITE_LEITURA_SLO}"
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P3
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "{{ $values.A.Value }} eventos do SLO entre ontem e hoje (teto da leitura: ${LIMITE_LEITURA_SLO})."
+          description: >-
+            A aba Observabilidade e o alerta diário leem no máximo
+            ${LIMITE_LEITURA_SLO} eventos de predição, job_d2 e erro em 24h; acima
+            disso, o p95 deles é o do trecho mais recente. Os painéis do Grafana
+            agregam no banco e não têm esse teto.
+
+      - uid: saudeja-cota-do-banco
+        title: Banco acima de ${FRACAO_DE_ALERTA_PCT}% da cota do plano gratuito
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: select bytes from observabilidade.tamanho_do_banco
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: ["${BANCO_LIMITE_BYTES}"]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P3
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "O banco ocupa {{ humanize1024 $values.A.Value }}B (alerta acima de ${BANCO_LIMITE_BYTES} bytes)."
+          description: >-
+            O plano gratuito do Supabase limita o banco a
+            ${COTA_BANCO_SUPABASE_MB} MB. As purgas de 90 dias (eventos_app,
+            predicoes, mensagens_disparadas e base de treino) seguram o
+            crescimento; acima disto, rever a retenção ou o plano.
+
+  - orgId: 1
+    name: operacao-metricas
+    folder: "${PASTA}"
+    interval: 1m
+    rules:
+      # Contador novo no processo (primeira falha de uma classe, ou o job, que
+      # vive minutos) chega ao Mimir com o valor ja' acumulado na primeira
+      # amostra, e `increase` precisa de duas. O `unless ... offset 15m` pega a
+      # serie que nao existia 15 minutos antes; o `increase` pega a que ja'
+      # existia e cresceu.
+      - uid: saudeja-erro-na-ui
+        title: Erro de banco na interface
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: "${DS_MIMIR}"
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              range: false
+              expr: |
+                (
+                  sum(increase(saudeja_erro_total{job="saudeja-ui", deployment_environment="${AMBIENTE}"}[15m])) > 0
+                )
+                or
+                sum(
+                  saudeja_erro_total{job="saudeja-ui", deployment_environment="${AMBIENTE}"}
+                  unless
+                  saudeja_erro_total{job="saudeja-ui", deployment_environment="${AMBIENTE}"} offset 15m
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P2
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: Falha de banco na interface nos últimos 15 minutos.
+          description: >-
+            Todo evento `erro` da interface tem `rota` (fila_do_dia, desfecho,
+            cadastro, pedidos...). A rota e a classe da exceção estão em
+            saudeja_erro_total e no painel da interface; o trace da ação, no Tempo.
+            Falha de SMS e quarentena são do job e têm regras próprias.
+
+      - uid: saudeja-falha-de-envio-sms
+        title: Falha de envio de SMS
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: "${DS_MIMIR}"
+            model:
+              refId: A
+              editorMode: code
+              instant: true
+              range: false
+              expr: |
+                (
+                  sum(increase(saudeja_sms_total{status_envio="falha_envio", deployment_environment="${AMBIENTE}"}[15m])) > 0
+                )
+                or
+                sum(
+                  saudeja_sms_total{status_envio="falha_envio", deployment_environment="${AMBIENTE}"}
+                  unless
+                  saudeja_sms_total{status_envio="falha_envio", deployment_environment="${AMBIENTE}"} offset 15m
+                )
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P2
+          area: operacao
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "{{ $values.A.Value }} lembrete(s) não enviado(s) pela Infobip na última execução."
+          description: >-
+            O paciente não recebeu o SMS. O agendamento volta na fila do dia
+            seguinte, se ainda estiver na janela. A mesma falha também conta em
+            saudeja_erro_total{rota="enviar_lembrete"}, que fica fora da regra de
+            erro da interface para não alertar duas vezes.

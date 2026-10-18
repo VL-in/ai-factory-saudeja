@@ -1,0 +1,107 @@
+# Alertas de LGPD: a camada detectiva atras das barreiras preventivas.
+# Formato e marcadores ${...}: ver o cabecalho de operacao.yaml.
+#
+# As barreiras que impedem dado pessoal de sair sao preventivas e testadas
+# (filtro de log, allowlist de `eventos_app`, sanitizacao de span). Estas
+# regras procuram o que passou por elas mesmo assim: um bypass, um log de
+# terceiro instalado antes do filtro, uma gravacao em `eventos_app` por fora do
+# codigo. Qualquer ocorrencia e' incidente (LGPD.md, secao 10).
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: lgpd-banco
+    folder: "${PASTA}"
+    interval: 5m
+    rules:
+      - uid: saudeja-pii-em-eventos-app
+        title: Chave fora da allowlist em eventos_app
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_SUPABASE}"
+            model:
+              refId: A
+              format: table
+              editorMode: code
+              rawQuery: true
+              rawSql: |
+                select coalesce(sum(eventos), 0) as eventos
+                from observabilidade.eventos_fora_da_allowlist_por_dia
+                where dia >= (now() at time zone 'America/Sao_Paulo')::date - 1
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P1
+          area: lgpd
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "{{ $values.A.Value }} evento(s) de eventos_app com chave fora da allowlist desde ontem."
+          description: >-
+            src/observabilidade.py só grava as chaves de CHAVES_DETALHE_PERMITIDAS:
+            uma linha fora dela foi gravada por fora do código e pode conter dado
+            pessoal. A view mostra só a contagem; a investigação é no banco, pelo
+            encarregado. Tratar como incidente (LGPD.md, seção 10).
+
+  - orgId: 1
+    name: lgpd-logs
+    folder: "${PASTA}"
+    interval: 1m
+    rules:
+      # O padrao e' logging_config.regex_de_pii_re2(): as tres familias do
+      # filtro de redacao (chave de PII, e-mail, CPF/telefone/IP) em RE2, que
+      # casam o dado cru e nao a saida do filtro. O filtro de linha so' olha o
+      # corpo do log; os atributos (extra=) passam pelo mesmo filtro no
+      # processo.
+      #
+      # O ambiente vai como filtro de rotulo (`| deployment_environment=...`),
+      # nao no seletor do stream: o Grafana Cloud pode guardar o atributo como
+      # rotulo indexado ou como structured metadata, e o filtro casa os dois
+      # (no seletor, o segundo caso deixaria a regra muda, com noData OK).
+      - uid: saudeja-pii-em-log
+        title: Dado pessoal em log exportado ao Loki
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: "${DS_LOKI}"
+            model:
+              refId: A
+              editorMode: code
+              queryType: instant
+              expr: |
+                sum(count_over_time(
+                  {service_name=~"saudeja-.+"} |~ `${REGEX_PII_LOGQL}` | deployment_environment="${AMBIENTE}"
+                [10m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        labels:
+          severidade: P1
+          area: lgpd
+          ambiente: "${AMBIENTE}"
+        annotations:
+          summary: "{{ $values.A.Value }} linha(s) de log com padrão de dado pessoal nos últimos 10 minutos."
+          description: >-
+            Uma linha passou pelo filtro de redação com CPF, telefone, e-mail, IP
+            ou o valor de uma chave de nome. O Loki guarda o log por 14 dias:
+            localizar a linha no Explore (mesmo filtro), avaliar o incidente
+            (LGPD.md, seção 10) e corrigir a origem. A linha só sai do Loki quando
+            expirar ou por pedido de exclusão à Grafana Labs.
