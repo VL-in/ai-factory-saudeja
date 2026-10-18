@@ -8,6 +8,19 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado]
+
+### Corrigido
+- **As notas da Release perdiam a primeira linha quando o cabeçalho da versão não tinha autor e data** (`scripts/versao_release.py`). Foi o caso da v2.4.0: a Release no GitHub começa direto na lista, sem o "### Adicionado".
+- **Uma linha ilegível no dataset do re-treino não derruba mais o pipeline sem explicação.** O stage `validate_data` calculava o PSI também sobre a linha que o contrato de features recusou e parava antes de escrever o relatório que diz por que o dataset foi barrado. O export lia a data antes do contrato e parava inteiro. Nos dois casos, a mensagem do erro levava o valor cru ao log do Actions, que é público. Agora a linha vai para o bloqueio (`validate_data`) ou para a quarentena (export), identificada só pelo `id_consulta`.
+- **O lembrete sem predição não sai em dobro se o banco falhar logo depois do envio.** O job D-2 roda duas vezes por dia (gatilho do Supabase e, de reserva, o cron do GitHub), e a marca `lembrete_enviado` era gravada depois da auditoria. Agora ela vem logo depois do SMS.
+- **A tela de agendamento não mostra mais ao paciente o detalhe técnico de uma falha do banco**, como nome de variável de ambiente ou erro do PostgREST. A mensagem passa a ser genérica, e o detalhe continua no log e em `eventos_app`.
+- **A data dos pedidos do titular aparece no fuso da clínica.** Um pedido registrado depois das 21h aparecia com a data do dia seguinte, e é dessa data que a equipe conta o prazo de 15 dias.
+- **`grafana.yml` com `acao=conferir` não quebra mais quando o Loki responde com algo que não é JSON**, como a página de erro de um proxy.
+
+### Modificado
+- **Sem `APP_ENV` definido, a interface assume produção** e não mostra a aba "Dev: disparo manual", que dispara o job D-2 sem a checagem do campeão. Para usá-la localmente, declare `APP_ENV=dev`, como já fazem o `.env.example` e o `docker-compose.yml`.
+
 ## [v2.4.0]
 
 ### Adicionado
