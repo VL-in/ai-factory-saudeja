@@ -10,7 +10,11 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
 ## [Não publicado]
 
+### Corrigido
+- **A "Fila do dia" ordena pelo risco que mostra.** Um agendamento avaliado mais de uma vez era posto na fila pela maior probabilidade entre todas as avaliações, mas a tela mostrava a mais recente. Quem tinha sido reavaliado com risco menor aparecia no topo exibindo um risco baixo. Agora a ordem usa a avaliação mais recente.
+
 ### Modificado
+- **A "Fila do dia" consulta o banco menos vezes e traz menos dados.** Antes, qualquer clique na visão do funcionário, mesmo em "Pedidos do titular", refazia a consulta da fila. Agora o resultado de cada data fica guardado por até 60 segundos e é descartado na hora quando a própria tela muda a fila: registro de desfecho, novo agendamento ou o job manual de dev. O que muda por fora da tela, como o job D-2 e a purga LGPD, aparece em até 60 segundos. A consulta também passa a trazer só a avaliação mais recente de cada agendamento, em vez de todas, com a explicação de cada uma. No Grafana, `acao="carregar_fila"` continua medindo só as idas ao banco: o volume cai, e o p95 não é puxado para baixo pelas leituras feitas da memória.
 - **Diagramas C4 de contexto (C1) e de containers (C2) redesenhados para o estado da v2.5.0** ([architecture.md §2](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/architecture.md#2-high-level-system-diagram)). Os PNGs editáveis no draw.io eram de 05/10/2026 e não mostravam a base de treino, a purga LGPD, o Grafana Cloud, o Healthchecks nem o gatilho do job D-2 pelo Supabase. O C2 passa a ter as relações também numa tabela em texto, no lugar do Mermaid, que com esse número de relações desenhava sistemas externos dentro do limite do sistema.
 - **O README e o `architecture.md` descrevem o sistema da v2.5.0**: o job D-2 disparado às 08h17 pelo Supabase, com o cron do GitHub de reserva; os workflows `lgpd.yml` e `grafana.yml`; as regras de alerta do Grafana por criticidade, aplicadas em produção, com a ressalva de que só a de dado pessoal no Loki teve teste de ponta a ponta; o check do Healthchecks da purga LGPD; e as pendências de segurança e LGPD conhecidas.
 
