@@ -3,6 +3,15 @@
 ## Status
 Aceito — 2026-10-18. Complementa o [ADR-010](adr-010-base-de-treino-separada.md), que já tinha tirado o sha256 do CPF da base de treino, e leva a mesma proteção ao banco da clínica.
 
+**Migração executada em 18/10/2026**, nos dois ambientes, depois do deploy da v2.5.0 em cada um e sem canário ativo:
+
+| Ambiente | Pacientes | Migrados | Conflitos | Outro formato (ignorados) |
+|---|---|---|---|---|
+| Dev | 17 | 14 | 0 | 3 |
+| Produção | 9 | 8 | 0 | 1 |
+
+A releitura do banco depois do `--aplicar` confirmou 0 linhas no formato antigo nos dois. A chave saiu do `.env` do encarregado ao fim do procedimento (passo 8).
+
 ## Contexto
 `pacientes.id_paciente_externo` identifica o paciente sem guardar o CPF. Desde a migration `20260920010000_cadastro_pacientes.sql`, ele é o sha256 do CPF, calculado na tela de cadastro.
 

@@ -52,12 +52,12 @@ Pros:
 - Custo zero: sem projeto Supabase novo, sem segunda stack local no CI, sem segundo `db push`.
 
 Cons:
-- **O processamento no Hugging Face e no runner do GitHub, do lado da clínica, fica sem mecanismo do art. 33.** A ciência informa, mas não é o consentimento específico do inciso VIII, e o inciso IX não alcança os dados de saúde do art. 11 (LGPD.md, subseções 4.1 e 4.2). Aceitável no protótipo, com dados sintéticos; bloqueia a operação com paciente real até a aplicação e o job D-2 saírem do exterior ou haver cláusulas-padrão da ANPD com os provedores.
+- **O processamento no Hugging Face e no runner do GitHub, do lado da clínica, fica sem mecanismo do art. 33.** A ciência informa, mas não é o consentimento específico do inciso VIII, e o inciso IX não alcança os dados de saúde do art. 11 (LGPD.md, subseções 4.1 e 4.2). Aceitável no protótipo, com dados sintéticos; bloqueia a operação com paciente real até a aplicação e o job D-2 saírem do exterior ou haver cláusulas-padrão da ANPD com os provedores. *Atualização (2026-10-18): o mecanismo passa a ser as cláusulas-padrão da ANPD, em aditivo ao DPA do GitHub e do Hugging Face, na premissa de operação com contas pagas ([ADR-005](adr-005-integracoes-implicitas.md), emenda de 2026-10-18; LGPD.md, subseção 4.2).*
 - **Mesma chave para os dois schemas.** A fronteira do re-treino é garantida por código e teste (o export só importa o repositório do treino), não por credencial. Com orçamento, um projeto próprio para o treino fecha isso, e o desenho por RPC facilita a troca.
 - **A consulta do consentimento vigente envia o pseudônimo de quem não consentiu.** Sem dado da consulta, no corpo da RPC. É o preço de a caixa desmarcada revogar o consentimento anterior.
 - **Caixa desmarcada revoga, e a revogação agora apaga as linhas de treino.** A tela não sabe quem é o paciente antes do envio, e mostrar o consentimento vigente revelaria a quem digitasse um CPF alheio.
 - **Vazamento da chave do pseudônimo** reabre a ligação entre o CPF e as linhas de treino. É tratado como incidente.
-- Uma caixa só para o treino e o processamento dele no exterior depende da leitura de "distinguindo claramente de outras finalidades" do art. 33, VIII. Precisa de validação jurídica.
+- Uma caixa só para o treino e o processamento dele no exterior depende da leitura de "distinguindo claramente de outras finalidades" do art. 33, VIII. Precisa de validação jurídica. *Atualização (2026-10-18): com as cláusulas-padrão, o processamento do treino no exterior deixa de depender do art. 33, VIII; o termo só o informa, e a validação fica restrita à caixa como consentimento do art. 11, I.*
 
 ## Alternativas consideradas
 - **Manter a caixa da transferência como trava**: descartado pela autora. O paciente tem direito de agendar, e a trava transformava o consentimento em condição do serviço.

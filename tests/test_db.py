@@ -66,6 +66,62 @@ def test_consulta_do_fim_do_dia_cai_na_fila_do_dia_certo():
 # `ler_timestamptz` mora em `config_projeto` (testada em test_config_projeto.py).
 
 
+class _ConsultaEspia:
+    """Faz o papel do client do Supabase: registra a cadeia do query builder e
+    devolve `linhas` no `execute`. Prova o pedido que sai e o que o código faz
+    com a resposta; que o PostgREST honra o `limit` no embed é provado contra
+    o banco, em `test_fila_do_dia_traz_so_a_ultima_predicao_e_ordena_por_ela`."""
+
+    def __init__(self, linhas):
+        self.chamadas = []
+        self._linhas = linhas
+
+    def __getattr__(self, nome):
+        def _chamada(*args, **kwargs):
+            self.chamadas.append((nome, args, kwargs))
+            return self
+
+        return _chamada
+
+    def execute(self):
+        return type("Resposta", (), {"data": self._linhas})()
+
+
+def _agendamento_com_predicoes(id_agendamento, *predicoes):
+    return {
+        "id": id_agendamento,
+        "predicoes": [
+            {"criado_em": criado_em, "probabilidade": probabilidade}
+            for criado_em, probabilidade in predicoes
+        ],
+    }
+
+
+def test_fila_do_dia_pede_so_a_predicao_mais_recente_e_ordena_por_ela(monkeypatch):
+    """Trazer todas as predições, cada uma com o SHAP, fazia a resposta crescer
+    a cada re-predição. E a ordem usava a maior probabilidade entre todas,
+    enquanto a tela mostra a última: o agendamento re-predito com risco menor
+    ficava no topo exibindo o risco baixo."""
+    import db.repositories as repositories
+
+    espia = _ConsultaEspia(
+        [
+            _agendamento_com_predicoes(
+                "re-predito", ("2026-10-01T08:00:00+00:00", 0.9), ("2026-10-02T08:00:00+00:00", 0.1)
+            ),
+            _agendamento_com_predicoes("sem-predicao"),
+            _agendamento_com_predicoes("medio", ("2026-10-02T08:00:00+00:00", 0.5)),
+        ]
+    )
+    monkeypatch.setattr(repositories, "obter_client", lambda: espia)
+
+    fila = repositories.buscar_fila_do_dia(date(2026, 10, 4))
+
+    assert ("order", ("criado_em",), {"desc": True, "foreign_table": "predicoes"}) in espia.chamadas
+    assert ("limit", (1,), {"foreign_table": "predicoes"}) in espia.chamadas
+    assert [a["id"] for a in fila] == ["medio", "re-predito", "sem-predicao"]
+
+
 # --- repositórios contra o Supabase local (integracao) -------------------------
 
 
@@ -329,6 +385,37 @@ def test_fila_do_dia_ordenada_por_probabilidade_desc_com_sem_predicao_por_ultimo
 
     assert ordem.index(alto_risco["id"]) < ordem.index(baixo_risco["id"])
     assert ordem.index(baixo_risco["id"]) < ordem.index(sem_predicao["id"])
+
+
+@pytest.mark.integracao
+def test_fila_do_dia_traz_so_a_ultima_predicao_e_ordena_por_ela(db):
+    """O `limit` no embed é do PostgREST, não do Python: este teste prova que o
+    banco o honra. O re-predito teve 0.9 e depois 0.1; a fila mostra 0.1 e o
+    põe abaixo do 0.5, em vez de no topo."""
+    import db.repositories as repositories
+
+    _, re_predito = _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-REP-1")
+    _, medio = _criar_paciente_e_agendamento(repositories, dias=0, id_externo="EXT-REP-2")
+    for id_agendamento, probabilidade in (
+        (re_predito["id"], 0.9),
+        (medio["id"], 0.5),
+        (re_predito["id"], 0.1),
+    ):
+        repositories.gravar_predicao(
+            id_agendamento=id_agendamento,
+            probabilidade=probabilidade,
+            classe_prevista=int(probabilidade >= 0.5),
+            threshold_usado=0.5,
+            explicacao_shap=[],
+            model_version="abc123",
+        )
+
+    fila = repositories.buscar_fila_do_dia(hoje_na_clinica())
+    por_id = {a["id"]: a for a in fila}
+
+    assert [p["probabilidade"] for p in por_id[re_predito["id"]]["predicoes"]] == [0.1]
+    ordem = [a["id"] for a in fila]
+    assert ordem.index(medio["id"]) < ordem.index(re_predito["id"])
 
 
 # --- camada da UI sobre o banco (src/ui/logic.py) ------------------------------

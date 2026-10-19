@@ -136,6 +136,33 @@ def _cliente():
     return _construir_cliente(logic.backend_ativo())
 
 
+# A fila é refeita a cada rerun: `st.tabs` executa todas as abas, então
+# qualquer clique na visão do funcionário -- inclusive em "Pedidos" --
+# consultava o banco de novo. O TTL só cobre o que muda por fora da tela (o
+# job D-2, a purga LGPD); o que muda por ela invalida o cache na hora
+# (`_invalidar_fila`). Curto e com poucas entradas porque a fila carrega
+# `nome_completo` (ADR-007): é por quanto tempo o nome de um paciente
+# eliminado ainda fica na memória do Space.
+TTL_FILA_DO_DIA_S = 60
+
+
+@st.cache_data(ttl=TTL_FILA_DO_DIA_S, max_entries=7, show_spinner=False)
+def _fila_do_dia(dia: date):
+    """`acao_ui=carregar_fila` fica dentro do cache, em `logic`: a métrica
+    continua sendo a ida ao banco. Medida por fora, cada acerto de cache
+    entraria com ~0 ms e baixaria o p95 sem nada ter ficado mais rápido.
+    Exceção não é cacheada: banco fora do ar é tentado de novo no rerun."""
+    return logic.buscar_fila_do_dia(dia)
+
+
+def _invalidar_fila():
+    """Chamada depois de toda escrita feita pela tela que muda a fila,
+    também quando ela falha: um erro depois do commit (timeout na resposta)
+    deixaria a fila mostrando o estado anterior até o TTL. Limpa as entradas
+    de todas as sessões, porque o cache é do processo."""
+    _fila_do_dia.clear()
+
+
 def _aba_testar_predicao():
     st.subheader("Testar predição de no-show")
     st.caption(
@@ -327,6 +354,8 @@ def _ao_registrar_desfecho(id_agendamento, data_hora_agendada, status, rotulo):
         )
     else:
         st.session_state[CHAVE_AVISO_DESFECHO] = ("ok", f"Desfecho registrado: {rotulo.lower()}.")
+    finally:
+        _invalidar_fila()
 
 
 def _mostrar_aviso_desfecho():
@@ -386,7 +415,7 @@ def _aba_fila_do_dia():
     dia = st.date_input("Data da fila", value=logic.hoje_na_clinica())
 
     try:
-        fila = logic.buscar_fila_do_dia(dia)
+        fila = _fila_do_dia(dia)
     except logic.ErroPersistencia as exc:
         st.error(f"Não foi possível consultar a fila: {exc}")
         return
@@ -611,6 +640,8 @@ def _aba_dev():
             else:
                 st.success("Job concluído sem erros.")
             st.caption("Veja o resultado na aba **Fila do dia** (recarrega a cada seleção).")
+        # Também depois da falha: o job pode ter gravado parte das predições.
+        _invalidar_fila()
 
     st.divider()
     st.write("**Diagnóstico**")
@@ -885,6 +916,10 @@ def _visao_paciente():
         # (`logic._relatar_falha_persistencia`), não de quem está agendando.
         st.error(MENSAGEM_FALHA_NO_CADASTRO)
         return
+    finally:
+        # O paciente agenda numa sessão e a recepção lê a fila em outra; o
+        # cache é do processo, então a limpeza alcança a fila dela.
+        _invalidar_fila()
 
     # Mensagem neutra: nem todo agendamento recebe lembrete (só os
     # priorizados), então a confirmação não promete contato.
