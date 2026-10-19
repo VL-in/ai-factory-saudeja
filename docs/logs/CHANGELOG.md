@@ -8,6 +8,12 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado]
+
+### Modificado
+- **Diagramas C4 de contexto (C1) e de containers (C2) redesenhados para o estado da v2.5.0** ([architecture.md §2](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/architecture.md#2-high-level-system-diagram)). Os PNGs editáveis no draw.io eram de 05/10/2026 e não mostravam a base de treino, a purga LGPD, o Grafana Cloud, o Healthchecks nem o gatilho do job D-2 pelo Supabase. O C2 passa a ter as relações também numa tabela em texto, no lugar do Mermaid, que com esse número de relações desenhava sistemas externos dentro do limite do sistema.
+- **O README e o `architecture.md` descrevem o sistema da v2.5.0**: o job D-2 disparado às 08h17 pelo Supabase, com o cron do GitHub de reserva; os workflows `lgpd.yml` e `grafana.yml`; as regras de alerta do Grafana por criticidade, aplicadas em produção, com a ressalva de que só a de dado pessoal no Loki teve teste de ponta a ponta; o check do Healthchecks da purga LGPD; e as pendências de segurança e LGPD conhecidas.
+
 ## [v2.5.0] (Vanessa + Claude) - 2026-10-18
 
 ### Segurança
