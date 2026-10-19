@@ -1,21 +1,54 @@
-# SaudeJa — Classificador de no-show em agendamentos médicos
+# SaúdeJá — Classificador de no-show em agendamentos médicos
 
-> Status: em produção desde a v2.0.0 (04/10/2026), versão atual [v2.5.0](docs/logs/CHANGELOG.md) (18/10/2026). Próxima etapa: validação final para o pitch — (AI Factory: Build, Deploy and Showcase)
+[![Deploy](https://github.com/VL-in/ai-factory-saudeja/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/VL-in/ai-factory-saudeja/actions/workflows/deploy.yml)
+[![Release](https://img.shields.io/github/v/release/VL-in/ai-factory-saudeja)](https://github.com/VL-in/ai-factory-saudeja/releases)
+[![Python 3.10](https://img.shields.io/badge/python-3.10-blue)](https://www.python.org/downloads/release/python-3100/)
+[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Space-produ%C3%A7%C3%A3o-yellow)](https://vl-in-saudeja-prod.hf.space)
+[![Licença MIT](https://img.shields.io/github/license/VL-in/ai-factory-saudeja)](LICENSE)
 
 Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia lembrete por SMS só para eles, dois dias antes do atendimento.
 
-## Visão Geral
+> **Status do projeto:** em produção desde a v2.0.0 (04/10/2026). Versão atual: [v2.5.0](docs/logs/CHANGELOG.md) (18/10/2026). Próxima etapa: validação final para o pitch da disciplina AI Factory: Build, Deploy and Showcase.
 
-SaudeJá é um SaaS voltado para clínicas particulares de saúde de médio e pequeno porte que oferece serviço de agendamento online, prontuário, faturamento e comunicação com pacientes. Este repositório desenvolve a funcionalidade que prevê quais pacientes vão faltar à consulta, usando o classificador LightGBM, dentro da disciplina AI Factory: Build, Deploy and Showcase.
+![Diagrama C4 de contexto do SaúdeJá: paciente e funcionário usam o sistema; Infobip envia o SMS; Grafana Cloud e Healthchecks.io avisam a mantenedora](docs/diagrams/SaudeJa-C1.drawio.png)
+
+## Sumário
+
+- [Visão geral](#visão-geral)
+- [Acesso](#acesso)
+- [Arquitetura](#arquitetura)
+- [Dados pessoais e LGPD](#dados-pessoais-e-lgpd)
+- [Instalação](#instalação)
+- [Uso](#uso)
+- [Contribuição](#contribuição)
+- [Operação](#operação)
+- [Roadmap](#roadmap)
+- [Suporte](#suporte)
+- [Autoria e agradecimentos](#autoria-e-agradecimentos)
+- [Licença](#licença)
+
+## Visão geral
+
+O SaúdeJá é um SaaS para clínicas particulares de pequeno e médio porte, com agendamento online, prontuário, faturamento e comunicação com pacientes. Este repositório desenvolve a funcionalidade que prevê quais pacientes vão faltar à consulta, com um classificador LightGBM e explicação SHAP de cada previsão.
+
+### Problema
+
+O no-show custa em média **R$ 180 por consulta perdida**, e a taxa nacional gira em torno de 25-35%. Para uma clínica média (1.500 consultas/mês), isso significa R$ 70k-100k de receita perdida todo mês. A primeira tentativa de reduzir o no-show foi mandar lembrete a todos os pacientes, o que saiu caro demais para clínicas com orçamento menor. A proposta atual classifica os pacientes com alta chance de não comparecer e manda lembrete só para eles, reduzindo em até 70% o gasto com mensageria.
+
+### O que o sistema faz
+
+- **Autoagendamento:** o paciente se cadastra pelo CPF e marca a consulta na interface web.
+- **Predição D-2:** todo dia, um job calcula o risco de falta das consultas dos próximos dois dias e grava a explicação de cada uma.
+- **Lembrete seletivo:** só quem passa do limite de risco recebe SMS, apenas com data e hora da consulta.
+- **Fila do dia:** a equipe da clínica vê os pacientes ordenados por risco, com a explicação, registra quem compareceu e atende os pedidos de titular da LGPD.
+- **Ciclo de vida do modelo:** re-treino mensal com os desfechos registrados pela clínica, gate de promoção, canário com 20% da fila e rollback.
+- **Observabilidade:** logs, métricas e traces no Grafana Cloud, sem dado pessoal, com alertas por criticidade e sonda de disponibilidade.
+
+### Desempenho do modelo
 
 O repositório foi herdado com um pipeline de treinamento que reportava acurácia de 78%, F1-score de 0,65 para a classe positiva e ROC-AUC de 0,81. Medido no fold de teste isolado, o modelo em produção tem acurácia de 0,67, F1-score de 0,42 para a classe positiva e ROC-AUC de 0,64 ([`data/champion_metrics.json`](data/champion_metrics.json), [ADR-003](docs/adr/adr-003-SMOTE-NC.md)). O recall e o F1 da classe positiva ficam abaixo dos alvos do [SLO](docs/SLO.md) por limite do dataset. Essa exceção está documentada e será decidida na validação final.
 
-
-## Problema
-
-O no-show custa em média **R$ 180 por consulta perdida** e a taxa nacional gira em torno de 25-35%. Para uma clínica média (1.500 consultas/mês), isso significa R$ 70k-100k de receita evaporando todo mês. A primeira tentativa de reduzir o no-show foi de envio de lembrete para todos os pacientes, o que resultou em alto custo, sendo insustentável para clínicas com orçamento menor. A proposta atual é treinamento de um algoritmo que classifica os pacientes com alto chance de não comparecimento e apenas disparar lembrete para estes, reduzindo, dessa forma, em até 70% o gasto com mensageria.
-
-## URL pública
+## Acesso
 
 | Ambiente | Endereço |
 |---|---|
@@ -45,21 +78,21 @@ flowchart LR
 1. O paciente se cadastra e agenda a consulta pela interface. Os dados vão para o Supabase.
 2. Todo dia às 08h17 (horário de São Paulo), o Supabase de produção dispara o job D-2 no GitHub Actions (`pg_cron`). O agendamento do próprio GitHub continua como reserva: num repositório fork, ele chegava de 3 a 9 horas atrasado. O job busca os agendamentos de amanhã até daqui a dois dias ainda sem predição, calcula a probabilidade de no-show e grava o resultado com a explicação SHAP. Rodar duas vezes no mesmo dia não manda SMS em dobro.
 3. Pacientes acima do threshold (`decision.threshold` em [`params.yaml`](params.yaml)) recebem SMS de confirmação via Infobip, só com data e hora da consulta. Toda decisão, enviada ou não, fica registrada para auditoria por 90 dias.
-4. O funcionário da clínica consulta a "Fila do dia", ordenada por risco, com a explicação de cada paciente.
+4. O funcionário da clínica consulta a "Fila do dia", ordenada pelo risco da avaliação mais recente, com a explicação de cada paciente.
 
 ### Componentes
 
 | Componente | Onde está | Função |
 |---|---|---|
-| Interface | [`src/ui/`](src/ui/) | Streamlit com visão Paciente (autoagendamento) e Funcionário (login via Supabase Auth), com as abas "Fila do dia", "Pedidos do titular" e "Time técnico". A lógica fica em `logic.py`, testável sem o Streamlit |
+| Interface | [`src/ui/`](src/ui/) | Streamlit com visão Paciente (autoagendamento) e Funcionário (login via Supabase Auth), com as abas "Fila do dia", "Pedidos do titular" e "Time técnico". A fila de cada data fica em cache por 60 s e é invalidada quando a própria tela a altera. A lógica fica em `logic.py`, testável sem o Streamlit |
 | API de predição | [`src/api/`](src/api/) | FastAPI com `/health` e `/predict` (probabilidade + explicação SHAP) |
 | Inferência | [`src/inference.py`](src/inference.py), [`src/explain.py`](src/explain.py) | Núcleo de predição e explicabilidade, compartilhado por interface, API e job |
 | Contrato de features | [`src/contrato_features.py`](src/contrato_features.py) | Barra dado fora da regra de negócio (quarentena) e marca dado fora do domínio do treino |
 | Job D-2 | [`src/jobs/inferencia_diaria.py`](src/jobs/inferencia_diaria.py) | Predição em lote e disparo de lembretes. Roda no GitHub Actions, disparado às 08h17 pelo Supabase |
 | Mensageria | [`src/messaging/`](src/messaging/) | `StubMessagingClient` (padrão, sem rede) ou `InfobipClient` (SMS real). Conta os segmentos de cada SMS, que é o que a Infobip cobra |
 | Banco | [`src/db/`](src/db/), [`supabase/migrations/`](supabase/migrations/) | Supabase na região `sa-east-1`: banco da clínica (`public`), base de treino (`treino`, só por RPC) e agregados para o Grafana (`observabilidade`). RLS habilitado; só o backend acessa, com a chave secreta |
-| LGPD | [`src/id_paciente.py`](src/id_paciente.py), [`src/pseudonimo.py`](src/pseudonimo.py), [`src/consentimento.py`](src/consentimento.py), [`src/lgpd_purga.py`](src/lgpd_purga.py) | Identificador do paciente com HMAC, pseudônimos da base de treino, regras do consentimento e purga diária (pedidos do titular e retenção) |
-| Observabilidade | [`src/observabilidade.py`](src/observabilidade.py), [`src/alerta_observabilidade.py`](src/alerta_observabilidade.py), [`src/telemetria.py`](src/telemetria.py), [`infra/grafana/`](infra/grafana/) | Latência, erros e execuções do job na tabela `eventos_app`, exibidos na aba "Time técnico → Observabilidade" e conferidos uma vez por dia pelo alerta. Logs, métricas e traces vão também para o Grafana Cloud por OpenTelemetry, sem dado pessoal. Regras de alerta, rotas e painéis do Grafana ficam como código e são aplicados por [`scripts/grafana_provisionar.py`](scripts/grafana_provisionar.py) |
+| LGPD | [`src/id_paciente.py`](src/id_paciente.py), [`src/pseudonimo.py`](src/pseudonimo.py), [`src/consentimento.py`](src/consentimento.py), [`src/lgpd_purga.py`](src/lgpd_purga.py), [`src/documentos_legais.py`](src/documentos_legais.py) | Identificador do paciente com HMAC, pseudônimos da base de treino, regras do consentimento, versões da política e dos termos aceitas no agendamento e purga diária (pedidos do titular e retenção) |
+| Observabilidade | [`src/observabilidade.py`](src/observabilidade.py), [`src/alerta_observabilidade.py`](src/alerta_observabilidade.py), [`src/telemetria.py`](src/telemetria.py), [`infra/grafana/`](infra/grafana/) | Latência, erros e execuções do job na tabela `eventos_app`, exibidos na aba "Time técnico → Observabilidade" e conferidos uma vez por dia pelo alerta. Logs, métricas e traces vão também para o Grafana Cloud por OpenTelemetry, sem dado pessoal. Regras de alerta, rotas e os seis painéis do Grafana ficam como código e são aplicados por [`scripts/grafana_provisionar.py`](scripts/grafana_provisionar.py) |
 | Pipeline de treino | [`dvc.yaml`](dvc.yaml), [`src/`](src/) | DVC + MLflow, cada stage em container Docker |
 
 A interface chama o modelo **em processo**, sem passar pela API (`PREDICT_BACKEND=processo`, [ADR-005](docs/adr/adr-005-integracoes-implicitas.md)). Use `PREDICT_BACKEND=api` para exercitar a API a partir da interface.
@@ -101,6 +134,8 @@ Só o modelo campeão vai para produção: deploy e job D-2 conferem o hash do `
 
 A SaúdeJá é fictícia e a semente do dataset é sintética, mas o sistema é desenhado e documentado como se todo dado fosse real: especialidade, status do agendamento e histórico de faltas revelam informação de saúde e são tratados como **dados sensíveis**.
 
+Documentos publicados na versão 1.0, vigentes a partir de 18/10/2026: [Política de privacidade](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [Termos de uso](docs/LGPD/TERMOS-DE-USO.md).
+
 ### Papéis
 
 | Tratamento | Controladora | Operadora |
@@ -120,20 +155,20 @@ A clínica só é controladora se aprovar o que a SaúdeJá propõe no contrato 
 | Destino | Dados | Região |
 |---|---|---|
 | Supabase (banco e login) | Todos os dados de paciente e as contas de funcionário. A base de treino fica num schema separado, sem nome, telefone, CPF nem data de nascimento, com pseudônimo HMAC | Brasil (São Paulo) |
-| Hugging Face Space (aplicação) | Tudo o que a tela recebe ou exibe, inclusive nome, telefone e o CPF antes de virar hash | Estados Unidos |
+| Hugging Face Space (aplicação) | Tudo o que a tela recebe ou exibe, inclusive nome, telefone e o CPF antes de virar identificador | Estados Unidos |
 | Runner do GitHub Actions (job D-2, re-treino e purga) | Dados da consulta e telefone; no re-treino, só a base de treino, de quem autorizou. Nunca nome nem CPF | Fora do Brasil |
 | Azure Blob Storage (remote do DVC) | Dataset de treino pseudonimizado, sem nome, telefone nem CPF, e o `model.pkl` | Brasil (Brazil South), desde 09/10/2026 |
 | Infobip (SMS) | Telefone, data e hora da consulta | Brasil |
 
 **Transferência internacional: cláusulas-padrão da ANPD** (art. 33, II, b). O processamento no Hugging Face e no GitHub Actions, tanto dos dados da clínica quanto da base de treino, se apoia nas cláusulas-padrão aprovadas pela ANPD, adotadas sem alteração num termo aditivo ao acordo de tratamento de dados (DPA) de cada provedor. Cada destino tem a hipótese legal do próprio tratamento (art. 7º ou 11) e esse mecanismo. A Política de privacidade traz as informações que o art. 17 do Regulamento de Transferência Internacional exige. O consentimento do treino continua sendo a base legal do treino, não o mecanismo da transferência. Supabase, remote do DVC e Infobip processam no Brasil, sem transferência ([`LGPD.md` §4.2](docs/LGPD/LGPD.md#42-mecanismo-adotado)).
 
-O mecanismo parte de uma **premissa de operação**: contas pagas, com DPA e aditivo das cláusulas-padrão assinados, e contrato do SaaS em que a clínica aprova os elementos essenciais, a política de privacidade, os Termos de uso e o procedimento de revisão. A política e os termos foram publicados na versão 1.0, vigentes a partir de 18/10/2026, ainda sem validação jurídica. As contas do protótipo (GitHub Free, Hugging Face Pro, Azure for Students e teste gratuito da Infobip) não têm esse aditivo. Com dados sintéticos, nenhum titular real é afetado.
+O mecanismo parte de uma **premissa de operação**: contas pagas, com DPA e aditivo das cláusulas-padrão assinados, e contrato do SaaS em que a clínica aprova os elementos essenciais, a política de privacidade, os Termos de uso e o procedimento de revisão. As contas do protótipo (GitHub Free, Hugging Face Pro, Azure for Students e teste gratuito da Infobip) não têm esse aditivo. Com dados sintéticos, nenhum titular real é afetado.
 
 ### Proteções implementadas
 
-- **CPF não é gravado**: a tela converte o CPF num identificador HMAC, com chave secreta guardada fora do banco, antes de chegar a ele. O sha256 sem chave, usado até então, se revertia em CPF por força bruta ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)).
+- **CPF não é gravado**: a tela converte o CPF num identificador HMAC, com chave secreta guardada fora do banco, antes de chegar a ele. O sha256 sem chave, usado até a v2.4.0, se revertia em CPF por força bruta ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)). As linhas antigas foram migradas em dev e em produção em 18/10/2026.
 - **Nome só na fila do dia**: não vai para log, API, dataset de treino, SMS nem LLM, e cada uma dessas saídas tem um teste ([ADR-007](docs/adr/adr-007-nome-do-paciente.md)).
-- **Log sem dado pessoal**: filtro de redação em todos os handlers do processo, mais uma guarda estática sobre o código ([`src/logging_config.py`](src/logging_config.py)).
+- **Log sem dado pessoal**: filtro de redação em todos os handlers do processo, mais uma guarda estática sobre o código ([`src/logging_config.py`](src/logging_config.py)). O mesmo filtro vale para o que é enviado ao Grafana Cloud.
 - **Consultas ao Supabase sem dado pessoal na URL**: um teste barra filtros por CPF, telefone, nome ou data de nascimento, porque a URL fica no log do provedor.
 - **SMS sem especialidade**: o lembrete só informa data e hora. Por isso ele não traz dado de saúde e faz parte do atendimento contratado com a clínica, sem pedir consentimento; o consentimento fica só para o uso dos desfechos no treino do modelo.
 - **Base de treino separada e fechada**: só recebe a consulta de quem consentiu (o banco recusa a linha sem consentimento vigente), só é acessada por funções do banco, e identifica titular e consulta por HMAC com chave secreta ([ADR-010](docs/adr/adr-010-base-de-treino-separada.md)). O re-treino lê só ela.
@@ -151,13 +186,14 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 | Pendência | Onde está decidido |
 |---|---|
 | Registro da oposição ao lembrete (o lembrete não depende de consentimento, mas o paciente pode pedir à clínica para não receber SMS) | [`LGPD.md` §9.4](docs/LGPD/LGPD.md) |
-| Validação jurídica da política de privacidade e dos Termos de uso (publicados em 18/10/2026), da caixa do treino como consentimento específico e destacado e da prova de 365 dias | [`LGPD.md` §9 e §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
+| Validação jurídica da política de privacidade e dos Termos de uso, da caixa do treino como consentimento específico e destacado e da prova de 365 dias | [`LGPD.md` §9 e §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
+| Grafana Labs como operadora (telemetria sem dado pessoal, mas ainda fora do inventário e da política) | [`LGPD.md`](docs/LGPD/LGPD.md), [Roadmap](#roadmap) |
 | Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
 | Guarda no repositório contra mudança de feature, retenção ou texto do lembrete sem nova aprovação da clínica (o contrato do SaaS é premissa de operação) | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
 
 Metas de serviço relacionadas: [`docs/SLO.md`](docs/SLO.md) (§6, zero dado pessoal em log) e [`docs/SLA.md`](docs/SLA.md) (§6, comunicação de incidente).
 
-## Como rodar
+## Instalação
 
 Os comandos abaixo usam PowerShell e partem da raiz do repositório.
 
@@ -168,7 +204,7 @@ Os comandos abaixo usam PowerShell e partem da raiz do repositório.
 - [Supabase CLI](https://supabase.com/docs/guides/cli) (banco local e testes de integração)
 - Acesso ao remote do DVC (URL e connection string do Azure, fornecidas pela mantenedora)
 
-### 1. Instalar
+### 1. Clonar e instalar as dependências
 
 ```powershell
 git clone https://github.com/VL-in/ai-factory-saudeja.git
@@ -218,9 +254,11 @@ supabase start    # sobe Postgres + Studio via Docker e aplica supabase/migratio
 supabase status   # mostra a URL e a chave secreta para o .env
 ```
 
-Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO` (ver `.env.example`); sem ela, o agendamento funciona e só a base de treino deixa de receber dados. O cadastro precisa de `PACIENTE_CHAVE_IDENTIFICADOR`, uma chave diferente da do treino ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)); sem ela, o cadastro falha. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
+Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. O cadastro precisa de `PACIENTE_CHAVE_IDENTIFICADOR` ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)); sem ela, o cadastro falha. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO`, uma chave diferente da anterior; sem ela, o agendamento funciona e só a base de treino deixa de receber dados. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
 
-### 4. Subir a aplicação
+## Uso
+
+### Subir a aplicação
 
 Com Docker, do mesmo jeito que roda em produção:
 
@@ -243,12 +281,6 @@ python -m uvicorn api.main:app --reload --app-dir src   # API
 streamlit run src/ui/app.py                             # interface
 ```
 
-Exemplo de predição:
-
-```powershell
-curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d "{\"idade\":45,\"sexo\":\"F\",\"especialidade\":\"cardiologia\",\"distancia_km\":5.5,\"dias_entre_agendamento_consulta\":14,\"historico_noshow\":1,\"data_hora_agendada\":\"2026-01-09T18:00:00\"}"
-```
-
 Variáveis principais:
 
 | Variável | Efeito |
@@ -259,7 +291,33 @@ Variáveis principais:
 | `TIMEZONE_CLINICA` | Fuso usado em datas e na fila do dia (padrão `America/Sao_Paulo`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Liga o envio de logs, métricas e traces ao Grafana Cloud. Sem ela, nada sai do processo |
 
-### 5. Criar conta de funcionário
+### Pedir uma predição à API
+
+```powershell
+curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d "{\"idade\":45,\"sexo\":\"F\",\"especialidade\":\"cardiologia\",\"distancia_km\":5.5,\"dias_entre_agendamento_consulta\":14,\"historico_noshow\":1,\"data_hora_agendada\":\"2026-01-09T18:00:00\"}"
+```
+
+Resposta com o modelo campeão atual (`6430cb3315da`), resumida:
+
+```json
+{
+  "probabilidade": 0.482,
+  "classe_prevista": 0,
+  "threshold_usado": 0.6,
+  "explicacao": [
+    {"feature": "dias_entre_agendamento_consulta", "contribuicao": -0.523},
+    {"feature": "dia_de_semana", "contribuicao": 0.459},
+    {"feature": "horario", "contribuicao": 0.416},
+    "..."
+  ],
+  "explicacao_texto": null,
+  "model_version": "6430cb3315da"
+}
+```
+
+A probabilidade fica abaixo do threshold, então esse paciente não receberia lembrete. A explicação traz a contribuição SHAP de cada feature, ordenada pelo valor absoluto: positiva puxa o risco para cima, negativa para baixo. `explicacao_texto` está reservado para uma explicação em linguagem natural e fica `null` até ser ativado.
+
+### Criar conta de funcionário
 
 Não há cadastro aberto. O administrador cria cada conta no projeto Supabase para onde o `.env` aponta (a senha é digitada sem eco):
 
@@ -269,7 +327,7 @@ python scripts/criar_funcionario.py recepcao@clinica.com.br
 
 No projeto remoto, desligue "Allow new users to sign up" e defina "Minimum password length" como 8 em *Authentication → Sign In / Providers → Email*. O `supabase/config.toml` só vale para o banco local, e `supabase config push` sobrescreveria a configuração de produção com valores locais.
 
-### 6. Treinar o modelo
+### Treinar o modelo
 
 ```powershell
 docker compose up -d mlflow-server   # MLflow em http://localhost:5000
@@ -291,7 +349,7 @@ Em produção, o modelo não é trocado manualmente: o `retrain.yml` treina, com
 docker compose run --rm -e MLFLOW_TRACKING_URI=http://mlflow-server:5000 train src/tune.py
 ```
 
-### 7. Rodar o job D-2 manualmente
+### Rodar o job D-2 manualmente
 
 ```powershell
 python src/jobs/inferencia_diaria.py
@@ -299,18 +357,7 @@ python src/jobs/inferencia_diaria.py
 
 O job recusa rodar se o `data/model.pkl` local não for o campeão. Com `MESSAGING_PROVIDER=stub`, nenhum SMS é enviado.
 
-### 8. Testes e lint
-
-```powershell
-ruff check src tests scripts   # regras em ruff.toml
-mypy src scripts               # configuração em mypy.ini
-pytest                         # testes unitários
-pytest -m integracao           # exige supabase start e Docker
-```
-
-O CI roda exatamente esses comandos. Para validar os workflows: `docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:latest`.
-
-## Fluxo de trabalho
+## Contribuição
 
 Código e modelo chegam a produção por caminhos diferentes. Os dois terminam num merge em `main`, feito por uma pessoa.
 
@@ -338,10 +385,27 @@ flowchart TB
 
 1. Abra um branch a partir de `dev` e um PR para `dev`. O `ci.yml` roda lint, tipos, testes e o smoke da imagem.
 2. O merge em `dev` dispara o `deploy.yml` para o ambiente de dev: migration no Supabase de dev e sync do Space de dev. Teste ali.
-3. Para publicar, abra **você mesma** um PR `dev` → `main`. Nada abre esse PR automaticamente. Antes do merge, renomeie `## [Não publicado]` no [CHANGELOG](docs/logs/CHANGELOG.md) para a versão nova (`## [vX.Y.Z]`). O CI do PR confere a versão.
+3. Para publicar, a mantenedora abre o PR `dev` → `main`. Nada abre esse PR automaticamente. Antes do merge, renomeie `## [Não publicado]` no [CHANGELOG](docs/logs/CHANGELOG.md) para a versão nova (`## [vX.Y.Z]`). O CI do PR confere a versão.
 4. O merge em `main` dispara o deploy de produção. Com o Space no ar, o workflow cria a tag e a Release.
 
 Mudanças só em `docs/**`, no `README.md` e nos arquivos do canário não disparam deploy.
+
+Convenções:
+
+- **Commits:** `(tipo) arquivos alterados: o que mudou e por quê`, com `tipo` entre `feat`, `fix`, `perf`, `docs`, `test` e afins.
+- **CHANGELOG:** toda mudança visível para quem usa o sistema entra em `## [Não publicado]`, no formato [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
+- **ADR:** decisão de arquitetura com alternativas descartadas ganha um registro em [`docs/adr/`](docs/adr/), a partir do [modelo](docs/adr/adr-template.md).
+
+### Testes e lint
+
+```powershell
+ruff check src tests scripts   # regras em ruff.toml
+mypy src scripts               # configuração em mypy.ini
+pytest                         # testes unitários
+pytest -m integracao           # exige supabase start e Docker
+```
+
+O CI roda exatamente esses comandos. Para validar os workflows: `docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:latest`.
 
 ### Mudança de modelo
 
@@ -387,6 +451,8 @@ Toda falha de workflow manda e-mail pelo GitHub. Cada workflow agendado também 
 Os números do dia a dia ficam na aba "Time técnico → Observabilidade" da visão Funcionário.
 
 A interface, a API e o job D-2 também enviam logs, métricas e traces ao Grafana Cloud por OpenTelemetry. O envio fica desligado sem `OTEL_EXPORTER_OTLP_ENDPOINT` e com `OBSERVABILIDADE_ATIVA=false`. Antes de sair do processo, o que é enviado passa pelo mesmo filtro de dados pessoais do log, e os traces perdem query string, IP e mensagem de erro. O Grafana guarda esses dados por 14 dias. Para os números de longo prazo, ele lê o Supabase pelo papel `grafana_leitura`, que só enxerga as views de totais do schema `observabilidade`: disparos e taxa de disparo, predições e cobertura da explicação, latência p50/p95/p99, envios cobrados e segmentos de SMS por mês. O preço do SMS e o orçamento ficam no bloco `custo` do [`params.yaml`](params.yaml).
+
+Os seis painéis ficam em [`infra/grafana/dashboards/`](infra/grafana/dashboards/): visão geral do SLO, interface, inferência, job D-2, mensageria e custo.
 
 As regras de alerta do Grafana ficam em [`infra/grafana/`](infra/grafana/) e são aplicadas pelo `grafana.yml` no fim de cada deploy em `main`; em produção, foram aplicadas pela primeira vez em 18/10/2026. São 17 regras, cada uma com os rótulos `severidade`, `area` e `ambiente`, e só as de produção notificam:
 
@@ -486,11 +552,12 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
 - [x] Etapa 4: produto deployável — inferência, SHAP, API, interface, banco, job D-2, mensageria e blindagem LGPD
 - [x] Etapa 5: CI/CD, re-treino mensal com gate, canário do modelo e observabilidade com alertas
 - [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 a v2.5.0)
-- [x] Etapa 7: operação e ensaios
+- [ ] Etapa 7: operação e ensaios
   - [x] Ensaio de rollback de código
   - [x] Telemetria no Grafana Cloud, sonda de disponibilidade, alertas por criticidade e painéis como código
   - [x] Gatilho do job D-2 no horário, pelo Supabase
-  - [x] Teste de ponta a ponta de um alerta real por nível de criticidade
+  - [x] Teste de ponta a ponta da regra de dado pessoal no Loki (P1), em dev
+  - [ ] Alerta real de ponta a ponta para cada nível de criticidade (P1, P2 e P3) em produção
   - [ ] ADR da observabilidade com Grafana Cloud e OpenTelemetry, que revê o [ADR-006](docs/adr/adr-006-observabilidade.md)
 - [ ] Adequação à LGPD ([pendências](#pendências))
   - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
@@ -498,13 +565,23 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
   - [x] Agendamento sem consentimento, base de treino separada, eliminação e purga do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md))
   - [x] Identificador do paciente com HMAC e chave própria, com as linhas antigas migradas ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md))
   - [x] Levantamento dos DPAs e do mecanismo de transferência internacional
-  - [ ] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md) e na política de privacidade
   - [x] Publicação da política de privacidade e dos Termos de uso, versão 1.0, vigentes a partir de 18/10/2026 ([política](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), [termos](docs/LGPD/TERMOS-DE-USO.md))
+  - [ ] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md) e na política de privacidade
+  - [ ] Validação jurídica da política, dos termos e da caixa de consentimento do treino
+- [ ] Validação final para o pitch, com a decisão sobre a exceção do SLO de recall e F1 da classe positiva
 
+## Suporte
 
-## Autor
+- **Dúvidas técnicas sobre o repositório:** fale com a mantenedora pelo perfil [@VL-in](https://github.com/VL-in) no GitHub. As issues estão desativadas neste repositório.
+- **Pacientes e titulares de dados:** os pedidos vão à clínica onde a consulta foi agendada. Pedidos sobre o uso dos dados no treino do modelo e sobre contas de funcionário vão ao encarregado do SaúdeJá ([Política de privacidade, seção 9](docs/LGPD/POLITICA-DE-PRIVACIDADE.md#9-encarregado-de-dados-dpo)).
+- **Incidentes e prazos de atendimento:** [`docs/SLA.md`](docs/SLA.md).
 
-Vanessa Hoysan Lin
+## Autoria e agradecimentos
+
+Desenvolvido por **Vanessa Hoysan Lin** na disciplina AI Factory: Build, Deploy and Showcase, com apoio do [Claude Code](https://claude.com/claude-code) na implementação e na documentação.
+
+- Repositório-base da disciplina, com o protótipo herdado: [wmonteiro-ai/ai-factory-saudeja](https://github.com/wmonteiro-ai/ai-factory-saudeja), de Wellington R. Monteiro.
+- O notebook e o README do protótipo original estão preservados em [`docs/herdado/`](docs/herdado/).
 
 ## Licença
 
