@@ -123,9 +123,11 @@ A clínica só é controladora se aprovar o que a SaúdeJá propõe no contrato 
 | Hugging Face Space (aplicação) | Tudo o que a tela recebe ou exibe, inclusive nome, telefone e o CPF antes de virar hash | Estados Unidos |
 | Runner do GitHub Actions (job D-2, re-treino e purga) | Dados da consulta e telefone; no re-treino, só a base de treino, de quem autorizou. Nunca nome nem CPF | Fora do Brasil |
 | Azure Blob Storage (remote do DVC) | Dataset de treino pseudonimizado, sem nome, telefone nem CPF, e o `model.pkl` | Brasil (Brazil South), desde 09/10/2026 |
-| Infobip (SMS) | Telefone, data e hora da consulta | A confirmar |
+| Infobip (SMS) | Telefone, data e hora da consulta | Brasil |
 
-Nenhuma das contas atuais traz as cláusulas-padrão da ANPD, e só o Supabase tem acordo de tratamento de dados (DPA). O remote do DVC foi migrado para Brazil South em 09/10/2026. O processamento da base de treino fora do Brasil se apoia no consentimento do treino, que o informa em destaque. **O processamento dos dados da clínica no Hugging Face e no GitHub Actions continua sem mecanismo do art. 33**: a caixa de ciência informa, mas não é consentimento, e isso bloqueia a operação com paciente real ([`LGPD.md` §4.2 e §9.5](docs/LGPD/LGPD.md#42-mecanismo-adotado)).
+**Transferência internacional: cláusulas-padrão da ANPD** (art. 33, II, b). O processamento no Hugging Face e no GitHub Actions, tanto dos dados da clínica quanto da base de treino, se apoia nas cláusulas-padrão aprovadas pela ANPD, adotadas sem alteração num termo aditivo ao acordo de tratamento de dados (DPA) de cada provedor. Cada destino tem a hipótese legal do próprio tratamento (art. 7º ou 11) e esse mecanismo. A Política de privacidade traz as informações que o art. 17 do Regulamento de Transferência Internacional exige. O consentimento do treino continua sendo a base legal do treino, não o mecanismo da transferência. Supabase, remote do DVC e Infobip processam no Brasil, sem transferência ([`LGPD.md` §4.2](docs/LGPD/LGPD.md#42-mecanismo-adotado)).
+
+O mecanismo parte de uma **premissa de operação**: contas pagas, com DPA e aditivo das cláusulas-padrão assinados. As contas do protótipo (GitHub Free, Hugging Face Pro, Azure for Students e teste gratuito da Infobip) não têm esse aditivo. Com dados sintéticos, nenhum titular real é afetado.
 
 ### Proteções implementadas
 
@@ -149,8 +151,7 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 | Pendência | Onde está decidido |
 |---|---|
 | Registro da oposição ao lembrete (o lembrete não depende de consentimento, mas o paciente pode pedir à clínica para não receber SMS) | [`LGPD.md` §9.4](docs/LGPD/LGPD.md) |
-| Mecanismo do art. 33 para o processamento dos dados da clínica fora do Brasil (tirar a aplicação e o job D-2 do exterior, ou cláusulas-padrão da ANPD) | [`LGPD.md` §4.2 e §9.5](docs/LGPD/LGPD.md) |
-| Validação jurídica da caixa única do treino com o aviso do exterior, da prova de 365 dias e dos Termos de uso | [`LGPD.md` §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
+| Validação jurídica da caixa do treino como consentimento específico e destacado, da prova de 365 dias e dos Termos de uso | [`LGPD.md` §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
 | Política de privacidade e Termos de uso públicos | Rascunhos em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [`docs/LGPD/TERMOS-DE-USO.md`](docs/LGPD/TERMOS-DE-USO.md), já exibidos na tela, com as condições para publicar |
 | Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
 | Contrato do SaaS em que a clínica aprova os elementos essenciais propostos pela SaúdeJá | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
@@ -490,7 +491,7 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
   - [x] Ensaio de rollback de código
   - [x] Telemetria no Grafana Cloud, sonda de disponibilidade, alertas por criticidade e painéis como código
   - [x] Gatilho do job D-2 no horário, pelo Supabase
-  - [ ] Teste de ponta a ponta de um alerta real por nível de criticidade
+  - [x] Teste de ponta a ponta de um alerta real por nível de criticidade
   - [ ] ADR da observabilidade com Grafana Cloud e OpenTelemetry, que revê o [ADR-006](docs/adr/adr-006-observabilidade.md)
 - [ ] Adequação à LGPD ([pendências](#pendências))
   - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
@@ -498,7 +499,6 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
   - [x] Agendamento sem consentimento, base de treino separada, eliminação e purga do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md))
   - [x] Identificador do paciente com HMAC e chave própria, com as linhas antigas migradas ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md))
   - [x] Levantamento dos DPAs e do mecanismo de transferência internacional
-  - [ ] Mecanismo do art. 33 para o processamento dos dados da clínica fora do Brasil
   - [ ] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md) e na política de privacidade
   - [ ] Publicação da política de privacidade
 

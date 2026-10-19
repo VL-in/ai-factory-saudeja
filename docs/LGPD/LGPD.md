@@ -3,7 +3,7 @@
 # Declaração estruturada no formato lgpd.md (spec 1.0). O corpo abaixo é a análise
 # completa; estes campos a resumem e precisam ser mantidos em sincronia com ela.
 spec: "1.0"
-atualizado: "2026-10-14"
+atualizado: "2026-10-18"
 expira: "2027-04-09"
 status: "em-adequação"
 controlador:
@@ -18,7 +18,7 @@ direitos:
 politica:
   url: "https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/LGPD/LGPD.md"
   idioma: "pt-br"
-  atualizada: "2026-10-10"
+  atualizada: "2026-10-18"
 bases_legais:
   - finalidade: "Identificação do paciente e execução do agendamento (em nome da clínica-cliente, controladora)"
     base: "execução de contrato"
@@ -53,8 +53,7 @@ transferencia_internacional:
   destinos:
     - "Fora do Brasil — runner hospedado do GitHub Actions (job D-2 diário, re-treino mensal sobre a base de treino e purga LGPD, sem gravação persistente)"
     - "Estados Unidos — Hugging Face Space (aplicação: processa nome, CPF antes do hash, telefone e dados da consulta, sem gravação persistente)"
-    - "Local a confirmar — Infobip (telefone e texto do lembrete)"
-  mecanismo: "Em aberto para os dados da clínica: a tela informa o processamento fora do Brasil numa caixa de ciência antes do cadastro (art. 9º, § 3º), que não é o consentimento do art. 33, VIII; o art. 33, IX não alcança os dados de saúde, e o art. 33, II, b não é atendido pelas contas atuais (seções 4.1 e 4.2). Base de treino: consentimento do treino com o processamento no exterior em destaque no termo (art. 33, VIII). Infobip: candidato ao art. 33, IX (execução de contrato, só telefone, data e hora), a validar com o contrato pago. O remote do DVC está em Brazil South desde 09/10/2026 (seção 4.3)"
+  mecanismo: "Art. 33, II, b: cláusulas-padrão contratuais da ANPD (Anexo II da Resolução CD/ANPD nº 19/2024), adotadas integralmente em termo aditivo ao DPA do GitHub e do Hugging Face, na premissa de operação da seção 4.2. Cobre os dados da clínica (aplicação e job D-2; SaúdeJá exportadora como operadora, com autorização da clínica), a base de treino (re-treino e purga; SaúdeJá exportadora como controladora) e a conta do funcionário. O consentimento do treino continua como base legal (art. 11, I), não como mecanismo. Supabase, remote do DVC (Brazil South desde 09/10/2026) e Infobip processam no Brasil, sem transferência (seção 4)"
 ---
 
 # PROTEÇÃO DE DADOS PESSOAIS NO SAÚDEJÁ: CLASSIFICADOR DE NO-SHOW
@@ -91,7 +90,7 @@ Fonte: elaboração própria (2026).
 | Critério da decisão automatizada (art. 20) | Lembrete para quem o modelo prevê falta, com probabilidade igual ou maior que o corte. A clínica aprova o critério; o valor do corte é ajuste técnico dentro dele, controlado pelo gate do re-treino | `decision.threshold` em `params.yaml` |
 | Conteúdo do lembrete | SMS só com data e hora, sem especialidade | Quadro 4 |
 | Período de armazenamento dos dados derivados | 90 dias para `predicoes` e `mensagens_disparadas` | `RETENCAO_DADOS_DERIVADOS_DIAS` (seção 5) |
-| Suboperadores e destinos fora do Brasil | GitHub, Hugging Face e Infobip | Quadro 6; autorização da clínica no contrato (subseção 4.2) |
+| Suboperadores e destinos fora do Brasil | Supabase, Microsoft (Azure) e Infobip, no Brasil; GitHub e Hugging Face, fora dele, com as cláusulas-padrão da ANPD | Quadros 6 e 6D; autorização da clínica no contrato (subseção 4.2) |
 | Textos apresentados ao paciente | Política de privacidade e Termos de uso exibidos na tela de agendamento, com a caixa de ciência | `docs/LGPD/POLITICA-DE-PRIVACIDADE.md` e `docs/LGPD/TERMOS-DE-USO.md` |
 
 Fonte: elaboração própria (2026).
@@ -229,7 +228,7 @@ c) **continuar o agendamento não é consentimento.** A caixa de ciência da pol
 
 ## 4 TRANSFERÊNCIA INTERNACIONAL DE DADOS
 
-O banco de produção (Supabase) fica em São Paulo (`sa-east-1`), e o remote do DVC (Azure Blob Storage), em Brazil South desde 09/10/2026 (subseção 4.3): todo dado pessoal persistente do sistema fica armazenado no Brasil. Três tratamentos acontecem fora do país.
+O banco de produção (Supabase) fica em São Paulo (`sa-east-1`), e o remote do DVC (Azure Blob Storage), em Brazil South desde 09/10/2026 (subseção 4.3): todo dado pessoal persistente do sistema fica armazenado no Brasil. A Infobip, que envia o SMS, também processa no Brasil (região confirmada em 18/10/2026). Dois tratamentos acontecem fora do país.
 
 **Quadro 6 – Tratamento de dados fora do Brasil**
 
@@ -237,19 +236,20 @@ O banco de produção (Supabase) fica em São Paulo (`sa-east-1`), e o remote do
 |---|---|---|
 | Runner hospedado do GitHub Actions | Job D-2 (diário, desde 30/09/2026): data de nascimento, sexo, especialidade, distância, antecedência, histórico de faltas e telefone; e a sincronização do desfecho com a base de treino, pelo pseudônimo da consulta. Re-treino (mensal): só a base de treino, de quem consentiu, com pseudônimo HMAC e desfecho. Purga LGPD (diária): pseudônimos dos pedidos e as versões do dataset. Nunca nome nem CPF. O canário e o alerta de observabilidade leem só contagens | Processamento. O que é gravado no runner é descartado ao fim da execução. Continua fora do Brasil depois da migração do remote |
 | Hugging Face Space (Estados Unidos) | Tudo o que a interface recebe ou exibe: nome, CPF antes da conversão em hash, telefone, data de nascimento, sexo, dados da consulta, predição e explicação | Processamento, sem gravação persistente. É o destino com mais dados, porque é onde o paciente digita o cadastro |
-| Infobip (local a confirmar) | Telefone e texto do lembrete, com data e hora da consulta | Envio do SMS. A Infobip guarda o log com o texto por 3 meses por padrão |
 
 Fonte: elaboração própria (2026), a partir do [ADR-005](../adr/adr-005-integracoes-implicitas.md).
 
-Para o pitch, a formulação correta é: **os dados são armazenados no Brasil, mas são processados fora dele: a aplicação no Hugging Face, e o job diário e o re-treino no GitHub Actions.**
+A Infobip recebe o telefone e o texto do lembrete, com data e hora da consulta, e guarda o log com o texto por 3 meses por padrão. Sem transferência internacional, ela continua suboperadora (art. 39) e precisa de DPA (Quadro 6D).
 
-**Enquadramento.** O mecanismo pretendido era o art. 33, II, b (cláusulas-padrão contratuais), por meio do acordo de processamento de dados (DPA) de cada provedor. Desde 23/08/2025, cláusula contratual só ampara transferência internacional se adotar, integralmente e sem alterações, o texto das cláusulas-padrão aprovado pela Autoridade Nacional de Proteção de Dados (ANPD), num instrumento assinado por exportador e importador, ou se tiver cláusula específica aprovada por ela (Brasil, 2024). **Nenhuma das contas atuais cumpre isso** (subseção 4.1), e o mecanismo está em aberto (subseção 9.2, item 16).
+Para o pitch, a formulação correta é: **os dados são armazenados no Brasil, mas são processados fora dele: a aplicação no Hugging Face, e o job diário e o re-treino no GitHub Actions, com as cláusulas-padrão da ANPD nos contratos desses provedores.**
+
+**Enquadramento.** Toda transferência internacional precisa de duas coisas (Regulamento de Transferência Internacional, art. 9º): uma hipótese legal do art. 7º ou do art. 11, que é a do próprio tratamento (seção 3, Quadro 5), e um mecanismo do art. 33. O mecanismo adotado é o art. 33, II, b: cláusulas-padrão contratuais (subseção 4.2). Desde 23/08/2025, cláusula contratual só ampara transferência internacional se adotar, integralmente e sem alterações, o texto das cláusulas-padrão aprovado pela Autoridade Nacional de Proteção de Dados (ANPD), no Anexo II do Regulamento, ou se tiver cláusula específica aprovada por ela (Brasil, 2024). O texto entra em contrato próprio para a transferência ou em termo aditivo a um contrato mais amplo, como o DPA, com as Seções I a III do Anexo II como anexo (Regulamento, art. 16). O DPA padrão de cada provedor não basta: os verificados em 09/10/2026 só trazem as cláusulas da União Europeia, do Reino Unido e da Suíça (subseção 4.1).
 
 **Mitigação pelo conteúdo.** O export (`src/export_treino.py`) lê só a base de treino e nunca inclui telefone, nome ou CPF. Isso é verificado por `tests/test_coerencia_repo.py::test_export_treino_sem_coluna_proibida_de_pii` e por `test_export_de_treino_le_so_a_base_de_treino`. O identificador do paciente é o pseudônimo HMAC com chave secreta, que o re-treino não tem. Restam idade, sexo, especialidade, distância, antecedência e desfecho.
 
 A mitigação tem limite: as linhas de produção pseudonimizadas continuam sendo dado pessoal, porque o art. 12 só equipara a anônimo o dado cuja anonimização é irreversível. Especialidade, desfecho e histórico de faltas continuam sendo dados sensíveis. A pseudonimização reduz a gravidade de um incidente, mas não tira a transferência do escopo do art. 33.
 
-**Alternativas.** Cada destino pode sair do exterior por um caminho diferente:
+**Alternativas.** Cada destino pode sair do exterior por um caminho diferente. Para o job D-2 e a aplicação, as alternativas b e c não foram adotadas (subseção 4.2) e ficam registradas como saída se um provedor deixar de oferecer as cláusulas-padrão:
 
 a) **remote do DVC**: **executada em 09/10/2026** (subseção 4.3). A região é da conta de armazenamento, não do container, e não muda depois de criada: a migração exigiu uma conta nova. Nenhum código dependia da região ([ADR-005](../adr/adr-005-integracoes-implicitas.md)), e o armazenamento custa praticamente o mesmo;
 
@@ -261,7 +261,7 @@ Somadas, as três mudanças custam de US$ 15 a US$ 35 por mês a mais, contra o 
 
 ### 4.1 Acordos de tratamento de dados (DPA) das contas atuais
 
-Cada provedor trata dados em nome da SaúdeJá e é seu suboperador (art. 39). O DPA é o contrato que define as obrigações dele. Para amparar transferência internacional, o DPA precisa ainda trazer o texto das cláusulas-padrão da ANPD. A verificação abaixo foi feita em 09/10/2026, sobre os textos públicos de cada provedor.
+Cada provedor trata dados em nome da SaúdeJá e é seu suboperador (art. 39). O DPA é o contrato que define as obrigações dele. Para amparar transferência internacional, o DPA precisa ainda trazer o texto das cláusulas-padrão da ANPD. A verificação abaixo foi feita em 09/10/2026, sobre os textos públicos de cada provedor, e descreve as contas do protótipo. A operação parte da premissa da subseção 4.2: contas pagas, com DPA e aditivo das cláusulas-padrão.
 
 **Quadro 6A – DPA por conta**
 
@@ -271,7 +271,7 @@ Cada provedor trata dados em nome da SaúdeJá e é seu suboperador (art. 39). O
 | GitHub Free | **Não.** O DPA do GitHub faz parte do GitHub Customer Agreement, que cobre organizações em planos pagos (Team, Enterprise). A conta gratuita é regida só pelos Termos de Serviço e pela Declaração de Privacidade | Mover o repositório para uma organização no plano Team | **Não** (versão de outubro de 2025) | O runner do job D-2 processa telefone e dados da consulta sem nenhum contrato de operador |
 | Hugging Face Pro | **Não.** O DPA só é oferecido no plano Enterprise | Plano Enterprise | Não | O Pro é assinatura individual, sem cláusula de tratamento de dados. Os servidores ficam nos Estados Unidos |
 | Supabase Free (São Paulo) | **Sim.** O DPA complementa os Termos de Serviço e vale com o aceite deles | Automático. Cópia assinada pelo painel, em *Legal documents*, via PandaDoc | **Não** (versão de junho de 2026). Os dados ficam no Brasil, então isso só pesaria se houvesse acesso remoto a partir do exterior | O plano gratuito não tem backup (seção 5) |
-| Infobip (teste gratuito) | O DPA faz parte do contrato comercial. No teste gratuito, não há contrato negociado | Contrato pago | A confirmar | O teste dura 60 dias e só envia para 1 número verificado, com remetente de teste. **Não consegue enviar lembrete a paciente**: a operação real exige conta paga, e com ela o DPA |
+| Infobip (teste gratuito) | O DPA faz parte do contrato comercial. No teste gratuito, não há contrato negociado | Contrato pago | Não se aplica: processamento no Brasil, confirmado em 18/10/2026 | O teste dura 60 dias e só envia para 1 número verificado, com remetente de teste. **Não consegue enviar lembrete a paciente**: a operação real exige conta paga, e com ela o DPA |
 
 Fonte: elaboração própria (2026), com base em Microsoft (2026a, 2026b), GitHub (2025), Supabase (2026) e Infobip (2026a, 2026b).
 
@@ -279,46 +279,73 @@ Fonte: elaboração própria (2026), com base em Microsoft (2026a, 2026b), GitHu
 
 a) **tirar o destino do exterior** (alternativas a a c, acima). Resolve a transferência, mas não a falta de DPA: a hospedagem no Brasil ainda precisa de contrato de operador;
 
-b) **consentimento específico e destacado para a transferência** (art. 33, VIII), com informação prévia do caráter internacional. Combina com o treino, que já depende de consentimento (seção 3), e é o caminho adotado nele. Não serve para a aplicação nem para o job D-2: um paciente que recusasse não poderia ser atendido pelo sistema, e o agendamento não pode depender de consentimento ([ADR-010](../adr/adr-010-base-de-treino-separada.md));
+b) **consentimento específico e destacado para a transferência** (art. 33, VIII), com informação prévia do caráter internacional. Combina com o treino, que já depende de consentimento (seção 3), e foi o caminho adotado nele até 18/10/2026; desde então, o consentimento do treino é só base legal (subseção 4.2). Não serve para a aplicação nem para o job D-2: um paciente que recusasse não poderia ser atendido pelo sistema, e o agendamento não pode depender de consentimento ([ADR-010](../adr/adr-010-base-de-treino-separada.md));
 
-c) **cláusulas-padrão da ANPD assinadas com o provedor** (art. 33, II, b). Só é realista com contrato corporativo.
+c) **cláusulas-padrão da ANPD assinadas com o provedor** (art. 33, II, b). Só é realista com contrato corporativo. **É o caminho adotado em 18/10/2026** para o GitHub e o Hugging Face (subseção 4.2).
 
 O art. 33, IX, não resolve: ele cobre as hipóteses do art. 7º, II, V e VI, e não as bases do art. 11 em que se apoiam os dados de saúde.
 
-No protótipo, com a semente sintética e a SaúdeJá fictícia, nenhum titular real é afetado. Antes de operar com pacientes reais, o mecanismo de cada destino precisa estar definido aqui e na [política de privacidade](POLITICA-DE-PRIVACIDADE.md), seção 6.
+No protótipo, com a semente sintética e a SaúdeJá fictícia, nenhum titular real é afetado. O mecanismo de cada destino está definido na subseção 4.2 e na [política de privacidade](POLITICA-DE-PRIVACIDADE.md), seção 6.
 
 ### 4.2 Mecanismo adotado
 
-Decisões de 09/10/2026 e de 10/10/2026 ([ADR-010](../adr/adr-010-base-de-treino-separada.md)): o remote do DVC vai para Brazil South (migração executada em 09/10/2026, subseção 4.3); o job D-2, o re-treino e a aplicação continuam no GitHub Actions e no Hugging Face, fora do Brasil; e o agendamento não depende de consentimento.
+Decisões de 09/10/2026, de 10/10/2026 ([ADR-010](../adr/adr-010-base-de-treino-separada.md)) e de 18/10/2026: o remote do DVC vai para Brazil South (migração executada em 09/10/2026, subseção 4.3); a aplicação, o job D-2, o re-treino e a purga continuam no Hugging Face e no GitHub Actions, fora do Brasil; o agendamento não depende de consentimento; e toda transferência para esses dois provedores se apoia nas cláusulas-padrão contratuais da ANPD (art. 33, II, b).
 
-**Quadro 6B – Mecanismo por destino**
+**Premissa de operação.** O mecanismo vale com as contas pagas, o DPA de cada provedor e o termo aditivo das cláusulas-padrão da ANPD assinados (Quadro 6D). As contas do protótipo, verificadas em 09/10/2026, não têm esse aditivo (subseção 4.1). No protótipo, com a semente sintética e a SaúdeJá fictícia, nenhum titular real é afetado. Com paciente real, a assinatura de cada instrumento do Quadro 6D é condição para a operação.
 
-| Destino | Mecanismo | Situação |
-|---|---|---|
-| Remote do DVC | Nenhum: não há transferência | Em Brazil South desde 09/10/2026. A conta antiga, no Chile, nunca guardou dado de titular (subseção 4.3) |
-| Hugging Face e GitHub Actions, dados da clínica (aplicação e job D-2) | **Em aberto.** A tela informa o processamento fora do Brasil numa caixa de ciência, antes de qualquer campo (art. 9º, § 3º). A ciência não é o consentimento do art. 33, VIII | Bloqueia a operação com paciente real (subseção 9.5, item 30) |
-| GitHub Actions, base de treino (re-treino e purga) | Consentimento do treino, com o processamento no exterior em destaque no próprio termo (art. 33, VIII) | Implementado em 10/10/2026. Uma caixa só para o treino e o processamento dele no exterior precisa de validação jurídica (subseção 9.5, item 31) |
-| Hugging Face (conta do funcionário) | A definir | O consentimento no primeiro acesso, previsto antes, era frágil (subseção 9.2, item 26) |
-| Infobip | A definir com o contrato pago. Candidato: art. 33, IX, transferência necessária à execução de contrato (art. 7º, V), porque o SMS leva só telefone, data e hora, sem dado sensível (seção 3) | O teste gratuito não envia lembrete a paciente (subseção 4.1). O inciso IX precisa de validação jurídica e da região de processamento confirmada no contrato |
+**Quadro 6B – Hipótese legal e mecanismo por destino**
 
-Fonte: elaboração própria (2026), com base em Brasil (2018).
+| Destino | Hipótese legal (seção 3) | Mecanismo (art. 33) | Exportador e importador |
+|---|---|---|---|
+| Hugging Face Space (aplicação), dados da clínica | Art. 7º, V, VIII e IX; art. 11, II, f (Quadro 5) | II, b: cláusulas-padrão da ANPD | SaúdeJá, operadora, com a autorização da clínica (Quadro 1A), para o Hugging Face, suboperador |
+| GitHub Actions (job D-2), dados da clínica | Art. 7º, V e IX; art. 11, II, f | II, b: cláusulas-padrão da ANPD | SaúdeJá, operadora, para o GitHub, suboperador |
+| GitHub Actions (re-treino e purga), base de treino | Art. 11, I: consentimento do treino | II, b: cláusulas-padrão da ANPD | SaúdeJá, controladora, para o GitHub, operador |
+| Hugging Face Space, conta do funcionário | Art. 7º, IX | II, b: cláusulas-padrão da ANPD | SaúdeJá, controladora, para o Hugging Face, operador |
+| Supabase, remote do DVC e Infobip | Quadro 5 | Nenhum: processamento e armazenamento no Brasil | Não há transferência |
 
-**Por que a ciência não resolve.** As cláusulas-padrão (art. 33, II, b) dependem de contrato que as contas atuais não oferecem (subseção 4.1). O art. 33, IX, só cobre transferências necessárias às hipóteses do art. 7º, II, V e VI. A identificação do paciente se apoia no inciso V, mas a predição trata dado de saúde, cuja base está no art. 11, que o inciso IX não alcança. Também não há decisão de adequação da ANPD para os Estados Unidos (art. 33, I). O consentimento do inciso VIII foi descartado para os dados da clínica porque tornaria o agendamento condicionado a ele. Restam tirar a aplicação e o job D-2 do exterior (seção 4, alternativas b e c) ou contratar as cláusulas-padrão.
+Fonte: elaboração própria (2026), com base em Brasil (2018) e Brasil (2024).
+
+**Quadro 6D – Contratos e instrumento das cláusulas-padrão**
+
+| Provedor | Contrato de operador | Instrumento das cláusulas-padrão | Situação |
+|---|---|---|---|
+| GitHub | GitHub Customer Agreement, plano Team, com o DPA | Termo aditivo ao DPA, com as Seções I a III do Anexo II como anexo (Regulamento, art. 16, § 1º, II, e § 3º) | Premissa de operação |
+| Hugging Face | Plano Enterprise, com o DPA | Termo aditivo ao DPA, nos mesmos termos | Premissa de operação |
+| Microsoft (Azure) | Assinatura paga, com o DPA da Microsoft | Não se aplica: Brazil South, com redundância LRS (subseção 4.3) | Premissa de operação |
+| Supabase | DPA, com o aceite dos Termos de Serviço | Não se aplica: São Paulo | Vigente (subseção 4.1) |
+| Infobip | Contrato pago, com o DPA | Não se aplica: processamento no Brasil | Premissa de operação |
+
+Fonte: elaboração própria (2026), com base em Brasil (2024).
+
+A data de assinatura, a versão e o local do arquivo de cada instrumento ficam no registro de contratos da SaúdeJá, fora do repositório. Na Seção I do Anexo II, a descrição da transferência de cada aditivo reproduz a linha do Quadro 6 e do Quadro 6B daquele provedor: dados, finalidade, papéis e ausência de gravação persistente.
+
+**Consentimento do treino.** Continua sendo a base legal do treino (art. 11, I), e o termo continua informando, em destaque, que o uso é feito fora do Brasil. Deixa de ser o mecanismo da transferência (art. 33, VIII): as cláusulas-padrão também cobrem o GitHub no re-treino e na purga. A revogação tira o titular do treino e apaga os dados dele, mas não muda o mecanismo.
+
+**Por que não os outros incisos.** Não há decisão de adequação da ANPD para os Estados Unidos (art. 33, I). O inciso IX só cobre transferências necessárias às hipóteses do art. 7º, II, V e VI, e não alcança os dados de saúde, cuja base está no art. 11. O consentimento do inciso VIII foi descartado para os dados da clínica porque tornaria o agendamento condicionado a ele ([ADR-010](../adr/adr-010-base-de-treino-separada.md)).
+
+**Transparência da transferência** (Regulamento, art. 17):
+
+a) **íntegra das cláusulas**: entregue ao titular que pedir, em até 15 dias, observados os segredos comercial e industrial. O pedido chega pela clínica ou pelo encarregado (seção 11);
+
+b) **documento em português**, em linguagem simples, com, no mínimo: forma, duração e finalidade da transferência; país de destino; identificação e contatos do controlador; uso compartilhado dos dados e a finalidade; responsabilidades dos agentes e medidas de segurança; e direitos do titular, com os meios de exercê-los. Fica integrado à [política de privacidade](POLITICA-DE-PRIVACIDADE.md), seção 6, como o art. 17, § 3º, permite;
+
+c) **quem publica**: o dever é do controlador. Nos dados da clínica, a clínica publica, com o texto preparado pela SaúdeJá e aprovado no contrato do SaaS (Quadro 1A, linha dos textos apresentados ao paciente). Na base de treino e na conta do funcionário, a própria SaúdeJá publica.
 
 **Requisitos da caixa de ciência** (tela de agendamento):
 
 a) **antes de qualquer campo**: o formulário de cadastro roda no próprio Space, e os campos de um `st.form` só são enviados ao servidor no envio do formulário. A caixa e o botão "Continuar" ficam antes dele, e nenhum campo é desenhado sem a ciência;
 
-b) **informação em destaque**: uma frase em negrito diz que os dados digitados são processados fora do Brasil, e os links abrem a Política de privacidade e os Termos de uso, com os países, os provedores, os dados de cada um, a ausência das cláusulas-padrão da ANPD e a alternativa de agendar pela clínica;
+b) **informação em destaque**: uma frase em negrito diz que os dados digitados são processados fora do Brasil, e os links abrem a Política de privacidade e os Termos de uso, com os países, os provedores, os dados de cada um, as cláusulas-padrão da ANPD como mecanismo e a alternativa de agendar pela clínica;
 
 c) **registro**: a versão dos dois documentos fica em `agendamentos.versao_documentos`, como prova de que a informação foi apresentada.
 
-**Política de privacidade e ciência têm papéis diferentes de consentimento.** A política e os termos cumprem o dever de transparência (art. 9º). Nenhum dos dois é base legal nem mecanismo do art. 33.
+**A ciência, a política e os termos não são mecanismo.** Cumprem o dever de informação (art. 9º, § 3º) e a transparência do art. 17 do Regulamento. Nenhum deles é base legal nem mecanismo do art. 33: o mecanismo é o contrato com o provedor.
 
 **Limites:**
 
-- consentimento não substitui contrato de operador: GitHub e Hugging Face continuam sem DPA (subseção 4.1);
-- o consentimento do treino é revogável a qualquer momento, e a revogação apaga os dados de treino do titular (seção 6).
+- as cláusulas-padrão não mudam a natureza dos dados: as linhas de treino pseudonimizadas e os dados de saúde que passam pela aplicação continuam sendo dado pessoal, e a mitigação pelo conteúdo (seção 4) continua necessária;
+- a SaúdeJá responde solidariamente, como operadora, quando descumprir a lei ou as instruções da clínica (art. 42, § 1º, I), inclusive pelo que exigir dos suboperadores;
+- troca de provedor, de região de processamento ou de plano sem o aditivo desfaz o mecanismo daquele destino: o Quadro 6D é revisto antes da mudança (seção 12).
 
 ### 4.3 Migração do remote do DVC para Brazil South
 
@@ -484,7 +511,7 @@ d) **log da Infobip**: guarda o telefone e o texto do lembrete por 3 meses (seç
 
 Cada item deve constar do slide de risco do pitch.
 
-1. **Transferência internacional das linhas de produção do dataset** (seção 4). O armazenamento saiu do exterior: o remote do DVC está em Brazil South desde 09/10/2026 (subseção 4.3). O processamento continua fora: o re-treino lê essas linhas no runner do GitHub. Desde 10/10/2026, só de quem consentiu, com o processamento no exterior informado no termo, e com pseudônimo que não se reverte sem a chave.
+1. **Transferência internacional das linhas de produção do dataset** (seção 4). O armazenamento saiu do exterior: o remote do DVC está em Brazil South desde 09/10/2026 (subseção 4.3). O processamento continua fora: o re-treino lê essas linhas no runner do GitHub. Desde 10/10/2026, só de quem consentiu, com o processamento no exterior informado no termo, e com pseudônimo que não se reverte sem a chave. Desde 18/10/2026, a transferência se apoia nas cláusulas-padrão da ANPD, na premissa de operação (subseção 4.2).
 2. **Reidentificação direta em caso de vazamento** ([ADR-007](../adr/adr-007-nome-do-paciente.md)). O banco expõe nome, telefone, especialidade e desfecho. O pitch não pode afirmar "não temos nome de paciente". A formulação correta é: "temos nome, restrito à tela da equipe, com sete saídas fechadas e testadas" (Quadro 4).
 3. **Tela da recepção visível na sala de espera.** A fila do dia mostra nomes. A mitigação é um aviso na tela, não um mecanismo: a posição do monitor é decisão da clínica. A opção de abreviar o nome foi recusada por custo de operação (ADR-007).
 4. **Eliminação de titular manual.** Encerrado em 10/10/2026: a clínica registra e confirma o pedido na aba "Pedidos do titular", e o workflow de purga executa ([PROCEDIMENTO-ELIMINACAO.md](PROCEDIMENTO-ELIMINACAO.md)).
@@ -502,7 +529,7 @@ Cada item deve constar do slide de risco do pitch.
 ### 9.1 Riscos acrescentados pelo CI/CD
 
 10. **Log público do job D-2.** O repositório e o log do GitHub Actions são públicos, e o job processa telefone. O filtro de redação (seção 8) passa a ser a última barreira. O job registra só contadores e `id_agendamento`, e o CI varre o log da imagem de deploy. Fica sem mitigação um bug de terceiro que registre o corpo de uma requisição antes de o filtro ser instalado.
-11. **Processamento por mais um operador fora do Brasil**: o runner do GitHub (seção 4).
+11. **Processamento por mais um operador fora do Brasil**: o runner do GitHub (seção 4). Desde 18/10/2026, com DPA e cláusulas-padrão da ANPD, na premissa de operação (subseção 4.2, Quadro 6D).
 12. **Credencial do remote do DVC.** CI, deploy, job D-2, canário e a máquina de quem desenvolve usam SAS só de leitura do container, assinada com a key1. A escrita fica só no re-treino, com SAS assinada com a key2, que cria e grava arquivos mas não apaga. A account key não chega a nenhum workflow nem ao `.env` local, e PR de fork não recebe secrets. Um vazamento da SAS de escrita se resolve rotacionando a key2, sem derrubar a leitura. A exclusão fica só no workflow de purga, com SAS também assinada com a key2 (a conta só tem duas chaves), mas presa à stored access policy `purga-lgpd` do container: apagar a policy revoga só essa SAS, sem rotacionar chave, e a validade se estende na policy sem trocar o secret.
 
 ### 9.2 Riscos acrescentados pela revisão das bases legais
@@ -510,17 +537,17 @@ Cada item deve constar do slide de risco do pitch.
 13. **Consentimento do lembrete sem prova nem revogação.** Encerrado em 10/10/2026: o lembrete deixou de depender de consentimento e passou à execução de contrato (seção 3). Não há consentimento a provar nem revogação a respeitar no job D-2. O que resta é a oposição (Quadro 8), sem mecanismo no job (subseção 9.4, item 29).
 14. **Retenção de `mensagens_disparadas` após a revogação.** Encerrado em 10/10/2026 pelo mesmo motivo do item 13: sem consentimento, não há revogação que encerre o registro antes dos 90 dias (seção 5).
 15. **Legítimo interesse sem teste de balanceamento documentado** (art. 10), tanto para os dados de paciente quanto para a conta do funcionário. A ANPD pode exigir relatório de impacto (art. 10, § 3º).
-16. **Transferência internacional sem mecanismo implementado** (seção 4). Verificado em 09/10/2026: nenhuma das contas atuais tem as cláusulas-padrão da ANPD, e só o Supabase tem DPA (subseção 4.1). Remote do DVC migrado para Brazil South em 09/10/2026. O consentimento do art. 33, VIII, previsto para GitHub e Hugging Face, foi substituído em 10/10/2026 por uma caixa de ciência, para que o agendamento não dependa de consentimento; o mecanismo dos dados da clínica continua em aberto (subseção 9.5, item 30).
+16. **Transferência internacional sem mecanismo implementado** (seção 4). Encerrado em 18/10/2026, na premissa de operação: cláusulas-padrão da ANPD (art. 33, II, b) em aditivo ao DPA do GitHub e do Hugging Face, para todos os destinos no exterior (subseção 4.2). Histórico: verificado em 09/10/2026, nenhuma das contas atuais tem as cláusulas-padrão da ANPD, e só o Supabase tem DPA (subseção 4.1). Remote do DVC migrado para Brazil South em 09/10/2026. O consentimento do art. 33, VIII, previsto para GitHub e Hugging Face, foi substituído em 10/10/2026 por uma caixa de ciência, para que o agendamento não dependa de consentimento, e o mecanismo dos dados da clínica ficou em aberto até 18/10/2026 (subseção 9.5, item 30).
 17. **Pacientes menores de idade** (art. 14). O sistema não distingue menores, e não está definido de quem é o `telefone` cadastrado: do adolescente ou do responsável. No segundo caso, é dado de um terceiro que não está no inventário. Para criança, o consentimento do treino deve ser dado por pelo menos um dos pais ou pelo responsável legal (art. 14, § 1º).
 18. **Registros do Supabase Auth.** Podem guardar IP e user agent do funcionário. A confirmar e, se confirmado, incluir no Quadro 2.
 19. **Consentimento do treino sem mecanismo** (seção 3). Encerrado em 10/10/2026: caixa própria no formulário, eventos em `treino.eventos_consentimento` e base de treino que só recebe a consulta de quem consentiu ([ADR-010](../adr/adr-010-base-de-treino-separada.md)).
 20. **Retenção de 90 dias do DVC não implementada** (seção 5). Encerrado em 10/10/2026: o export usa só consultas com até 90 dias, e o workflow de purga (`lgpd.yml`), com SAS de exclusão própria e restrito a `main`, apaga as versões expiradas. A SAS de escrita do re-treino continua sem permissão de exclusão (item 12).
 21. **Modelo compartilhado entre clínicas** (seção 1). O treino é tratado como finalidade da SaúdeJá, e o termo de consentimento cita a SaúdeJá. Se um dia cada clínica tiver o próprio modelo, a seção 1 e o ADR-010 precisam ser revistos.
-22. **Contas incompatíveis com operação real** (subseção 4.1). O Azure for Students se destina a uso educacional e é desativado quando o crédito acaba; o teste gratuito da Infobip não envia SMS a paciente; GitHub Free e Hugging Face Pro não têm DPA. Adequado ao protótipo, não a pacientes reais.
+22. **Contas incompatíveis com operação real** (subseção 4.1). O Azure for Students se destina a uso educacional e é desativado quando o crédito acaba; o teste gratuito da Infobip não envia SMS a paciente; GitHub Free e Hugging Face Pro não têm DPA. Adequado ao protótipo, não a pacientes reais. O mecanismo da transferência (subseção 4.2) supõe as contas pagas do Quadro 6D.
 23. **Banco sem backup** (seção 5). O plano gratuito do Supabase não tem backup: um incidente que apague dados não tem recuperação.
 24. **Política de privacidade não publicada.** O rascunho em [POLITICA-DE-PRIVACIDADE.md](POLITICA-DE-PRIVACIDADE.md) e os [Termos de uso](TERMOS-DE-USO.md) já aparecem na tela de agendamento, por link, e a caixa de ciência registra a versão deles. Continuam rascunhos, com as condições de publicação no fim de cada um, e o campo `politica.url` do frontmatter aponta para este documento, que não serve de compromisso externo.
 25. **Purga local depende de quem desenvolve** (subseção 5.1). `scripts/purgar_dvc_local.py` aplica a retenção nas cópias locais do DVC, mas só quando é executado. Nada no repositório detecta uma máquina que nunca o executa. Mitigação: restringir o acesso de leitura ao remote a quem precisa e revogar a credencial de quem sai do projeto.
-26. **Consentimento como mecanismo de transferência** (subseção 4.2). Encerrado em 10/10/2026 para os dados da clínica, que deixaram de depender de consentimento; continua valendo para a base de treino, em que a revogação só tira o titular do treino. Na conta do funcionário, o mecanismo está em aberto. Nenhum dos dois resolve a falta de contrato de operador com GitHub e Hugging Face.
+26. **Consentimento como mecanismo de transferência** (subseção 4.2). Encerrado em 10/10/2026 para os dados da clínica, que deixaram de depender de consentimento, e em 18/10/2026 para a base de treino e a conta do funcionário: o mecanismo de todos os destinos no exterior passa às cláusulas-padrão da ANPD, e o consentimento do treino fica só como base legal (art. 11, I).
 
 ### 9.3 Riscos acrescentados pela revisão dos papéis
 
@@ -533,8 +560,8 @@ Cada item deve constar do slide de risco do pitch.
 
 ### 9.5 Riscos acrescentados pela base de treino separada
 
-30. **Processamento dos dados da clínica fora do Brasil sem mecanismo do art. 33** (subseção 4.2). A caixa de ciência informa, mas não é o consentimento do inciso VIII, e o inciso IX não alcança os dados de saúde. **Bloqueia a operação com paciente real** até a aplicação e o job D-2 saírem do exterior (seção 4, alternativas b e c) ou haver cláusulas-padrão da ANPD com os provedores. No protótipo, com dados sintéticos, nenhum titular real é afetado.
-31. **Uma caixa só para o treino e o processamento dele no exterior.** O art. 33, VIII, pede consentimento específico "distinguindo claramente esta de outras finalidades". O termo do treino traz o processamento no exterior em destaque, mas numa caixa só. Precisa de validação jurídica; a alternativa é uma segunda caixa, que só aparece com a primeira marcada.
+30. **Processamento dos dados da clínica fora do Brasil sem mecanismo do art. 33** (subseção 4.2). Encerrado em 18/10/2026, na premissa de operação: cláusulas-padrão da ANPD em aditivo ao DPA do GitHub e do Hugging Face, com a SaúdeJá exportadora como operadora e a autorização da clínica no contrato do SaaS. Com paciente real, a assinatura de cada instrumento do Quadro 6D é condição para operar, e a seção 6 da política de privacidade precisa estar publicada pela clínica (subseção 4.2, transparência).
+31. **Uma caixa só para o treino e o processamento dele no exterior.** Perdeu a maior parte do peso em 18/10/2026: o processamento no exterior deixou de depender do consentimento do art. 33, VIII, que pede consentimento específico "distinguindo claramente esta de outras finalidades", e o termo só o informa. Continua precisando de validação jurídica a caixa como consentimento específico e destacado do art. 11, I.
 32. **Mesma chave secreta para os dois schemas.** O re-treino recebe a chave que também lê o banco da clínica. A fronteira é garantida por código e teste (o export só importa o repositório da base de treino), não por credencial. Um projeto Supabase próprio para o treino fecharia isso, ao custo do plano Pro.
 33. **A caixa desmarcada revoga e apaga.** Quem consentiu e esquece de marcar a caixa num agendamento novo perde os dados de treino. O aviso está nos Termos de uso (seção 5), não na tela, por decisão de 10/10/2026. A tela não pode mostrar o consentimento vigente, porque o revelaria a quem digitasse um CPF alheio.
 34. **Chave do pseudônimo.** Um vazamento reabre a ligação entre o CPF e as linhas de treino, por força bruta sobre os CPFs. A chave fica só nos secrets do Space e do job D-2 e no `.env` do encarregado, e não roda. Vazamento é incidente (seção 10). A consulta do consentimento vigente, a cada agendamento, envia o pseudônimo também de quem não consentiu, sem dado da consulta e no corpo da RPC.
@@ -563,7 +590,9 @@ c) uma integração externa nova passar a receber dado de paciente. O LLM opcion
 
 d) o [SLO](../SLO.md), o [SLA](../SLA.md) ou o [architecture.md](../architecture.md) mudarem;
 
-e) a data de `expira`, no frontmatter, se aproximar.
+e) a data de `expira`, no frontmatter, se aproximar;
+
+f) um provedor do Quadro 6D mudar de contrato, de plano ou de região de processamento, ou passar a usar suboperador novo para os dados do sistema. Mudança nas garantias da transferência também é comunicada à ANPD (art. 36).
 
 O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualizado junto com o corpo: `bases_legais` espelha o Quadro 5, e `transferencia_internacional` espelha o Quadro 6.
 
@@ -588,6 +617,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 11/10/2026 | Frontmatter, 11 | Contato do controlador, canal dos titulares e encarregado padronizados (Vanessa Lin, `v.lin@gmail.com`); data de atualização da política corrigida para a revisão 0.2 |
 | 14/10/2026 | Frontmatter, 9.1 | SAS de exclusão da purga assinada com a key2 e presa à stored access policy `purga-lgpd`, revogável sem rotacionar chave (item 12) |
 | 18/10/2026 | Frontmatter, 2, 6, 7, 9.5 | Identificador do paciente no banco da clínica passa do sha256 do CPF ao HMAC com chave própria, sob guarda da clínica, com migração das linhas existentes, executada em dev e produção no mesmo dia ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)); item 35 |
+| 18/10/2026 | Frontmatter, 1A, 4, 4.1, 4.2, 9, 9.1, 9.2, 9.5, 12 | Região da Infobip confirmada no Brasil, fora do Quadro 6; mecanismo da transferência internacional definido: cláusulas-padrão da ANPD (art. 33, II, b) em aditivo ao DPA do GitHub e do Hugging Face, na premissa de operação com contas pagas; hipótese legal e mecanismo por destino (Quadro 6B) e contratos (Quadro 6D); transparência do art. 17 do Regulamento na política de privacidade; consentimento do treino só como base legal; itens 16, 26 e 30 encerrados, item 31 reduzido |
 
 Fonte: elaboração própria (2026).
 

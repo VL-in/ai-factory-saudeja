@@ -2,7 +2,7 @@
 
 > **Rascunho, sem validação jurídica.** A tela de agendamento a exibe, sem este aviso, a partir de um link. Não publicar em produção nem enviar a clínicas antes de cumprir as condições listadas no fim deste documento. A análise técnica que sustenta cada afirmação está em [LGPD.md](LGPD.md).
 
-**Vigência:** a partir de [DATA DE PUBLICAÇÃO]. **Versão:** 0.2.
+**Vigência:** a partir de [DATA DE PUBLICAÇÃO]. **Versão:** 0.3.
 
 Esta política explica, em linguagem simples, como o SaúdeJá trata os seus dados pessoais quando você agenda uma consulta numa clínica que usa o nosso sistema, ou quando você trabalha numa dessas clínicas e acessa o sistema. Ela segue a Lei Geral de Proteção de Dados Pessoais (LGPD), Lei nº 13.709/2018.
 
@@ -96,17 +96,30 @@ Seus dados são acessados pela equipe da clínica, por meio de contas individuai
 | Hugging Face | Hospedagem da aplicação usada no cadastro e pela equipe | Os dados digitados ou exibidos na tela, inclusive nome, CPF antes da conversão em código e telefone. Não guarda os dados depois do processamento | Estados Unidos |
 | GitHub (Microsoft) | Execução da previsão diária e do aprimoramento mensal do modelo | Na previsão diária: data de nascimento, sexo, dados da consulta, histórico de comparecimento e telefone. No aprimoramento: só a base de aprimoramento, de quem autorizou. Nunca nome nem CPF. Não guarda os dados depois do processamento | Fora do Brasil, em geral nos Estados Unidos |
 | Microsoft Azure | Armazenamento das versões do conjunto de aprimoramento do modelo | Os dados da base de aprimoramento, com o código calculado com chave secreta. Nunca nome, telefone ou CPF | Brasil |
-| Infobip | Envio do SMS de lembrete | Telefone e texto do lembrete, com a data e a hora da consulta. A mensagem não cita a especialidade | [LOCAL A CONFIRMAR] |
+| Infobip | Envio do SMS de lembrete | Telefone e texto do lembrete, com a data e a hora da consulta. A mensagem não cita a especialidade | Brasil |
 
 Também podemos compartilhar dados quando a lei ou uma ordem judicial exigir.
 
 ## 6 TRANSFERÊNCIA INTERNACIONAL
 
-Como mostra a tabela da seção 5, parte do processamento acontece fora do Brasil, em geral nos Estados Unidos. Os dados ficam armazenados no Brasil, exceto o registro de envio do SMS, guardado pelo fornecedor de SMS (seção 5).
+Todos os seus dados ficam armazenados no Brasil. **Ao usar a tela de agendamento, os dados que você digita são processados fora do Brasil**, em geral nos Estados Unidos, por dois fornecedores da seção 5:
 
-**Ao usar a tela de agendamento, os dados que você digita são processados fora do Brasil**, em geral nos Estados Unidos, por dois fornecedores: o Hugging Face, que hospeda a tela de agendamento e a tela da equipe, e o GitHub, que calcula a previsão diária de falta, envia o lembrete e aprimora o modelo. Esses fornecedores recebem os dados descritos na seção 5, inclusive nome e telefone no caso do Hugging Face, e não os guardam depois do processamento. Eles não adotaram as cláusulas contratuais aprovadas pela ANPD.
+| Fornecedor | País | Para quê | Dados | Por quanto tempo |
+|---|---|---|---|---|
+| Hugging Face | Estados Unidos | Hospedar a tela de agendamento e a tela da equipe da clínica | Os dados digitados ou exibidos na tela, inclusive nome, CPF antes da conversão em código e telefone; o e-mail de login do funcionário | Só enquanto a tela é usada: não guarda os dados depois |
+| GitHub | Fora do Brasil, em geral Estados Unidos | Calcular todo dia a previsão de falta e enviar o lembrete; aprimorar o modelo uma vez por mês; executar os pedidos de exclusão | Na previsão diária: data de nascimento, sexo, dados da consulta, histórico de comparecimento e telefone. No aprimoramento: só a base de aprimoramento, de quem autorizou. Nunca nome nem CPF | Só durante cada execução: não guarda os dados depois |
 
-Por isso, antes do cadastro, a tela pede que você confirme que está ciente desse processamento. **Se não quiser que os seus dados sejam processados fora do Brasil, agende com a clínica, por telefone ou no balcão**: o seu atendimento não é afetado. O aprimoramento do modelo, também feito fora do Brasil, só usa os dados de quem marcou a autorização própria dele (seção 3).
+**Como a transferência é protegida.** O SaúdeJá adotou, no contrato com cada um desses fornecedores, as cláusulas-padrão contratuais aprovadas pela ANPD, sem nenhuma alteração (art. 33, II, b, da LGPD, e Resolução CD/ANPD nº 19/2024). Elas obrigam o fornecedor a proteger os dados no mesmo nível exigido no Brasil, a usá-los só conforme as instruções recebidas e a respeitar os seus direitos.
+
+**Quem responde.** Nos dados do agendamento, a clínica é a controladora, e o SaúdeJá, a operadora que contrata os fornecedores (seção 1). No aprimoramento do modelo e nas contas de funcionário, o SaúdeJá é o controlador. Fale com a clínica pelos canais de atendimento dela, ou com o encarregado do SaúdeJá (seção 9).
+
+**Uso compartilhado.** Os fornecedores não usam os dados para finalidade própria nem os repassam a outras empresas (seção 12). O SaúdeJá não compartilha esses dados com ninguém além dos fornecedores da seção 5.
+
+**Segurança.** A conexão é protegida por HTTPS, os fornecedores não guardam os dados depois do processamento, e o GitHub nunca recebe nome nem CPF. As demais medidas estão na seção 10.
+
+**Seus direitos.** Os direitos da seção 8 valem também para os dados processados fora do Brasil. Você pode pedir, à clínica ou ao encarregado do SaúdeJá (seção 9), a íntegra das cláusulas usadas na transferência. Respondemos em até **15 dias**.
+
+Antes do cadastro, a tela pede que você confirme que está ciente desse processamento. **Se não quiser que os seus dados sejam processados fora do Brasil, agende com a clínica, por telefone ou no balcão**: o seu atendimento não é afetado. O aprimoramento do modelo, também feito fora do Brasil e com as mesmas cláusulas, só usa os dados de quem marcou a autorização própria dele (seção 3).
 
 ## 7 POR QUANTO TEMPO GUARDAMOS
 
@@ -192,7 +205,7 @@ Quando esta política mudar, a versão nova aparece na tela de agendamento, e a 
 CONDIÇÕES PARA PUBLICAR (remover este bloco ao publicar):
 1. Coleta e registro do consentimento do aprimoramento do modelo na tela de agendamento, na base de treino separada (ADR-010). Sem isso, a linha "Seu consentimento" da seção 3 não é verdadeira.
 2. Workflow de purga do ADR-009 implementado. Sem isso, os prazos do conjunto de treino na seção 7 não são cumpridos.
-3. Remote do DVC migrado para Brazil South (LGPD.md, subseção 4.3); mecanismo do art. 33 para o processamento da aplicação e do job diário fora do Brasil definido (LGPD.md, subseção 4.2): a ciência registrada antes do formulário informa, mas não é esse mecanismo; local de processamento da Infobip confirmado (seção 5).
+3. Contas pagas com DPA e termo aditivo das cláusulas-padrão da ANPD assinado com o GitHub e o Hugging Face (LGPD.md, subseção 4.2, Quadro 6D). Sem isso, a seção 6 não é verdadeira. Nos dados da clínica, quem publica a seção 6 é a clínica, como controladora (Regulamento de Transferência Internacional, art. 17).
 4. Procedimento de revisão (PROCEDIMENTO-REVISAO.md) acordado em contrato com a clínica, incluindo o prazo de apoio da SaúdeJá (seção 4).
 5. Termos de uso (TERMOS-DE-USO.md) e esta política aprovados pela clínica no contrato do SaaS (LGPD.md, Quadro 1A).
 6. Validação jurídica.

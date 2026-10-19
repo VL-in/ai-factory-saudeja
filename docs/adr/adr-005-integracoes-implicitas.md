@@ -88,3 +88,9 @@ A revisão das transferências internacionais ([`LGPD.md`](../LGPD/LGPD.md) §4.
 ### Emenda (2026-10-11) — mecanismo do processamento fora do Brasil
 
 A emenda de 2026-10-09 registrou o consentimento do art. 33, VIII, como base do processamento no runner do GitHub e no Space. O [ADR-010](adr-010-base-de-treino-separada.md) superou isso em 2026-10-10: o agendamento não depende de consentimento, e a tela pede só a ciência da Política de privacidade e dos Termos de uso. A ciência informa o processamento fora do Brasil (art. 9º, § 3º), mas não é o consentimento do art. 33, VIII. O mecanismo do art. 33 para os dados da clínica, no Space e no job D-2, fica em aberto e bloqueia a operação com paciente real ([`LGPD.md`](../LGPD/LGPD.md) §4.2 e §9.5). O re-treino lê só a base de treino, coberta pelo consentimento do treino, com o processamento no exterior em destaque no termo.
+
+### Emenda (2026-10-18) — cláusulas-padrão da ANPD e Infobip no Brasil
+
+O mecanismo do art. 33 deixado em aberto na emenda de 2026-10-11 passa a ser o **art. 33, II, b**: as cláusulas-padrão contratuais da ANPD, adotadas sem alteração num termo aditivo ao DPA do GitHub e do Hugging Face. Vale para o Space e para o job D-2, com os dados da clínica, e para o re-treino e a purga, com a base de treino. A arquitetura não muda: a aplicação e os jobs continuam onde estão, e a alternativa de levá-los para Brazil South fica registrada no [`LGPD.md`](../LGPD/LGPD.md) §4 como saída se um provedor deixar de oferecer as cláusulas. O mecanismo parte da premissa de operação com contas pagas, DPA e aditivo assinados ([`LGPD.md`](../LGPD/LGPD.md) §4.2, Quadro 6D); as contas do protótipo não têm o aditivo.
+
+A região de processamento da Infobip foi confirmada no Brasil: o envio do SMS sai da lista de transferências internacionais.
