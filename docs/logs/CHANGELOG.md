@@ -10,6 +10,9 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
 ## [Não publicado]
 
+### Adicionado
+- **Os seis painéis de observabilidade do Grafana Cloud estão publicados por link**, só para leitura e sem login, com selos no topo do README e uma tabela em "Painéis públicos". O link só executa as consultas salvas no painel. Na visão pública, o painel de traces do Job D-2 fica vazio, porque o compartilhamento externo da Grafana não suporta o Tempo.
+
 ### Corrigido
 - **A "Fila do dia" ordena pelo risco que mostra.** Um agendamento avaliado mais de uma vez era posto na fila pela maior probabilidade entre todas as avaliações, mas a tela mostrava a mais recente. Quem tinha sido reavaliado com risco menor aparecia no topo exibindo um risco baixo. Agora a ordem usa a avaliação mais recente.
 
@@ -24,6 +27,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
   - o limite do lembrete é descrito como critério aprovado pela clínica e valor ajustado pelo SaúdeJá a cada atualização do modelo, e não mais como "definido pela clínica";
   - o código do CPF é descrito como calculado com chave secreta guardada fora do banco ([ADR-011](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-011-identificador-do-paciente-com-chave.md)), e não mais como um hash.
 - **O README e o `architecture.md` descrevem o sistema da v2.5.0**: o job D-2 disparado às 08h17 pelo Supabase, com o cron do GitHub de reserva; os workflows `lgpd.yml` e `grafana.yml`; as regras de alerta do Grafana por criticidade, aplicadas em produção, com a ressalva de que só a de dado pessoal no Loki teve teste de ponta a ponta; o check do Healthchecks da purga LGPD; e as pendências de segurança e LGPD conhecidas. O README passa a seguir as seções do [Make a README](https://www.makeareadme.com/): selos de deploy, release e licença, diagrama de contexto, sumário, exemplo da API com a resposta esperada, contribuição, suporte e agradecimentos. O roadmap deixa de dar como feito o teste de ponta a ponta de um alerta real por nível de criticidade: só a regra de dado pessoal no Loki foi testada, em dev.
+- **A adoção do Grafana Cloud e do OpenTelemetry ganha ADR próprio** ([ADR-012](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)), que revê os dois descartes do [ADR-006](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-006-observabilidade.md). Registra o que mudou nas objeções de antes (envio direto do processo, sem agente no container; stack em São Paulo), a divisão de papéis entre o Supabase (90 dias, fonte de verdade) e o Grafana (14 dias, operacional), as barreiras de LGPD antes e depois do envio, e o destino de cada superfície sobreposta: o alerta diário sai depois de duas semanas de paridade, não antes de 01/11/2026, se cada condição dele tiver equivalente no Grafana e um alerta real chegar em cada nível; a aba "Observabilidade" fica como visão rápida; o Healthchecks continua com e-mail próprio, para uma queda do Grafana não silenciar o aviso pelo silêncio. A região do stack e o aceite do DPA da Grafana Labs ficam registrados como conferidos.
 
 ## [v2.5.0] (Vanessa + Claude) - 2026-10-18
 

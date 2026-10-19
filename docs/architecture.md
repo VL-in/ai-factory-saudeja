@@ -21,7 +21,7 @@ ai-factory-saudeja/
 │   ├── LGPD/                          # LGPD.md (base legal, retenção, direitos, riscos), política de privacidade, termos de uso e procedimentos de revisão e eliminação
 │   ├── SLA.md
 │   ├── SLO.md
-│   ├── adr/                           # Architecture Decision Records (ADR-001 a ADR-011)
+│   ├── adr/                           # Architecture Decision Records (ADR-001 a ADR-012)
 │   ├── diagrams/
 │   │   ├── SaudeJa-C1.drawio.png      # diagrama C4 nível 1 (contexto), seção 2; PNG com o XML do draw.io embutido
 │   │   └── SaudeJa-C2.drawio.png      # diagrama C4 nível 2 (containers), seção 2; idem
@@ -291,7 +291,7 @@ Integration Method: REST API, atrás de uma interface própria (`src/messaging/c
 
 Service Name: Grafana Cloud
 
-Purpose: telemetria (Loki, Mimir e Tempo, retenção de 14 dias), painéis, alertas P1 a P3 e a sonda externa de disponibilidade (Synthetic Monitoring, de São Paulo). Revê o descarte de Grafana Cloud e OpenTelemetry feito no [ADR-006](adr/adr-006-observabilidade.md); o ADR próprio dessa virada ainda não foi escrito.
+Purpose: telemetria (Loki, Mimir e Tempo, retenção de 14 dias), painéis, alertas P1 a P3 e a sonda externa de disponibilidade (Synthetic Monitoring, de São Paulo). Revê o descarte de Grafana Cloud e OpenTelemetry feito no [ADR-006](adr/adr-006-observabilidade.md); a virada está registrada no [ADR-012](adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md).
 
 Integration Method: OTLP/HTTP direto dos processos (`OTEL_EXPORTER_OTLP_ENDPOINT` e `_HEADERS`); leitura das views do Supabase pela fonte Postgres com `grafana_leitura`; API de provisionamento com um service account de papel Admin (`GRAFANA_URL`, `GRAFANA_SA_TOKEN`, §3.2.5).
 
@@ -349,7 +349,7 @@ O CI é o primeiro job do deploy (`workflow_call`): o SHA testado é o deployado
 
 Monitoring & Logging: MLflow para métricas de ML (4.2); `eventos_app` no Supabase como fonte de verdade das métricas de aplicação, por 90 dias (4.1, ADR-006); logs, métricas e traces da UI, da API e do job no Grafana Cloud por OpenTelemetry, por 14 dias, com os agregados de longo prazo lidos das views do schema `observabilidade` pelo papel `grafana_leitura` (3.2.5); logging estruturado JSON com redação de PII (`src/logging_config.py`) em todos os processos. Disponibilidade medida de fora pelo Synthetic Monitoring do Grafana Cloud: um check HTTP por Space em `/_stcore/health`, a cada 5 min, de São Paulo, que exige status 2xx e o corpo `ok`; só o de produção alerta, como P1, com 2 falhas em 10 min (emenda de 2026-10-17 do ADR-006). A batida a cada 5 minutos também impede o Space de hibernar. Workflows agendados pingam o Healthchecks.io. Langfuse fica reservado para o tracing do LLM opcional.
 
-Alertas, em camadas que se sobrepõem de propósito até a paridade ser medida: e-mail nativo do GitHub em todo run falho; Healthchecks para run ausente ou falho; o alerta diário (`alerta_observabilidade.yml`); e as 17 regras do Grafana com rotas por criticidade (3.2.5). A regra de dado pessoal no Loki foi testada de ponta a ponta em dev; as demais ainda não tiveram um alerta real por nível, e a decisão sobre qual superfície sai depois da paridade fica para o ADR da observabilidade.
+Alertas, em camadas que se sobrepõem de propósito até a paridade ser medida: e-mail nativo do GitHub em todo run falho; Healthchecks para run ausente ou falho; o alerta diário (`alerta_observabilidade.yml`); e as 17 regras do Grafana com rotas por criticidade (3.2.5). A regra de dado pessoal no Loki foi testada de ponta a ponta em dev; as demais ainda não tiveram um alerta real por nível, Pelo [ADR-012](adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md), o alerta diário sai depois de duas semanas de paridade (não antes de 2026-11-01), se cada condição dele tiver equivalente no Grafana e um alerta real chegar em cada nível; GitHub e Healthchecks ficam.
 
 O filtro de redação é instalado por `configurar_logging()`, chamado uma vez em cada entrypoint (`lifespan` da API, `main()` do job, topo de `src/ui/app.py`), e mora no **handler** — aplicado a todos os handlers já presentes no processo, não só ao da raiz. Isso é o que faz a garantia valer para o log de terceiros (`uvicorn` põe `propagate=False` nos loggers dele; o Streamlit faz algo equivalente), que é o único que existe em volume em produção. Detalhe da decisão em [`LGPD.md` §8](LGPD/LGPD.md).
 
@@ -394,7 +394,7 @@ Nota de convenção: os módulos de `src/` são importados "soltos" (sem prefixo
 - **Grafana Labs como operadora**: recebe telemetria sem PII e lê agregados, mas ainda não está no LGPD.md nem na política de privacidade.
 - **Oposição ao lembrete** sem registro: quem pede para não receber SMS continua recebendo.
 
-Outros itens de roadmap: `APP_VERSION` no Space pelo deploy, para o `service.version` da telemetria deixar de ser `desconhecida`; ADR da observabilidade com Grafana Cloud e OpenTelemetry, com a decisão sobre as superfícies redundantes; RBAC e autorização no banco (policies de RLS lidas com o JWT do funcionário, em vez da chave secreta; hoje o login só prova identidade, §7); autenticação da API FastAPI quando ela ganhar um consumidor externo real; SSO via `st.login` (OIDC) se a clínica usar Google Workspace ou Microsoft 365; LLM/TrueFoundry (opcional, fora do SLA/SLO); Langfuse para tracing do LLM quando este for ativado.
+Outros itens de roadmap: `APP_VERSION` no Space pelo deploy, para o `service.version` da telemetria deixar de ser `desconhecida`; saída do `alerta_observabilidade.yml` depois da paridade com o Grafana ([ADR-012](adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)); RBAC e autorização no banco (policies de RLS lidas com o JWT do funcionário, em vez da chave secreta; hoje o login só prova identidade, §7); autenticação da API FastAPI quando ela ganhar um consumidor externo real; SSO via `st.login` (OIDC) se a clínica usar Google Workspace ou Microsoft 365; LLM/TrueFoundry (opcional, fora do SLA/SLO); Langfuse para tracing do LLM quando este for ativado.
 
 ## 10. Project Identification
 
@@ -404,7 +404,7 @@ Repository URL: <https://github.com/VL-in/ai-factory-saudeja> (disciplina AI Fac
 
 Primary Contact/Team: Vanessa Lin (v.lin@gmail.com)
 
-Date of Last Update: 2026-10-18 (v2.5.0: C1 e C2 redesenhados com Grafana Cloud, Healthchecks, gatilho do job D-2 pelo Supabase, purga LGPD e schema `observabilidade`; §1 com `infra/grafana/` e os scripts atuais; §3.2.4 e §3.2.5 novos; §5 e §6 com a observabilidade vigente; ADR-011 no §7)
+Date of Last Update: 2026-10-19 (ADR-012 citado no §5, §6 e §9, no lugar do "ADR ainda não escrito"); antes, 2026-10-18 (v2.5.0: C1 e C2 redesenhados com Grafana Cloud, Healthchecks, gatilho do job D-2 pelo Supabase, purga LGPD e schema `observabilidade`; §1 com `infra/grafana/` e os scripts atuais; §3.2.4 e §3.2.5 novos; §5 e §6 com a observabilidade vigente; ADR-011 no §7)
 
 ## 11. Glossary / Acronyms
 

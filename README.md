@@ -10,6 +10,15 @@ Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia 
 
 > **Status do projeto:** em produção desde a v2.0.0 (04/10/2026). Versão atual: [v2.5.0](docs/logs/CHANGELOG.md) (18/10/2026). Próxima etapa: validação final para o pitch da disciplina AI Factory: Build, Deploy and Showcase.
 
+**Painéis ao vivo** (Grafana Cloud, sem login; detalhes em [Painéis públicos](#painéis-públicos)):
+
+[![Visão geral (SLO)](https://img.shields.io/badge/Grafana-Vis%C3%A3o%20geral%20%28SLO%29-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/4fa820057a864553b9954a5777ea44d6)
+[![Job D-2](https://img.shields.io/badge/Grafana-Job%20D--2-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/b01849b776db4343af2c00c99cf4e166)
+[![Inferência ML](https://img.shields.io/badge/Grafana-Infer%C3%AAncia%20ML-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/38561056c61249c8b3069d015c57b244)
+[![Mensageria (Infobip)](https://img.shields.io/badge/Grafana-Mensageria%20%28Infobip%29-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/e4544a72eadc44b5940136fe1a46ebda)
+[![Interface (Streamlit)](https://img.shields.io/badge/Grafana-Interface%20%28Streamlit%29-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/3bb196558d9444f4a0747ce8203b70b2)
+[![Custo de SMS](https://img.shields.io/badge/Grafana-Custo%20de%20SMS-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/9d56d7fc7cd84b0990b09146e6102882)
+
 ![Diagrama C4 de contexto do SaúdeJá: paciente e funcionário usam o sistema; Infobip envia o SMS; Grafana Cloud e Healthchecks.io avisam a mantenedora](docs/diagrams/SaudeJa-C1.drawio.png)
 
 ## Sumário
@@ -56,6 +65,21 @@ O repositório foi herdado com um pipeline de treinamento que reportava acuráci
 | Desenvolvimento (Hugging Face Space) | <https://vl-in-saudeja-dev.hf.space> (uso interno, para validar antes de `main`) |
 
 O Space publica só a interface Streamlit (porta 7860). A API FastAPI roda no mesmo container, mas não fica exposta publicamente. A visão **Paciente** é aberta; a visão **Funcionário** exige uma conta criada pelo administrador (ver [Criar conta de funcionário](#criar-conta-de-funcionário)).
+
+### Painéis públicos
+
+Os seis painéis de observabilidade do Grafana Cloud estão publicados por link, só para leitura e sem login:
+
+| Painel | O que mostra | Período padrão |
+|---|---|---|
+| [Visão geral (SLO)](https://minilasagna354.grafana.net/public-dashboards/4fa820057a864553b9954a5777ea44d6) | Último job D-2 com sucesso, agendamentos deixados para trás, cobertura da explicação, disponibilidade medida pela sonda, disparos e taxa de disparo, custo de SMS projetado | 30 dias |
+| [Job D-2](https://minilasagna354.grafana.net/public-dashboards/b01849b776db4343af2c00c99cf4e166) | Última execução, duração da fila, agendamentos por resultado, execuções e falhas por dia, log do job | 30 dias |
+| [Inferência ML](https://minilasagna354.grafana.net/public-dashboards/38561056c61249c8b3069d015c57b244) | Latência da predição (p50, p95, p99), distribuição da probabilidade, predições e cobertura da explicação por modelo, dado fora do domínio do treino | 30 dias |
+| [Mensageria (Infobip)](https://minilasagna354.grafana.net/public-dashboards/e4544a72eadc44b5940136fe1a46ebda) | Disparos e taxa de disparo, status do envio, latência da chamada à Infobip | 30 dias |
+| [Interface (Streamlit)](https://minilasagna354.grafana.net/public-dashboards/3bb196558d9444f4a0747ce8203b70b2) | Ações por minuto, taxa de erro, latência das ações, erros por rota, log da interface | 24 horas |
+| [Custo de SMS](https://minilasagna354.grafana.net/public-dashboards/9d56d7fc7cd84b0990b09146e6102882) | SMS no mês (US$ e R$), projeção contra o orçamento, infraestrutura, envios cobrados por mês | 90 dias |
+
+O link só executa as consultas salvas no painel: quem visita não consegue consultar outra coisa nas fontes de dados. Os painéis mostram agregados e logs que já passaram pelo filtro de dados pessoais ([Alertas](#alertas)). Na visão pública, o painel "Traces de uma execução" do Job D-2 fica vazio, porque o compartilhamento externo da Grafana não suporta o Tempo; os traces ficam só para quem tem acesso ao stack.
 
 ## Arquitetura
 
@@ -452,7 +476,7 @@ Os números do dia a dia ficam na aba "Time técnico → Observabilidade" da vis
 
 A interface, a API e o job D-2 também enviam logs, métricas e traces ao Grafana Cloud por OpenTelemetry. O envio fica desligado sem `OTEL_EXPORTER_OTLP_ENDPOINT` e com `OBSERVABILIDADE_ATIVA=false`. Antes de sair do processo, o que é enviado passa pelo mesmo filtro de dados pessoais do log, e os traces perdem query string, IP e mensagem de erro. O Grafana guarda esses dados por 14 dias. Para os números de longo prazo, ele lê o Supabase pelo papel `grafana_leitura`, que só enxerga as views de totais do schema `observabilidade`: disparos e taxa de disparo, predições e cobertura da explicação, latência p50/p95/p99, envios cobrados e segmentos de SMS por mês. O preço do SMS e o orçamento ficam no bloco `custo` do [`params.yaml`](params.yaml).
 
-Os seis painéis ficam em [`infra/grafana/dashboards/`](infra/grafana/dashboards/): visão geral do SLO, interface, inferência, job D-2, mensageria e custo.
+Os seis painéis ficam em [`infra/grafana/dashboards/`](infra/grafana/dashboards/): visão geral do SLO, interface, inferência, job D-2, mensageria e custo. Todos estão publicados por link (ver [Painéis públicos](#painéis-públicos)).
 
 As regras de alerta do Grafana ficam em [`infra/grafana/`](infra/grafana/) e são aplicadas pelo `grafana.yml` no fim de cada deploy em `main`; em produção, foram aplicadas pela primeira vez em 18/10/2026. São 17 regras, cada uma com os rótulos `severidade`, `area` e `ambiente`, e só as de produção notificam:
 
@@ -558,7 +582,8 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
   - [x] Gatilho do job D-2 no horário, pelo Supabase
   - [x] Teste de ponta a ponta da regra de dado pessoal no Loki (P1), em dev
   - [ ] Alerta real de ponta a ponta para cada nível de criticidade (P1, P2 e P3) em produção
-  - [ ] ADR da observabilidade com Grafana Cloud e OpenTelemetry, que revê o [ADR-006](docs/adr/adr-006-observabilidade.md)
+  - [x] ADR da observabilidade com Grafana Cloud e OpenTelemetry, que revê o ADR-006 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
+  - [ ] Saída do alerta diário (`alerta_observabilidade.yml`) depois da paridade com o Grafana, não antes de 01/11/2026 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
 - [ ] Adequação à LGPD ([pendências](#pendências))
   - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
   - [x] Procedimento de revisão da decisão automatizada
