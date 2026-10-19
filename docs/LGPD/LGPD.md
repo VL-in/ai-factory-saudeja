@@ -3,7 +3,7 @@
 # Declaração estruturada no formato lgpd.md (spec 1.0). O corpo abaixo é a análise
 # completa; estes campos a resumem e precisam ser mantidos em sincronia com ela.
 spec: "1.0"
-atualizado: "2026-10-18"
+atualizado: "2026-10-19"
 expira: "2027-04-09"
 status: "em-adequação"
 controlador:
@@ -53,7 +53,7 @@ transferencia_internacional:
   destinos:
     - "Fora do Brasil — runner hospedado do GitHub Actions (job D-2 diário, re-treino mensal sobre a base de treino e purga LGPD, sem gravação persistente)"
     - "Estados Unidos — Hugging Face Space (aplicação: processa nome, CPF antes do hash, telefone e dados da consulta, sem gravação persistente)"
-  mecanismo: "Art. 33, II, b: cláusulas-padrão contratuais da ANPD (Anexo II da Resolução CD/ANPD nº 19/2024), adotadas integralmente em termo aditivo ao DPA do GitHub e do Hugging Face, na premissa de operação da seção 4.2. Cobre os dados da clínica (aplicação e job D-2; SaúdeJá exportadora como operadora, com autorização da clínica), a base de treino (re-treino e purga; SaúdeJá exportadora como controladora) e a conta do funcionário. O consentimento do treino continua como base legal (art. 11, I), não como mecanismo. Supabase, remote do DVC (Brazil South desde 09/10/2026) e Infobip processam no Brasil, sem transferência (seção 4)"
+  mecanismo: "Art. 33, II, b: cláusulas-padrão contratuais da ANPD (Anexo II da Resolução CD/ANPD nº 19/2024), adotadas integralmente em termo aditivo ao DPA do GitHub e do Hugging Face, na premissa de operação da seção 4.2. Cobre os dados da clínica (aplicação e job D-2; SaúdeJá exportadora como operadora, com autorização da clínica), a base de treino (re-treino e purga; SaúdeJá exportadora como controladora) e a conta do funcionário. O consentimento do treino continua como base legal (art. 11, I), não como mecanismo. Supabase, remote do DVC (Brazil South desde 09/10/2026), Infobip e Grafana Cloud (telemetria, sa-east-1) processam no Brasil, sem transferência (seção 4)"
 ---
 
 # PROTEÇÃO DE DADOS PESSOAIS NO SAÚDEJÁ: CLASSIFICADOR DE NO-SHOW
@@ -90,7 +90,7 @@ Fonte: elaboração própria (2026).
 | Critério da decisão automatizada (art. 20) | Lembrete para quem o modelo prevê falta, com probabilidade igual ou maior que o corte. A clínica aprova o critério; o valor do corte é ajuste técnico dentro dele, controlado pelo gate do re-treino | `decision.threshold` em `params.yaml` |
 | Conteúdo do lembrete | SMS só com data e hora, sem especialidade | Quadro 4 |
 | Período de armazenamento dos dados derivados | 90 dias para `predicoes` e `mensagens_disparadas` | `RETENCAO_DADOS_DERIVADOS_DIAS` (seção 5) |
-| Suboperadores e destinos fora do Brasil | Supabase, Microsoft (Azure) e Infobip, no Brasil; GitHub e Hugging Face, fora dele, com as cláusulas-padrão da ANPD | Quadros 6 e 6D; autorização da clínica no contrato (subseção 4.2) |
+| Suboperadores e destinos fora do Brasil | Supabase, Microsoft (Azure), Infobip e Grafana Labs, no Brasil; GitHub e Hugging Face, fora dele, com as cláusulas-padrão da ANPD | Quadros 6 e 6D; autorização da clínica no contrato (subseção 4.2) |
 | Textos apresentados ao paciente | Política de privacidade e Termos de uso exibidos na tela de agendamento, com a caixa de ciência | `docs/LGPD/POLITICA-DE-PRIVACIDADE.md` e `docs/LGPD/TERMOS-DE-USO.md` |
 
 Fonte: elaboração própria (2026).
@@ -138,6 +138,7 @@ Por isso a classificação é feita pelo registro, não pela coluna isolada: o a
 | Probabilidade de no-show e explicação SHAP | `predicoes` | Sensível derivado (art. 11, § 1º; art. 12, § 2º) | Perfil comportamental calculado a partir de entradas sensíveis. A explicação expõe os valores dessas entradas |
 | Canal e status de envio do lembrete | `mensagens_disparadas` | Pessoal | Auditoria do envio do lembrete e da decisão do modelo (seção 5) |
 | Latência, contadores, nome de classe de exceção | `eventos_app` | Não pessoal | Nenhuma coluna de dado pessoal, por construção ([ADR-006](../adr/adr-006-observabilidade.md)) |
+| Logs, métricas e traces da aplicação (telemetria) | Grafana Cloud (Loki, Mimir e Tempo), `sa-east-1` | Sem dado pessoal em claro | Log redigido antes do envio (seção 8). Atributos de métrica de lista fechada, sem identificador. Spans só com `id_agendamento`, `id_execucao` e um `session.id` aleatório, sem ligação com o e-mail do funcionário. O `id_agendamento` é uuid interno e só se liga ao paciente dentro do banco da clínica, que a Grafana não lê (Quadro 9). Retenção de 14 dias ([ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)) |
 | Semente do dataset de treino (`data/consultas-historicas.csv`) | Repositório e Azure Blob Storage, via DVC | Não pessoal | 380 consultas sintéticas herdadas, sem titular real. Fixa: nunca recebe linha nova |
 | `treino.consultas_treino` | Supabase, schema `treino` (SaúdeJá controladora) | Sensível pseudonimizado (art. 11, § 1º; art. 13, § 4º) | Só a consulta de quem consentiu o treino: idade na data da consulta, sexo, especialidade, distância, antecedência, histórico de faltas, data e hora, desfecho e `lembrete_enviado`. Sem nome, telefone, CPF nem data de nascimento. Titular e consulta identificados por pseudônimo HMAC com chave secreta (`src/pseudonimo.py`), que não se reverte em CPF sem a chave |
 | `treino.eventos_consentimento`, `treino.pedidos_titular` | Supabase, schema `treino` | Pessoal pseudonimizado | Prova do consentimento do treino e pedidos de revogação e eliminação, pelo mesmo pseudônimo |
@@ -173,8 +174,9 @@ Quem vê o nome é funcionário da clínica controladora: já tem relação com 
 | API `/predict` | Campo inexistente em `src/api/schemas.py` |
 | SMS via Infobip | A consulta do job D-2 não traz a coluna. O texto do lembrete também não cita a especialidade, que é dado sensível: só data e hora (`tests/test_skew_features.py::test_sms_nao_revela_a_especialidade`) |
 | LLM via TrueFoundry (integração opcional, ainda não ligada) | `explain.contexto_sem_pii`, aplicada pela classe-base de `ExplicadorLLM` |
+| Telemetria no Grafana Cloud (Loki e Tempo) | O handler do OpenTelemetry nasce com o filtro de `src/logging_config.py` (`tests/test_telemetria.py::test_handler_otlp_nasce_com_um_filtro_de_pii_so`). Spans só com identificadores de lista fechada, sem dado pessoal (`test_identificadores_de_span_nao_tem_dado_pessoal`) |
 
-Fonte: elaboração própria (2026), a partir do [ADR-007](../adr/adr-007-nome-do-paciente.md).
+Fonte: elaboração própria (2026), a partir do [ADR-007](../adr/adr-007-nome-do-paciente.md) e do [ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md).
 
 O nome é armazenado em texto puro, com a mesma proteção do `telefone` (seção 7). Cifrar a coluna não o protegeria do LLM: a chamada ao provedor sai do mesmo processo que lê o nome para desenhar a tela, e a chave estaria na mesma memória. O que o protege é não entrar no prompt. `explicar_em_texto` sanitiza o contexto antes de delegar a `_gerar_texto`, e um teste impede que alguma subclasse pule essa etapa. Cifrar só `nome_completo` e deixar `telefone` em claro seria incoerente. A alternativa foi recusada no ADR-007, que registra o caminho de reversão.
 
@@ -230,7 +232,7 @@ c) **continuar o agendamento não é consentimento.** A caixa de ciência da pol
 
 ## 4 TRANSFERÊNCIA INTERNACIONAL DE DADOS
 
-O banco de produção (Supabase) fica em São Paulo (`sa-east-1`), e o remote do DVC (Azure Blob Storage), em Brazil South desde 09/10/2026 (subseção 4.3): todo dado pessoal persistente do sistema fica armazenado no Brasil. A Infobip, que envia o SMS, também processa no Brasil (região confirmada em 18/10/2026). Dois tratamentos acontecem fora do país.
+O banco de produção (Supabase) fica em São Paulo (`sa-east-1`), e o remote do DVC (Azure Blob Storage), em Brazil South desde 09/10/2026 (subseção 4.3): todo dado pessoal persistente do sistema fica armazenado no Brasil. A Infobip, que envia o SMS, também processa no Brasil (região confirmada em 18/10/2026), assim como o Grafana Cloud, que recebe a telemetria (`sa-east-1`, região confirmada em 19/10/2026). Dois tratamentos acontecem fora do país.
 
 **Quadro 6 – Tratamento de dados fora do Brasil**
 
@@ -242,6 +244,8 @@ O banco de produção (Supabase) fica em São Paulo (`sa-east-1`), e o remote do
 Fonte: elaboração própria (2026), a partir do [ADR-005](../adr/adr-005-integracoes-implicitas.md).
 
 A Infobip recebe o telefone e o texto do lembrete, com data e hora da consulta, e guarda o log com o texto por 3 meses por padrão. Sem transferência internacional, ela continua suboperadora (art. 39) e precisa de DPA (Quadro 6D).
+
+A Grafana Labs recebe a telemetria dos três processos (`saudeja-ui`, `saudeja-api` e `saudeja-job-d2`) no stack do Grafana Cloud em `sa-east-1`, São Paulo, e a sonda de disponibilidade também roda em São Paulo. Do banco, lê só as views de agregados do schema `observabilidade`, com o papel `grafana_leitura`, sem acesso a `pacientes`, `agendamentos`, `predicoes` nem ao schema `treino` ([ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)). A telemetria não leva dado pessoal em claro (Quadro 2 e seção 8), mas é conteúdo, e não só sinal binário: uma linha de log que escape do filtro fica até 14 dias no Loki (subseção 9.6, item 36). Por isso a Grafana Labs é operadora da SaúdeJá, suboperadora (art. 39) nos tratamentos da clínica, com DPA aceito (Quadros 6A e 6D). O suporte dela pode acessar o stack a partir do exterior (item 37).
 
 Para o pitch, a formulação correta é: **os dados são armazenados no Brasil, mas são processados fora dele: a aplicação no Hugging Face, e o job diário e o re-treino no GitHub Actions, com as cláusulas-padrão da ANPD nos contratos desses provedores.**
 
@@ -274,10 +278,13 @@ Cada provedor trata dados em nome da SaúdeJá e é seu suboperador (art. 39). O
 | Hugging Face Pro | **Não.** O DPA só é oferecido no plano Enterprise | Plano Enterprise | Não | O Pro é assinatura individual, sem cláusula de tratamento de dados. Os servidores ficam nos Estados Unidos |
 | Supabase Free (São Paulo) | **Sim.** O DPA complementa os Termos de Serviço e vale com o aceite deles | Automático. Cópia assinada pelo painel, em *Legal documents*, via PandaDoc | **Não** (versão de junho de 2026). Os dados ficam no Brasil, então isso só pesaria se houvesse acesso remoto a partir do exterior | O plano gratuito não tem backup (seção 5) |
 | Infobip (teste gratuito) | O DPA faz parte do contrato comercial. No teste gratuito, não há contrato negociado | Contrato pago | Não se aplica: processamento no Brasil, confirmado em 18/10/2026 | O teste dura 60 dias e só envia para 1 número verificado, com remetente de teste. **Não consegue enviar lembrete a paciente**: a operação real exige conta paga, e com ela o DPA |
+| Grafana Cloud Free (São Paulo) | **Sim.** DPA da Grafana Labs aceito na conta | Aceite, conferido pela autora em 19/10/2026 | Não verificado | Stack em `sa-east-1`. Retenção de 14 dias, limite de séries e região são condições do plano gratuito, que podem mudar. A Grafana Labs é empresa americana, e o suporte pode acessar o stack a partir do exterior (subseção 9.6, item 37) |
 
 Fonte: elaboração própria (2026), com base em Microsoft (2026a, 2026b), GitHub (2025), Supabase (2026) e Infobip (2026a, 2026b).
 
-**Conclusão.** Com as contas atuais, só o Supabase tem DPA, e nenhum provedor oferece as cláusulas-padrão da ANPD. Em contas gratuitas ou individuais não há como negociar um aditivo. Restam três caminhos, combináveis por destino:
+A linha do Grafana Cloud foi incluída em 19/10/2026, com a região e o aceite do DPA confirmados pela autora. O texto do DPA não foi conferido contra as cláusulas-padrão da ANPD.
+
+**Conclusão.** Com as contas atuais, só o Supabase e o Grafana Cloud têm DPA, ambos com dados no Brasil, e nenhum provedor oferece as cláusulas-padrão da ANPD. Em contas gratuitas ou individuais não há como negociar um aditivo. Restam três caminhos, combináveis por destino:
 
 a) **tirar o destino do exterior** (alternativas a a c, acima). Resolve a transferência, mas não a falta de DPA: a hospedagem no Brasil ainda precisa de contrato de operador;
 
@@ -303,7 +310,7 @@ Decisões de 09/10/2026, de 10/10/2026 ([ADR-010](../adr/adr-010-base-de-treino-
 | GitHub Actions (job D-2), dados da clínica | Art. 7º, V e IX; art. 11, II, f | II, b: cláusulas-padrão da ANPD | SaúdeJá, operadora, para o GitHub, suboperador |
 | GitHub Actions (re-treino e purga), base de treino | Art. 11, I: consentimento do treino | II, b: cláusulas-padrão da ANPD | SaúdeJá, controladora, para o GitHub, operador |
 | Hugging Face Space, conta do funcionário | Art. 7º, IX | II, b: cláusulas-padrão da ANPD | SaúdeJá, controladora, para o Hugging Face, operador |
-| Supabase, remote do DVC e Infobip | Quadro 5 | Nenhum: processamento e armazenamento no Brasil | Não há transferência |
+| Supabase, remote do DVC, Infobip e Grafana Cloud | Quadro 5 | Nenhum: processamento e armazenamento no Brasil | Não há transferência. No Grafana Cloud, o acesso remoto do suporte está em análise (item 37) |
 
 Fonte: elaboração própria (2026), com base em Brasil (2018) e Brasil (2024).
 
@@ -316,6 +323,7 @@ Fonte: elaboração própria (2026), com base em Brasil (2018) e Brasil (2024).
 | Microsoft (Azure) | Assinatura paga, com o DPA da Microsoft | Não se aplica: Brazil South, com redundância LRS (subseção 4.3) | Premissa de operação |
 | Supabase | DPA, com o aceite dos Termos de Serviço | Não se aplica: São Paulo | Vigente (subseção 4.1) |
 | Infobip | Contrato pago, com o DPA | Não se aplica: processamento no Brasil | Premissa de operação |
+| Grafana Labs | DPA, aceito na conta do Grafana Cloud | Não se aplica: `sa-east-1` (São Paulo). Acesso remoto do suporte a partir do exterior em análise (item 37) | Vigente (subseção 4.1) |
 
 Fonte: elaboração própria (2026), com base em Brasil (2024).
 
@@ -407,6 +415,7 @@ Pelo princípio da necessidade (art. 6º, III) e pelas regras de término do tra
 | Cópia do banco de produção (`supabase db dump`) | Não é feita | — | A documentação do Supabase recomenda dumps periódicos no plano gratuito, mas um dump guardaria o banco inteiro fora de qualquer purga. Se for necessário num incidente, é apagado ao fim da recuperação |
 | Log de envio da Infobip | 3 meses por padrão | Provedor | Contém o telefone e o texto do lembrete. A redução do prazo é gratuita e deve ser pedida ao contratar a conta paga |
 | Log de API do Supabase | Definida pelo plano | Provedor | Registra a URL de cada consulta. Não contém dado pessoal em claro (seção 8) |
+| Logs, métricas e traces no Grafana Cloud | 14 dias (plano gratuito) | Provedor | Sem dado pessoal em claro (seção 8). Não é fonte de verdade: o que precisa durar mais fica em `eventos_app` ou nas views de agregados ([ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)) |
 
 Fonte: elaboração própria (2026).
 
@@ -427,6 +436,7 @@ Um dado só é eliminado quando todas as suas cópias são apagadas. O quadro co
 | Runner do GitHub e Hugging Face Space | Tudo o que processam | Nenhum: o disco é descartado ao fim da execução ou no restart | Sim |
 | Log de envio da Infobip | `mensagens_disparadas` (90 dias) | Até 3 meses depois do envio, e até 3 meses depois de uma eliminação | Na expiração, sim: 3 meses equivalem aos 90 dias. Na eliminação, não: o log do titular fica no provedor até vencer, salvo pedido de exclusão à Infobip |
 | Log de API do Supabase e log do GitHub Actions | — | Prazo do provedor | Não guardam dado pessoal em claro (seção 8) |
+| Logs, métricas e traces no Grafana Cloud | — | 14 dias (prazo do plano) | Não guardam dado pessoal em claro (seção 8). Uma linha que escape do filtro fica no provedor até vencer, salvo pedido de exclusão à Grafana Labs (item 36) |
 | MLflow local (`mlruns/`, `data/mlflow.db`) e imagens Docker | — | — | Fora do escopo: o MLflow registra parâmetros, métricas e o `model.pkl`, e nenhuma imagem copia o dataset (`.dockerignore`) |
 
 Fonte: elaboração própria (2026).
@@ -474,19 +484,23 @@ O quadro lista apenas medidas implementadas e verificadas (art. 46).
 | Criptografia em repouso | Supabase e Azure Blob Storage | Herdada do provedor (seção 9, item 7) |
 | Log sem dado pessoal | `src/logging_config.py` | Seção 8 |
 | Observabilidade sem dado pessoal | `src/observabilidade.py` | `detalhe` com campos permitidos fixos. Exceção registra só o nome da classe |
+| Telemetria sem dado pessoal | `src/telemetria.py` | Atributos de métrica e identificadores de span em listas fechadas, sem identificador em métrica (`tests/test_telemetria.py::test_atributos_permitidos_nao_tem_identificador`, `test_identificadores_vao_ao_span_e_nunca_a_metrica`). Spans da instrumentação automática saem sem query string, IP, user agent nem mensagem de exceção (`test_span_do_httpx_sai_sem_a_query_string_do_postgrest`, `test_span_do_fastapi_sai_sem_mensagem_da_excecao_nem_ip`) |
+| Leitura do Grafana restrita a agregados | Papel `grafana_leitura` (migrations de observabilidade) | Nasce `NOLOGIN`, com `select` só no schema `observabilidade` e sem acesso às tabelas de paciente nem ao schema `treino` (`tests/test_db_observabilidade.py::test_grafana_leitura_so_alcanca_as_views_de_agregados`). Login e senha ligados à mão em cada ambiente, guardados só na fonte de dados do Grafana |
 | Erro de provedor sem dado pessoal | `src/messaging/client.py::ErroEnvioInfobip` | Guarda status HTTP e `messageId`, não o corpo da resposta, que ecoava o telefone |
 
 Fonte: elaboração própria (2026).
 
 ## 8 AUSÊNCIA DE DADO PESSOAL EM LOGS
 
-O [SLO](../SLO.md) (seção 6) exige zero ocorrência de dado pessoal em log. Como o log de execução do Hugging Face Space é efêmero, apagado a cada restart e sem busca, não há log de produção para auditar. A garantia é preventiva, em três camadas ([ADR-006](../adr/adr-006-observabilidade.md)):
+O [SLO](../SLO.md) (seção 6) exige zero ocorrência de dado pessoal em log. O log de execução do Hugging Face Space é efêmero, apagado a cada restart e sem busca. Desde a v2.2.0, o log também é exportado ao Loki, no Grafana Cloud, onde fica 14 dias: é a primeira cópia de log que sobrevive ao restart ([ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)). A garantia é preventiva, em três camadas ([ADR-006](../adr/adr-006-observabilidade.md)), com uma camada detectiva depois do envio:
 
-a) **filtro de redação** (`src/logging_config.py`), aplicado a todos os handlers do processo, inclusive os do `uvicorn` e do `streamlit`, que geram a maior parte do log real. Dados com formato reconhecível (CPF, telefone, e-mail, IP) são detectados por padrão. O nome não tem formato, então o filtro reconhece a chave que o anuncia (`nome=`, `"nome":`, `extra={"nome": ...}`);
+a) **filtro de redação** (`src/logging_config.py`), aplicado a todos os handlers do processo, inclusive os do `uvicorn` e do `streamlit`, que geram a maior parte do log real, e o do OpenTelemetry, que exporta ao Loki. Dados com formato reconhecível (CPF, telefone, e-mail, IP) são detectados por padrão. O nome não tem formato, então o filtro reconhece a chave que o anuncia (`nome=`, `"nome":`, `extra={"nome": ...}`);
 
 b) **guarda estática** (`tests/test_coerencia_repo.py::test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii`), que percorre a AST de `src/*.py` e falha se alguma chamada de log referenciar campo proibido. A guarda tem controle negativo próprio;
 
-c) **varredura de log** (`scripts/auditoria_lgpd.py`), usada no smoke test do deploy e na auditoria de logs do GitHub Actions. Usa as mesmas regras do filtro (`REGRAS_DE_PII`), sem cópia.
+c) **varredura de log** (`scripts/auditoria_lgpd.py`), usada no smoke test do deploy e na auditoria de logs do GitHub Actions. Usa as mesmas regras do filtro (`REGRAS_DE_PII`), sem cópia;
+
+d) **detecção no Loki**, depois do envio: a regra P1 "Dado pessoal em log exportado ao Loki" varre o Loki com as mesmas `REGRAS_DE_PII` e aciona o plantão. Foi testada de ponta a ponta em dev, com uma linha sintética enviada sem passar pelo filtro. Detecta, mas não impede: a linha fica no Loki até vencer (subseção 9.6, item 36).
 
 Quando a redação falha, a linha é substituída por um marcador, em vez de sair sem redação. A regra numérica erra para o lado de redigir a mais: o IP de cliente também é dado pessoal. Os scripts do pipeline de treino (`preprocess`, `train`, `validate`) ficam fora do escopo, porque processam só o dataset pseudonimizado e a saída deles é lida no terminal e no MLflow.
 
@@ -500,7 +514,9 @@ b) **log do Postgres**: no Supabase, o padrão é `log_statement = 'ddl'`, que r
 
 c) **log do Supabase Auth**: guarda o e-mail e o IP do funcionário em cada login. É inerente à autenticação (subseção 9.2, item 18);
 
-d) **log da Infobip**: guarda o telefone e o texto do lembrete por 3 meses (seção 5). O texto não cita a especialidade (Quadro 4).
+d) **log da Infobip**: guarda o telefone e o texto do lembrete por 3 meses (seção 5). O texto não cita a especialidade (Quadro 4);
+
+e) **Grafana Cloud**: guarda por 14 dias o que o processo exporta, já redigido pelo filtro. Lê o banco só pelas views de agregados, com o papel `grafana_leitura`, e o resultado dessas consultas não tem dado pessoal (Quadro 9).
 
 **Requisitos para uma futura consulta ao banco feita por LLM** (seção 12, item c). Valem os mesmos princípios, aplicados na estrutura:
 
@@ -514,7 +530,7 @@ d) **log da Infobip**: guarda o telefone e o texto do lembrete por 3 meses (seç
 Cada item deve constar do slide de risco do pitch.
 
 1. **Transferência internacional das linhas de produção do dataset** (seção 4). O armazenamento saiu do exterior: o remote do DVC está em Brazil South desde 09/10/2026 (subseção 4.3). O processamento continua fora: o re-treino lê essas linhas no runner do GitHub. Desde 10/10/2026, só de quem consentiu, com o processamento no exterior informado no termo, e com pseudônimo que não se reverte sem a chave. Desde 18/10/2026, a transferência se apoia nas cláusulas-padrão da ANPD, na premissa de operação (subseção 4.2).
-2. **Reidentificação direta em caso de vazamento** ([ADR-007](../adr/adr-007-nome-do-paciente.md)). O banco expõe nome, telefone, especialidade e desfecho. O pitch não pode afirmar "não temos nome de paciente". A formulação correta é: "temos nome, restrito à tela da equipe, com sete saídas fechadas e testadas" (Quadro 4).
+2. **Reidentificação direta em caso de vazamento** ([ADR-007](../adr/adr-007-nome-do-paciente.md)). O banco expõe nome, telefone, especialidade e desfecho. O pitch não pode afirmar "não temos nome de paciente". A formulação correta é: "temos nome, restrito à tela da equipe, com oito saídas fechadas e testadas" (Quadro 4).
 3. **Tela da recepção visível na sala de espera.** A fila do dia mostra nomes. A mitigação é um aviso na tela, não um mecanismo: a posição do monitor é decisão da clínica. A opção de abreviar o nome foi recusada por custo de operação (ADR-007).
 4. **Eliminação de titular manual.** Encerrado em 10/10/2026: a clínica registra e confirma o pedido na aba "Pedidos do titular", e o workflow de purga executa ([PROCEDIMENTO-ELIMINACAO.md](PROCEDIMENTO-ELIMINACAO.md)).
 5. **Linhas de produção em versões antigas do dataset.** O risco começa no primeiro `dvc push` depois de um export com desfecho real: a partir daí, cada versão no remote guarda esses pacientes. Enquanto só existir a semente sintética, não há titular exposto. Desde 10/10/2026, o workflow de purga apaga as versões 90 dias depois de substituídas, e a eliminação ou a revogação apagam na hora as versões que contêm o titular. Fica o custo: commits antigos passam a apontar para blobs que não existem, e o `dvc pull` neles falha.
@@ -569,11 +585,16 @@ Cada item deve constar do slide de risco do pitch.
 34. **Chave do pseudônimo.** Um vazamento reabre a ligação entre o CPF e as linhas de treino, por força bruta sobre os CPFs. A chave fica só nos secrets do Space e do job D-2 e no `.env` do encarregado, e não roda. Vazamento é incidente (seção 10). A consulta do consentimento vigente, a cada agendamento, envia o pseudônimo também de quem não consentiu, sem dado da consulta e no corpo da RPC.
 35. **Chave do identificador do paciente** ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)). Um vazamento da `PACIENTE_CHAVE_IDENTIFICADOR` junto com a tabela `pacientes` reabre a ligação com o CPF, por força bruta. A perda da chave é pior para a operação: o paciente que volta não reencontra a linha dele, ganha cadastro novo e o histórico de faltas recomeça do zero. A chave é da clínica, controladora: ela a gera e guarda a cópia oficial; a SaúdeJá a tem só no secret do Space, como operadora, e no `.env` do encarregado durante a migração. É separada da chave do pseudônimo do treino e não roda. **Pendência contratual**: o contrato entre a clínica e a SaúdeJá precisa prever a entrega da chave por canal seguro e a eliminação do secret do Space no fim do contrato.
 
+### 9.6 Riscos acrescentados pela observabilidade no Grafana Cloud
+
+36. **Conteúdo de log fora do Supabase** ([ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)). O Loki guarda linhas de log por 14 dias, e não só sinal binário. O filtro de redação é a única barreira preventiva antes do envio, e o nome do paciente só é redigido quando vem anunciado por uma chave (seção 8). A regra P1 do Loki detecta depois do envio, e a linha fica no provedor até vencer, salvo pedido de exclusão à Grafana Labs.
+37. **Acesso remoto do suporte da Grafana Labs a partir do exterior.** O stack fica em `sa-east-1`, sem transferência no armazenamento nem no processamento, mas a Grafana Labs é empresa americana, e o suporte dela pode acessar o stack de fora do Brasil. A telemetria sem dado pessoal em claro reduz o peso desse acesso. Falta conferir se o DPA aceito traz as cláusulas-padrão da ANPD e se o acesso remoto configura transferência internacional (art. 33); até lá, o Grafana Cloud fica fora do Quadro 6. Precisa de validação jurídica.
+
 ## 10 INCIDENTES
 
 Uma exposição de dado pessoal é comunicada à clínica e ao encarregado em até 72 h da ciência ([SLA](../SLA.md), seção 6; art. 48). Nos dados de paciente, a SaúdeJá, como operadora, informa o controlador o que foi exposto, quantos titulares foram afetados, quando e o que foi feito; a comunicação à ANPD e aos titulares cabe à clínica. Nos dados de conta do funcionário, a SaúdeJá é controladora e faz ela mesma essa comunicação.
 
-Para investigar, a SaúdeJá tem `eventos_app` (90 dias, sobrevive ao restart do Space), `mensagens_disparadas` (90 dias) e o histórico do GitHub Actions. Não há log de aplicação retido (seção 8; ADR-006, risco 2).
+Para investigar, a SaúdeJá tem `eventos_app` (90 dias, sobrevive ao restart do Space), `mensagens_disparadas` (90 dias), o histórico do GitHub Actions e, por 14 dias, os logs, métricas e traces do Grafana Cloud, ligados a `eventos_app` por `id_execucao` ([ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)). Fora o Loki, não há log de aplicação retido (seção 8). Um disparo da regra P1 de dado pessoal no Loki é tratado como possível incidente, avaliado por esta seção.
 
 ## 11 CONTATO
 
@@ -621,6 +642,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 18/10/2026 | Frontmatter, 2, 6, 7, 9.5 | Identificador do paciente no banco da clínica passa do sha256 do CPF ao HMAC com chave própria, sob guarda da clínica, com migração das linhas existentes, executada em dev e produção no mesmo dia ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)); item 35 |
 | 18/10/2026 | Frontmatter, 1A, 4, 4.1, 4.2, 9, 9.1, 9.2, 9.5, 12 | Região da Infobip confirmada no Brasil, fora do Quadro 6; mecanismo da transferência internacional definido: cláusulas-padrão da ANPD (art. 33, II, b) em aditivo ao DPA do GitHub e do Hugging Face, na premissa de operação com contas pagas; hipótese legal e mecanismo por destino (Quadro 6B) e contratos (Quadro 6D); transparência do art. 17 do Regulamento na política de privacidade; consentimento do treino só como base legal; itens 16, 26 e 30 encerrados, item 31 reduzido |
 | 18/10/2026 | Frontmatter, 1, 9, 9.3 | Política de privacidade e Termos de uso publicados na versão 1.0, vigentes a partir de 18/10/2026, sem validação jurídica; contrato do SaaS como premissa de operação; `politica.url` aponta para a política; item 24 encerrado, itens 8 e 27 atualizados |
+| 19/10/2026 | Frontmatter, 1A, 2, 2.1, 4, 4.1, 4.2, 5, 5.1, 7, 8, 8.1, 9, 9.6, 10 | Grafana Labs como operadora, suboperadora nos tratamentos da clínica ([ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)): telemetria e sonda no Grafana Cloud em `sa-east-1`, com região e aceite do DPA confirmados pela autora; leitura do banco só por views de agregados (`grafana_leitura`); telemetria no inventário, nas barreiras ao nome (oito saídas) e nas medidas de segurança; retenção de 14 dias nas cópias; camada detectiva no Loki; Grafana Cloud fora do Quadro 6; riscos 36 e 37 |
 
 Fonte: elaboração própria (2026).
 

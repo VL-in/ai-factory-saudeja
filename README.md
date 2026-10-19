@@ -211,7 +211,7 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 |---|---|
 | Registro da oposição ao lembrete (o lembrete não depende de consentimento, mas o paciente pode pedir à clínica para não receber SMS) | [`LGPD.md` §9.4](docs/LGPD/LGPD.md) |
 | Validação jurídica da política de privacidade e dos Termos de uso, da caixa do treino como consentimento específico e destacado e da prova de 365 dias | [`LGPD.md` §9 e §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
-| Grafana Labs como operadora (telemetria sem dado pessoal, mas ainda fora do inventário e da política) | [`LGPD.md`](docs/LGPD/LGPD.md), [Roadmap](#roadmap) |
+| Grafana Labs na política de privacidade (já é operadora no `LGPD.md`, com telemetria em São Paulo) e análise do acesso remoto do suporte dela a partir do exterior | [`LGPD.md` §4 e §9.6](docs/LGPD/LGPD.md), [Roadmap](#roadmap) |
 | Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
 | Guarda no repositório contra mudança de feature, retenção ou texto do lembrete sem nova aprovação da clínica (o contrato do SaaS é premissa de operação) | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
 
@@ -591,7 +591,8 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
   - [x] Identificador do paciente com HMAC e chave própria, com as linhas antigas migradas ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md))
   - [x] Levantamento dos DPAs e do mecanismo de transferência internacional
   - [x] Publicação da política de privacidade e dos Termos de uso, versão 1.0, vigentes a partir de 18/10/2026 ([política](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), [termos](docs/LGPD/TERMOS-DE-USO.md))
-  - [ ] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md) e na política de privacidade
+  - [x] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md), com o Grafana Cloud em `sa-east-1`
+  - [ ] Grafana Labs na política de privacidade
   - [ ] Validação jurídica da política, dos termos e da caixa de consentimento do treino
 - [ ] Validação final para o pitch, com a decisão sobre a exceção do SLO de recall e F1 da classe positiva
 

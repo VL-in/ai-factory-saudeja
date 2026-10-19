@@ -80,7 +80,7 @@ O Loki é a primeira cópia de log que não é efêmera, e o que entra lá fica 
 
 O ADR-006 tinha trocado a verificação detectiva pela preventiva porque não havia log para varrer. Com o Loki há, e as duas passam a coexistir.
 
-A Grafana Labs é operadora: recebe telemetria sem dado pessoal e lê agregados do banco. Região `sa-east-1` e DPA aceito. O acesso remoto do suporte dela é tratamento a partir do exterior; a entrada no inventário do [LGPD.md](../LGPD/LGPD.md) e na política de privacidade está pendente.
+A Grafana Labs é operadora: recebe telemetria sem dado pessoal e lê agregados do banco. Região `sa-east-1` e DPA aceito. O acesso remoto do suporte dela é tratamento a partir do exterior. Entrou no [LGPD.md](../LGPD/LGPD.md) em 2026-10-19 (seção 4, Quadros 6A e 6D, riscos 36 e 37); a entrada na política de privacidade está pendente.
 
 ### Alertas por criticidade
 
@@ -132,7 +132,7 @@ Pros:
 
 Cons:
 - **Conteúdo de log sai do Supabase.** O filtro de PII é a única barreira preventiva antes do Loki, e o nome do paciente só é redigido quando vem anunciado por uma chave. A regra P1 do Loki é a rede de segurança, mas detecta depois do envio, e a linha fica até 14 dias.
-- Uma operadora a mais, empresa americana, com acesso remoto do suporte a partir do exterior. Ainda fora do LGPD.md e da política de privacidade.
+- Uma operadora a mais, empresa americana, com acesso remoto do suporte a partir do exterior. Já no LGPD.md, ainda fora da política de privacidade.
 - Dependência do plano gratuito: retenção, limite de séries e cota de execuções podem mudar. A regra P3 de cota cobre o banco; o uso do próprio Grafana ainda não é monitorado.
 - Mais superfície durante a paridade: até o alerta diário sair, um mesmo problema pode chegar por GitHub, Healthchecks, alerta diário e Grafana.
 - A quarentena parcial, que o alerta diário avisava no mesmo dia como falha de workflow, passa a P3, no resumo semanal. É coerente com a matriz (o paciente recebe o lembrete por exceção), mas é um aviso mais lento.
