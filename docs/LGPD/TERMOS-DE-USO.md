@@ -1,8 +1,6 @@
 # TERMOS DE USO DO AGENDAMENTO DE CONSULTAS DO SAÚDEJÁ
 
-> **Rascunho, sem validação jurídica.** A tela de agendamento o exibe, sem este aviso, a partir de um link. Não publicar em produção nem enviar a clínicas antes de cumprir as condições listadas no fim deste documento. Complementa a [política de privacidade](POLITICA-DE-PRIVACIDADE.md).
-
-**Vigência:** a partir de [DATA DE PUBLICAÇÃO]. **Versão:** 0.1.
+**Vigência:** a partir de 18/10/2026. **Versão:** 1.0.
 
 Estes termos explicam as regras de uso da tela de agendamento de consultas de uma clínica que usa o sistema do SaúdeJá. Como os seus dados são tratados está na Política de privacidade.
 
@@ -27,7 +25,7 @@ Dados falsos ou de outra pessoa podem levar a clínica a cancelar o agendamento.
 - o **Hugging Face** hospeda esta tela e a tela da equipe da clínica. Recebe tudo o que for digitado aqui: nome, CPF antes de virar código, telefone, data de nascimento, sexo e dados da consulta;
 - o **GitHub** calcula, todo dia, quais consultas a clínica deve confirmar com antecedência e envia o lembrete. Recebe data de nascimento, sexo, dados da consulta, histórico de comparecimento e telefone. Nunca recebe nome nem CPF.
 
-Os dados ficam guardados no Brasil, e esses fornecedores não os guardam depois do processamento. Eles não adotaram as cláusulas-padrão aprovadas pela Autoridade Nacional de Proteção de Dados (ANPD).
+Os dados ficam guardados no Brasil, e esses fornecedores não os guardam depois do processamento. O contrato do SaúdeJá com cada um deles adota, sem alteração, as cláusulas-padrão aprovadas pela Autoridade Nacional de Proteção de Dados (ANPD), que os obrigam a proteger os dados no mesmo nível exigido no Brasil. A seção 6 da Política de privacidade traz os detalhes e diz como pedir a íntegra dessas cláusulas.
 
 **Se você não quiser que os seus dados sejam processados fora do Brasil, agende com a clínica, por telefone ou no balcão.** O seu atendimento não é afetado.
 
@@ -37,7 +35,7 @@ O lembrete faz parte do atendimento. A clínica pode enviar um SMS para o telefo
 
 ## 5 AUTORIZAÇÃO PARA APRIMORAR O SISTEMA
 
-No formulário há uma caixa opcional, sempre desmarcada, para autorizar o SaúdeJá a usar o resultado das consultas (se o paciente compareceu ou faltou) para aprimorar o sistema. Esses dados ficam numa base separada, sem nome, telefone nem CPF, e o aprimoramento também é feito fora do Brasil.
+No formulário há uma caixa opcional, sempre desmarcada, para autorizar o SaúdeJá a usar o resultado das consultas (se o paciente compareceu ou faltou) para aprimorar o sistema. Esses dados ficam numa base separada, sem nome, telefone nem CPF, e o aprimoramento também é feito fora do Brasil, pelo GitHub, com as mesmas cláusulas da seção 3.
 
 - Recusar não impede o agendamento nem o atendimento.
 - A caixa começa desmarcada a cada agendamento. Deixá-la desmarcada num agendamento novo retira a autorização dada antes, e os dados de aprimoramento são apagados.
@@ -53,12 +51,3 @@ Quando estes termos mudarem, a versão nova aparece na tela de agendamento, e a 
 ## 8 CONTATO
 
 Dúvidas sobre o atendimento: fale com a clínica. Dúvidas sobre os seus dados: veja a Política de privacidade.
-
----
-
-<!--
-CONDIÇÕES PARA PUBLICAR (remover este bloco ao publicar):
-1. As mesmas condições da POLITICA-DE-PRIVACIDADE.md, em especial o mecanismo do art. 33 para o processamento fora do Brasil (LGPD.md, subseção 4.2).
-2. Texto aprovado pela clínica no contrato do SaaS (LGPD.md, Quadro 1A).
-3. Validação jurídica.
--->

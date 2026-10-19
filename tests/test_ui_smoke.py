@@ -566,6 +566,74 @@ def test_fila_do_dia_com_agendamentos_mostra_os_contadores(monkeypatch, caches_d
     assert not [e for e in at.error if "fila" in e.value.lower()]
 
 
+def test_fila_do_dia_nao_volta_ao_banco_a_cada_rerun(monkeypatch, caches_do_streamlit_limpos):
+    """`st.tabs` executa todas as abas a cada interação: sem cache, um clique
+    em qualquer aba da visão do funcionário refazia a consulta da fila."""
+    chamadas = []
+
+    def _buscar(dia):
+        chamadas.append(dia)
+        return [_item_fila(0, 0.81, 1)]
+
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", _buscar)
+    at = _rodar(monkeypatch)
+    at.run()
+    at.run()
+
+    assert not at.exception
+    assert len(chamadas) == 1
+
+
+def test_escrita_pela_tela_invalida_a_fila_cacheada(monkeypatch, caches_do_streamlit_limpos):
+    """O job manual grava predições: a execução seguinte tem de ler a fila de
+    novo, sem esperar o TTL. O botão fica numa aba desenhada depois da fila,
+    então quem mostra o efeito é o rerun seguinte."""
+    chamadas = []
+
+    def _buscar(dia):
+        chamadas.append(dia)
+        return [_item_fila(0, 0.81, 1)]
+
+    resultado = {
+        "agendamentos_encontrados": 1,
+        "predicoes_gravadas": 1,
+        "mensagens_disparadas": 0,
+        "erros": [],
+    }
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", _buscar)
+    monkeypatch.setattr(logic, "disparar_job_diario", lambda dia=None: resultado)
+    at = _rodar(monkeypatch)
+    _botao(at, "Disparar job D-2 agora").click().run()
+    assert len(chamadas) == 1
+
+    at.run()
+
+    assert not at.exception
+    assert len(chamadas) == 2
+
+
+def test_falha_do_banco_na_fila_nao_fica_cacheada(monkeypatch, caches_do_streamlit_limpos):
+    """Banco fora do ar não pode prender o erro na tela por um TTL inteiro: o
+    rerun seguinte tenta de novo."""
+    respostas = [logic.ErroPersistencia("fora do ar"), [_item_fila(0, 0.81, 1)]]
+
+    def _buscar(dia):
+        resposta = respostas.pop(0)
+        if isinstance(resposta, Exception):
+            raise resposta
+        return resposta
+
+    monkeypatch.setattr(logic, "buscar_fila_do_dia", _buscar)
+    at = _rodar(monkeypatch)
+    assert any("consultar a fila" in e.value for e in at.error)
+
+    at.run()
+
+    assert not at.exception
+    assert not any("consultar a fila" in e.value for e in at.error)
+    assert {m.label: m.value for m in at.metric}["Agendamentos"] == "1"
+
+
 def test_observabilidade_com_numeros_acusa_violacao_de_slo(monkeypatch, caches_do_streamlit_limpos):
     """p95 acima de 2 s e predição sem explicação são as duas violações que o
     painel tem de gritar -- testadas com o resumo no formato de

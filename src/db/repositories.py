@@ -411,7 +411,11 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[Linha]:
 
     Traz `nome_completo` (ADR-007) e **não** traz `telefone`: o funcionário
     precisa chamar o paciente pelo nome, não discar para ele -- quem envia
-    mensagem é o job D-2, por outro caminho e com outro select."""
+    mensagem é o job D-2, por outro caminho e com outro select.
+
+    Só a predição mais recente vem embutida (`order` + `limit` no embed): a
+    fila mostra a última, e trazer todas -- cada uma com a explicação SHAP --
+    fazia a resposta crescer a cada re-predição sem nada mudar na tela."""
     client = obter_client()
     inicio, fim = _intervalo_do_dia(dia or hoje_na_clinica())
 
@@ -421,15 +425,20 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[Linha]:
         .gte("data_hora_agendada", inicio)
         .lt("data_hora_agendada", fim)
         .order("data_hora_agendada")
+        .order("criado_em", desc=True, foreign_table="predicoes")
+        .limit(1, foreign_table="predicoes")
         .execute()
         .data
     )
 
     def _probabilidade(agendamento: Linha) -> float:
+        # A da predição mais recente, a mesma que a tela mostra. Até a v2.5.0
+        # a ordem usava a maior entre todas: um agendamento re-predito com
+        # risco menor ficava no topo da fila exibindo o risco baixo.
         predicoes = agendamento.get("predicoes") or []
         if not predicoes:
             return -1.0
-        return max(p["probabilidade"] for p in predicoes)
+        return max(predicoes, key=lambda p: p["criado_em"])["probabilidade"]
 
     return sorted(agendamentos, key=_probabilidade, reverse=True)
 

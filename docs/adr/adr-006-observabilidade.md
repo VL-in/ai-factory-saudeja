@@ -1,7 +1,7 @@
 # ADR-006: Observabilidade de aplicação em produção
 
 ## Status
-Aceito — 2026-09-20
+Aceito — 2026-09-20. Revisto em parte pelo [ADR-012](adr-012-observabilidade-grafana-cloud-opentelemetry.md) (2026-10-19), que reverte os descartes do Grafana Cloud e do OpenTelemetry e decide o destino do alerta diário. A camada interna (`eventos_app`), o Healthchecks.io e o princípio "o coletor não pode morar dentro daquilo que ele mede" continuam valendo.
 
 ## Contexto
 
@@ -97,7 +97,7 @@ Consequências aceitas:
 
 A emenda anterior descreveu os monitores do UptimeRobot como configurados, mas a conta nunca foi criada. **De 2026-10-11 a 2026-10-17 não houve sonda externa**: o uptime do [SLO §1.1](../SLO.md#11-disponibilidade-da-interface) não foi medido nesse período, e o Space pode ter hibernado.
 
-A sonda passa a ser o Synthetic Monitoring do Grafana Cloud, que o projeto já usa para logs, métricas e traces. Isso reverte dois descartes deste ADR, o Grafana Cloud e o OpenTelemetry, e o registro completo dessa mudança fica para um ADR próprio. Configuração:
+A sonda passa a ser o Synthetic Monitoring do Grafana Cloud, que o projeto já usa para logs, métricas e traces. Isso reverte dois descartes deste ADR, o Grafana Cloud e o OpenTelemetry, e o registro completo dessa mudança está no [ADR-012](adr-012-observabilidade-grafana-cloud-opentelemetry.md). Configuração:
 - **Um check HTTP por Space**, em `/_stcore/health`, a cada 5 minutos, com timeout de 10 s.
 - **Só a sonda pública de São Paulo**, a região dos usuários.
 - **Validação mais estrita que a da emenda anterior: status 2xx e corpo `ok`.** Na URL pública, qualquer caminho desconhecido devolve 200 com a página do Streamlit; o corpo distingue o servidor pronto de uma página servida no lugar dele.
