@@ -8,7 +8,7 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [Não publicado]
+## [v2.6.0] (Vanessa + Claude) - 2026-10-19
 
 ### Adicionado
 - **Os seis painéis de observabilidade do Grafana Cloud estão publicados por link**, só para leitura e sem login, com selos no topo do README e uma tabela em "Painéis públicos". O link só executa as consultas salvas no painel. Na visão pública, o painel de traces do Job D-2 fica vazio, porque o compartilhamento externo da Grafana não suporta o Tempo.
