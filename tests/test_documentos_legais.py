@@ -84,6 +84,8 @@ def test_documento_desconhecido_e_erro():
 _HASH_POR_VERSAO = {
     "politica 0.2; termos 0.1": "538d2c1131b81907c5aa1921d4cf1ae132384041267806bfbb7562f7d44a3f65",
     "politica 0.3; termos 0.2": "68c5ba28bed333c15326359a3a02918a233d4cbda566a3e80a767219e98dc2d5",
+    # Primeiras versões publicadas, vigentes a partir de 2026-10-18.
+    "politica 1.0; termos 1.0": "c23a75d2aa283247feb0eba6b120965669854cb3c93096e815b9b9eff4a2e55d",
 }
 
 

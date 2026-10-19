@@ -16,7 +16,7 @@ direitos:
   canal: "v.lin@gmail.com"
   prazo: 15
 politica:
-  url: "https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/LGPD/LGPD.md"
+  url: "https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/LGPD/POLITICA-DE-PRIVACIDADE.md"
   idioma: "pt-br"
   atualizada: "2026-10-18"
 bases_legais:
@@ -106,6 +106,8 @@ c) os registros do atendimento (`pacientes`, `agendamentos`) só são apagados a
 d) nos dados de conta do funcionário, cabem à SaúdeJá a base legal, a retenção, o atendimento ao titular e a comunicação de incidente (seções 3, 5, 6 e 10);
 
 e) os elementos do Quadro 1A só mudam com nova aprovação da clínica. Uma feature nova, outra janela de retenção ou outro texto do lembrete passam pelo contrato antes de entrar em produção.
+
+**Premissa de operação** (18/10/2026). A operação com paciente real parte de um contrato do SaaS assinado, em que a clínica aprova os elementos do Quadro 1A, a [política de privacidade](POLITICA-DE-PRIVACIDADE.md), os [Termos de uso](TERMOS-DE-USO.md) e o [procedimento de revisão](PROCEDIMENTO-REVISAO.md), com o prazo de apoio da SaúdeJá. É a mesma premissa das contas pagas com as cláusulas-padrão da ANPD (subseção 4.2). No protótipo, com a SaúdeJá fictícia, esse contrato não existe.
 
 ## 2 INVENTÁRIO E CLASSIFICAÇÃO DOS DADOS
 
@@ -523,7 +525,7 @@ Cada item deve constar do slide de risco do pitch.
    - a API `/predict` não tem autenticação; não lê o banco nem devolve dado de paciente;
    - o cadastro fechado no projeto remoto é configuração manual, feita no painel do Supabase no primeiro deploy e não versionada: se for desfeita por engano, nada no repositório detecta.
 7. **Criptografia em repouso herdada do provedor**, sem verificação própria.
-8. **Ausência de validação jurídica** deste documento.
+8. **Ausência de validação jurídica** deste documento, da política de privacidade e dos Termos de uso, publicados em 18/10/2026 sem essa validação (item 24).
 9. **Escopo de sensibilidade.** Se o produto passar a aceitar motivo da consulta, diagnóstico ou medicação, esta análise deve ser refeita por inteiro.
 
 ### 9.1 Riscos acrescentados pelo CI/CD
@@ -545,13 +547,13 @@ Cada item deve constar do slide de risco do pitch.
 21. **Modelo compartilhado entre clínicas** (seção 1). O treino é tratado como finalidade da SaúdeJá, e o termo de consentimento cita a SaúdeJá. Se um dia cada clínica tiver o próprio modelo, a seção 1 e o ADR-010 precisam ser revistos.
 22. **Contas incompatíveis com operação real** (subseção 4.1). O Azure for Students se destina a uso educacional e é desativado quando o crédito acaba; o teste gratuito da Infobip não envia SMS a paciente; GitHub Free e Hugging Face Pro não têm DPA. Adequado ao protótipo, não a pacientes reais. O mecanismo da transferência (subseção 4.2) supõe as contas pagas do Quadro 6D.
 23. **Banco sem backup** (seção 5). O plano gratuito do Supabase não tem backup: um incidente que apague dados não tem recuperação.
-24. **Política de privacidade não publicada.** O rascunho em [POLITICA-DE-PRIVACIDADE.md](POLITICA-DE-PRIVACIDADE.md) e os [Termos de uso](TERMOS-DE-USO.md) já aparecem na tela de agendamento, por link, e a caixa de ciência registra a versão deles. Continuam rascunhos, com as condições de publicação no fim de cada um, e o campo `politica.url` do frontmatter aponta para este documento, que não serve de compromisso externo.
+24. **Política de privacidade não publicada.** Encerrado em 18/10/2026: a [política de privacidade](POLITICA-DE-PRIVACIDADE.md) e os [Termos de uso](TERMOS-DE-USO.md) foram publicados na versão 1.0, vigentes a partir dessa data. A tela de agendamento os exibe por link, a caixa de ciência registra `politica 1.0; termos 1.0`, e o campo `politica.url` do frontmatter aponta para a política. Das condições de publicação, a coleta do consentimento do treino e o workflow de purga estavam cumpridos desde 10/10/2026; as contas pagas com as cláusulas-padrão, o procedimento de revisão no contrato e a aprovação da clínica são premissa de operação (seção 1 e subseção 4.2). A validação jurídica continua pendente (item 8). Nos dados da clínica, quem publica a política é a clínica, como controladora (subseção 4.2, transparência).
 25. **Purga local depende de quem desenvolve** (subseção 5.1). `scripts/purgar_dvc_local.py` aplica a retenção nas cópias locais do DVC, mas só quando é executado. Nada no repositório detecta uma máquina que nunca o executa. Mitigação: restringir o acesso de leitura ao remote a quem precisa e revogar a credencial de quem sai do projeto.
 26. **Consentimento como mecanismo de transferência** (subseção 4.2). Encerrado em 10/10/2026 para os dados da clínica, que deixaram de depender de consentimento, e em 18/10/2026 para a base de treino e a conta do funcionário: o mecanismo de todos os destinos no exterior passa às cláusulas-padrão da ANPD, e o consentimento do treino fica só como base legal (art. 11, I).
 
 ### 9.3 Riscos acrescentados pela revisão dos papéis
 
-27. **Elementos essenciais decididos pela SaúdeJá sem aprovação da clínica** (seção 1, Quadro 1A). Não há contrato do SaaS que apresente à clínica as categorias de dados do modelo, o critério do lembrete, o texto do SMS e a retenção de 90 dias. Enquanto ele não existir, a SaúdeJá decide sozinha elementos essenciais de tratamentos que este documento atribui à clínica e pode ser considerada controladora deles, com a base legal, os pedidos de titular e a comunicação de incidentes que isso implica. Nada no repositório impede um PR de mudar uma feature ou a retenção sem essa aprovação.
+27. **Elementos essenciais decididos pela SaúdeJá sem aprovação da clínica** (seção 1, Quadro 1A). Não há contrato do SaaS que apresente à clínica as categorias de dados do modelo, o critério do lembrete, o texto do SMS e a retenção de 90 dias. Enquanto ele não existir, a SaúdeJá decide sozinha elementos essenciais de tratamentos que este documento atribui à clínica e pode ser considerada controladora deles, com a base legal, os pedidos de titular e a comunicação de incidentes que isso implica. Desde 18/10/2026, o contrato é premissa de operação (seção 1); no protótipo, ele não existe. Continua aberto: nada no repositório impede um PR de mudar uma feature ou a retenção sem nova aprovação da clínica.
 
 ### 9.4 Riscos acrescentados pela revisão da base do lembrete
 
@@ -618,6 +620,7 @@ O frontmatter segue o JSON Schema do lgpd.md (Lgpd.md, 2025) e deve ser atualiza
 | 14/10/2026 | Frontmatter, 9.1 | SAS de exclusão da purga assinada com a key2 e presa à stored access policy `purga-lgpd`, revogável sem rotacionar chave (item 12) |
 | 18/10/2026 | Frontmatter, 2, 6, 7, 9.5 | Identificador do paciente no banco da clínica passa do sha256 do CPF ao HMAC com chave própria, sob guarda da clínica, com migração das linhas existentes, executada em dev e produção no mesmo dia ([ADR-011](../adr/adr-011-identificador-do-paciente-com-chave.md)); item 35 |
 | 18/10/2026 | Frontmatter, 1A, 4, 4.1, 4.2, 9, 9.1, 9.2, 9.5, 12 | Região da Infobip confirmada no Brasil, fora do Quadro 6; mecanismo da transferência internacional definido: cláusulas-padrão da ANPD (art. 33, II, b) em aditivo ao DPA do GitHub e do Hugging Face, na premissa de operação com contas pagas; hipótese legal e mecanismo por destino (Quadro 6B) e contratos (Quadro 6D); transparência do art. 17 do Regulamento na política de privacidade; consentimento do treino só como base legal; itens 16, 26 e 30 encerrados, item 31 reduzido |
+| 18/10/2026 | Frontmatter, 1, 9, 9.3 | Política de privacidade e Termos de uso publicados na versão 1.0, vigentes a partir de 18/10/2026, sem validação jurídica; contrato do SaaS como premissa de operação; `politica.url` aponta para a política; item 24 encerrado, itens 8 e 27 atualizados |
 
 Fonte: elaboração própria (2026).
 

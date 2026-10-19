@@ -1,8 +1,6 @@
 # POLÍTICA DE PRIVACIDADE DO SAÚDEJÁ: AGENDAMENTO E LEMBRETE DE CONSULTA
 
-> **Rascunho, sem validação jurídica.** A tela de agendamento a exibe, sem este aviso, a partir de um link. Não publicar em produção nem enviar a clínicas antes de cumprir as condições listadas no fim deste documento. A análise técnica que sustenta cada afirmação está em [LGPD.md](LGPD.md).
-
-**Vigência:** a partir de [DATA DE PUBLICAÇÃO]. **Versão:** 0.3.
+**Vigência:** a partir de 18/10/2026. **Versão:** 1.0.
 
 Esta política explica, em linguagem simples, como o SaúdeJá trata os seus dados pessoais quando você agenda uma consulta numa clínica que usa o nosso sistema, ou quando você trabalha numa dessas clínicas e acessa o sistema. Ela segue a Lei Geral de Proteção de Dados Pessoais (LGPD), Lei nº 13.709/2018.
 
@@ -36,7 +34,7 @@ Na prática: para dúvidas sobre o seu atendimento, fale com a clínica. Para d�
 **Se você é paciente:**
 
 - **Nome completo e telefone**, informados por você no cadastro;
-- **CPF**: usado só para identificar você. Ele **não é guardado**: o sistema o transforma num código (hash) e guarda apenas o código;
+- **CPF**: usado só para identificar você. Ele **não é guardado**: o sistema o transforma num código, calculado com uma chave secreta que fica fora do banco de dados, e guarda apenas o código;
 - **Data de nascimento e sexo**;
 - **Dados da consulta**: especialidade, data e hora, distância informada até a clínica e antecedência do agendamento;
 - **Histórico de comparecimento nesta clínica**: se você compareceu, faltou ou cancelou consultas anteriores;
@@ -54,7 +52,9 @@ A especialidade e o histórico de consultas revelam informação sobre a sua sa�
 | Finalidade | Dados | Base legal (LGPD) |
 |---|---|---|
 | Identificar você e registrar o agendamento | Nome, código do CPF, data de nascimento, sexo | Execução de contrato e tutela da saúde (art. 7º, V e VIII) |
-| Estimar o risco de falta, para que a clínica confirme a sua presença | Dados da consulta, histórico de comparecimento, idade e sexo | Tutela da saúde, em procedimento realizado por serviço de saúde (art. 11, II, f) |
+| Registrar que você recebeu esta política e os Termos de uso | A versão dos dois documentos | Execução de contrato (art. 7º, V) |
+| Estimar o risco de falta, para que a clínica confirme a sua presença | Especialidade, data e hora da consulta, histórico de comparecimento, idade e sexo | Tutela da saúde, em procedimento realizado por serviço de saúde (art. 11, II, f) |
+| Completar a estimativa de risco com dados operacionais do agendamento | Distância informada até a clínica e antecedência do agendamento | Legítimo interesse da clínica (art. 7º, IX). Você pode se opor (seção 8) |
 | Enviar lembrete por SMS antes da consulta | Telefone, data e hora da consulta. A especialidade não aparece na mensagem | Execução do contrato de atendimento com a clínica (art. 7º, V) |
 | Aprimorar o modelo de previsão com os desfechos reais das consultas | Os dados da base de aprimoramento (seção 2), **sem** nome, telefone ou CPF | Seu consentimento específico e destacado (art. 11, I), dado ao SaúdeJá |
 | Controlar o acesso dos funcionários ao sistema | E-mail e senha do funcionário | Legítimo interesse do SaúdeJá (art. 7º, IX) |
@@ -73,7 +73,7 @@ Antes do cadastro, a tela pede que você confirme que está ciente desta políti
 
 ## 4 PREVISÃO DE FALTA E DECISÃO AUTOMATIZADA
 
-Dois dias antes da consulta, um modelo estatístico estima a chance de você faltar. Se a chance passa de um limite definido pela clínica, o sistema envia o lembrete automaticamente. Essa é a única decisão tomada pelo sistema: **enviar ou não um lembrete**.
+Dois dias antes da consulta, um modelo estatístico estima a chance de você faltar. Se a chance for igual ou maior que um limite, o sistema envia o lembrete automaticamente. O critério é aprovado pela clínica, e o valor do limite é ajustado pelo SaúdeJá dentro dele, a cada atualização do modelo. Essa é a única decisão tomada pelo sistema: **enviar ou não um lembrete**.
 
 Os fatores que mais pesam na estimativa são: especialidade, dia e horário da consulta, antecedência do agendamento, distância até a clínica, faltas anteriores, idade e sexo. Para cada estimativa, o sistema registra quais desses fatores aumentaram ou diminuíram o risco no seu caso.
 
@@ -164,7 +164,7 @@ Se não ficar satisfeito com a resposta, você pode reclamar à Autoridade Nacio
 
 Entre as medidas que adotamos estão:
 
-- o CPF não é armazenado;
+- o CPF não é armazenado: o código que identifica você no cadastro é calculado com uma chave secreta, guardada fora do banco de dados, e não pode ser revertido em CPF sem ela;
 - só funcionários com conta individual, criada pelo administrador, veem a fila de pacientes; a sessão expira após 30 minutos sem uso;
 - o banco de dados só pode ser lido pelo servidor da aplicação;
 - dados em trânsito são protegidos por HTTPS, e os provedores cifram os dados armazenados;
@@ -198,15 +198,3 @@ A aplicação não usa cookies de publicidade nem de rastreamento. A plataforma 
 ## 14 ALTERAÇÕES DESTA POLÍTICA
 
 Quando esta política mudar, a versão nova aparece na tela de agendamento, e a confirmação de ciência vale para ela. Se a mudança alterar a finalidade do aprimoramento do modelo, pediremos a sua autorização de novo.
-
----
-
-<!--
-CONDIÇÕES PARA PUBLICAR (remover este bloco ao publicar):
-1. Coleta e registro do consentimento do aprimoramento do modelo na tela de agendamento, na base de treino separada (ADR-010). Sem isso, a linha "Seu consentimento" da seção 3 não é verdadeira.
-2. Workflow de purga do ADR-009 implementado. Sem isso, os prazos do conjunto de treino na seção 7 não são cumpridos.
-3. Contas pagas com DPA e termo aditivo das cláusulas-padrão da ANPD assinado com o GitHub e o Hugging Face (LGPD.md, subseção 4.2, Quadro 6D). Sem isso, a seção 6 não é verdadeira. Nos dados da clínica, quem publica a seção 6 é a clínica, como controladora (Regulamento de Transferência Internacional, art. 17).
-4. Procedimento de revisão (PROCEDIMENTO-REVISAO.md) acordado em contrato com a clínica, incluindo o prazo de apoio da SaúdeJá (seção 4).
-5. Termos de uso (TERMOS-DE-USO.md) e esta política aprovados pela clínica no contrato do SaaS (LGPD.md, Quadro 1A).
-6. Validação jurídica.
--->

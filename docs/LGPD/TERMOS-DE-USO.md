@@ -1,8 +1,6 @@
 # TERMOS DE USO DO AGENDAMENTO DE CONSULTAS DO SAÚDEJÁ
 
-> **Rascunho, sem validação jurídica.** A tela de agendamento o exibe, sem este aviso, a partir de um link. Não publicar em produção nem enviar a clínicas antes de cumprir as condições listadas no fim deste documento. Complementa a [política de privacidade](POLITICA-DE-PRIVACIDADE.md).
-
-**Vigência:** a partir de [DATA DE PUBLICAÇÃO]. **Versão:** 0.2.
+**Vigência:** a partir de 18/10/2026. **Versão:** 1.0.
 
 Estes termos explicam as regras de uso da tela de agendamento de consultas de uma clínica que usa o sistema do SaúdeJá. Como os seus dados são tratados está na Política de privacidade.
 
@@ -53,12 +51,3 @@ Quando estes termos mudarem, a versão nova aparece na tela de agendamento, e a 
 ## 8 CONTATO
 
 Dúvidas sobre o atendimento: fale com a clínica. Dúvidas sobre os seus dados: veja a Política de privacidade.
-
----
-
-<!--
-CONDIÇÕES PARA PUBLICAR (remover este bloco ao publicar):
-1. As mesmas condições da POLITICA-DE-PRIVACIDADE.md, em especial o termo aditivo das cláusulas-padrão da ANPD assinado com o GitHub e o Hugging Face (LGPD.md, subseção 4.2, Quadro 6D). Sem isso, a seção 3 não é verdadeira.
-2. Texto aprovado pela clínica no contrato do SaaS (LGPD.md, Quadro 1A).
-3. Validação jurídica.
--->

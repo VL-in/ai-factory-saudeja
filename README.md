@@ -127,7 +127,7 @@ A clínica só é controladora se aprovar o que a SaúdeJá propõe no contrato 
 
 **Transferência internacional: cláusulas-padrão da ANPD** (art. 33, II, b). O processamento no Hugging Face e no GitHub Actions, tanto dos dados da clínica quanto da base de treino, se apoia nas cláusulas-padrão aprovadas pela ANPD, adotadas sem alteração num termo aditivo ao acordo de tratamento de dados (DPA) de cada provedor. Cada destino tem a hipótese legal do próprio tratamento (art. 7º ou 11) e esse mecanismo. A Política de privacidade traz as informações que o art. 17 do Regulamento de Transferência Internacional exige. O consentimento do treino continua sendo a base legal do treino, não o mecanismo da transferência. Supabase, remote do DVC e Infobip processam no Brasil, sem transferência ([`LGPD.md` §4.2](docs/LGPD/LGPD.md#42-mecanismo-adotado)).
 
-O mecanismo parte de uma **premissa de operação**: contas pagas, com DPA e aditivo das cláusulas-padrão assinados. As contas do protótipo (GitHub Free, Hugging Face Pro, Azure for Students e teste gratuito da Infobip) não têm esse aditivo. Com dados sintéticos, nenhum titular real é afetado.
+O mecanismo parte de uma **premissa de operação**: contas pagas, com DPA e aditivo das cláusulas-padrão assinados, e contrato do SaaS em que a clínica aprova os elementos essenciais, a política de privacidade, os Termos de uso e o procedimento de revisão. A política e os termos foram publicados na versão 1.0, vigentes a partir de 18/10/2026, ainda sem validação jurídica. As contas do protótipo (GitHub Free, Hugging Face Pro, Azure for Students e teste gratuito da Infobip) não têm esse aditivo. Com dados sintéticos, nenhum titular real é afetado.
 
 ### Proteções implementadas
 
@@ -151,10 +151,9 @@ A única decisão automatizada é enviar ou não o lembrete. O paciente pede exp
 | Pendência | Onde está decidido |
 |---|---|
 | Registro da oposição ao lembrete (o lembrete não depende de consentimento, mas o paciente pode pedir à clínica para não receber SMS) | [`LGPD.md` §9.4](docs/LGPD/LGPD.md) |
-| Validação jurídica da caixa do treino como consentimento específico e destacado, da prova de 365 dias e dos Termos de uso | [`LGPD.md` §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
-| Política de privacidade e Termos de uso públicos | Rascunhos em [`docs/LGPD/POLITICA-DE-PRIVACIDADE.md`](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [`docs/LGPD/TERMOS-DE-USO.md`](docs/LGPD/TERMOS-DE-USO.md), já exibidos na tela, com as condições para publicar |
+| Validação jurídica da política de privacidade e dos Termos de uso (publicados em 18/10/2026), da caixa do treino como consentimento específico e destacado e da prova de 365 dias | [`LGPD.md` §9 e §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
 | Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
-| Contrato do SaaS em que a clínica aprova os elementos essenciais propostos pela SaúdeJá | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
+| Guarda no repositório contra mudança de feature, retenção ou texto do lembrete sem nova aprovação da clínica (o contrato do SaaS é premissa de operação) | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
 
 Metas de serviço relacionadas: [`docs/SLO.md`](docs/SLO.md) (§6, zero dado pessoal em log) e [`docs/SLA.md`](docs/SLA.md) (§6, comunicação de incidente).
 
@@ -500,7 +499,7 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
   - [x] Identificador do paciente com HMAC e chave própria, com as linhas antigas migradas ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md))
   - [x] Levantamento dos DPAs e do mecanismo de transferência internacional
   - [ ] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md) e na política de privacidade
-  - [ ] Publicação da política de privacidade
+  - [x] Publicação da política de privacidade e dos Termos de uso, versão 1.0, vigentes a partir de 18/10/2026 ([política](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), [termos](docs/LGPD/TERMOS-DE-USO.md))
 
 
 ## Autor
