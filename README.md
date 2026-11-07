@@ -583,7 +583,7 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
   - [x] Teste de ponta a ponta da regra de dado pessoal no Loki (P1), em dev
   - [ ] Alerta real de ponta a ponta para cada nível de criticidade (P1, P2 e P3) em produção
   - [x] ADR da observabilidade com Grafana Cloud e OpenTelemetry, que revê o ADR-006 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
-  - [ ] Saída do alerta diário (`alerta_observabilidade.yml`) depois da paridade com o Grafana, não antes de 01/11/2026 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
+  - [x] Saída do alerta diário (`alerta_observabilidade.yml`) depois da paridade com o Grafana, não antes de 01/11/2026 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
 - [ ] Adequação à LGPD ([pendências](#pendências))
   - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
   - [x] Procedimento de revisão da decisão automatizada
@@ -592,9 +592,6 @@ Cada registro termina com uma tabela de ações. As ações em aberto também ap
   - [x] Levantamento dos DPAs e do mecanismo de transferência internacional
   - [x] Publicação da política de privacidade e dos Termos de uso, versão 1.0, vigentes a partir de 18/10/2026 ([política](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), [termos](docs/LGPD/TERMOS-DE-USO.md))
   - [x] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md), com o Grafana Cloud em `sa-east-1`
-  - [ ] Grafana Labs na política de privacidade
-  - [ ] Validação jurídica da política, dos termos e da caixa de consentimento do treino
-- [ ] Validação final para o pitch, com a decisão sobre a exceção do SLO de recall e F1 da classe positiva
 
 ## Suporte
 

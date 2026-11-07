@@ -125,7 +125,7 @@ Antes do cadastro, a tela pede que você confirme que está ciente desse process
 
 | Dado | Prazo |
 |---|---|
-| Cadastro e histórico de consultas | Enquanto a clínica mantiver o seu registro de atendimento. A exclusão é feita a pedido da clínica |
+| Cadastro e histórico de consultas | Enquanto a clínica mantiver o seu registro de atendimento. A exclusão é feita conforme o contrato com  a clínica |
 | Estimativa de risco, explicação e registro de lembrete | 90 dias, com exclusão automática |
 | Base de aprimoramento do modelo | Cada consulta fica até 90 dias depois da data dela. As versões do conjunto de treino geradas a partir da base são apagadas 90 dias depois de substituídas, num máximo aproximado de 210 dias |
 | Registro das suas autorizações e revogações do aprimoramento | Enquanto você não revogar nem pedir a eliminação. Depois disso, fica mais 365 dias, só com o código calculado com chave secreta, a finalidade e as datas, como prova de que a autorização existiu e de quando você a revogou |
