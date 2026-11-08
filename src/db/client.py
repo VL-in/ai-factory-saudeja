@@ -44,7 +44,7 @@ def criar_client_autenticacao() -> Client:
     do client pelo JWT do usuário logado. No singleton isso faria duas coisas
     erradas ao mesmo tempo: (1) todas as consultas seguintes do backend
     passariam a rodar como `authenticated` em vez da chave secreta, e o RLS
-    sem policies devolveria tabela vazia; (2) como o processo do Streamlit é
+    sem policies devolveria tabela vazia; (2) como o processo da interface é
     um só para todos os navegadores conectados, o login de um funcionário
     mudaria a identidade das consultas de todos os outros.
 

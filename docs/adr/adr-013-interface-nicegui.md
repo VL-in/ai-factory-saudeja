@@ -1,7 +1,7 @@
 # ADR-013: Interface em NiceGUI no lugar do Streamlit
 
 ## Status
-Aceito — 2026-11-07. Implementação pendente: até ela chegar a produção, a interface publicada continua sendo a do Streamlit, e o que `architecture.md`, `SLO.md` e o [ADR-006](adr-006-observabilidade.md) dizem sobre ela continua valendo.
+Aceito — 2026-11-07. Implementado no repositório em 2026-11-07 (`src/web/`, o Streamlit saiu da imagem). Até o deploy de produção, a interface publicada continua sendo a do Streamlit. A sonda segue em `/_stcore/health`, que a interface nova também responde, como alias, até os checks do Synthetic Monitoring trocarem para `/healthz`; só então o `SLO.md` §1.1 e o [ADR-006](adr-006-observabilidade.md) mudam.
 
 Substitui, no [ADR-001](adr-001-stack.md), a escolha do **Streamlit como frontend**. O resto do que o ADR-001 ainda mantém (Python-first, GitHub + DVC + MLflow, FastAPI) continua valendo.
 

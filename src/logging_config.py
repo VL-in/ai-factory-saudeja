@@ -13,7 +13,7 @@ Três decisões que explicam a forma do módulo:
 1. **O filtro mora no HANDLER, não no logger, e é aplicado a TODO handler do
    processo** (`aplicar_filtro_em_handlers_existentes`). O log que de fato vai
    existir em produção não é nosso: é o do `uvicorn`, do `httpx`, do
-   `supabase-py` e do `streamlit`. Um logger próprio do projeto com filtro
+   `supabase-py` e do `nicegui`. Um logger próprio do projeto com filtro
    embutido protegeria só as linhas que nós escrevemos -- exatamente as que já
    estão sob nosso controle. Pior: `uvicorn` põe `propagate=False` nos seus
    loggers e pendura handlers próprios, então nem o handler da raiz os
@@ -30,7 +30,8 @@ Três decisões que explicam a forma do módulo:
    descarta evento em vez de atrasar a predição.
 
 Chamado uma vez por entrypoint: `lifespan` da API (`src/api/main.py`), `main()`
-do job (`src/jobs/inferencia_diaria.py`) e o topo de `src/ui/app.py`. Os
+do job (`src/jobs/inferencia_diaria.py`) e o `lifespan` da interface
+(`src/web/main.py`). Os
 scripts do pipeline de treino (`preprocess`/`train`/`validate`) seguem usando
 `print`: rodam sobre dataset pseudonimizado, fora do caminho de qualquer dado
 de paciente vivo, e sua saída é lida por humano no terminal/MLflow.
@@ -281,7 +282,7 @@ class FiltroRedacaoPII(logging.Filter):
 
     Filtro e não formatador de propósito: um filtro de handler roda para
     *qualquer* formatador que esteja instalado, inclusive o do uvicorn e o do
-    Streamlit, que não são nossos. Um formatador só protegeria o handler que
+    NiceGUI, que não são nossos. Um formatador só protegeria o handler que
     o usa.
     """
 
@@ -402,7 +403,7 @@ def configurar_logging(nivel: str | None = None, formato: str | None = None, for
     não duplica handler nem duplica linha. O que ela **repete** de propósito é
     `aplicar_filtro_em_handlers_existentes`, porque handler novo pode ter
     aparecido nesse meio-tempo -- é o caso do uvicorn com `--reload` e do
-    Streamlit, que configuram logging em momentos que não controlamos.
+    NiceGUI, que configuram logging em momentos que não controlamos.
     """
     global _configurado
     with _trava:
@@ -454,7 +455,8 @@ def aplicar_filtro_em_handlers_existentes() -> int:
 
     É a peça que faz a garantia valer para o log de terceiros. `uvicorn` define
     `propagate=False` em `uvicorn.access`/`uvicorn.error` e instala handlers
-    próprios; o Streamlit faz algo equivalente. Sem este passeio, esses
+    próprios, e o uvicorn da interface loga por eles cada websocket com o IP
+    do cliente. Sem este passeio, esses
     registros -- os únicos que existem em volume no Space -- sairiam sem passar
     por nenhuma redação.
 

@@ -208,9 +208,9 @@ class TelaDoPaciente:
             # O efeito da caixa desmarcada e a regra do agendamento de criança
             # estão nos Termos de uso, seções 2 e 5.
             ui.label("Autorização opcional").classes("text-sm font-semibold")
-            autorizou_treino = ui.checkbox(consentimento.TERMO_TREINO, value=False).mark(
-                "paciente-treino"
-            )
+            autorizou_treino = ui.checkbox(value=False).mark("paciente-treino")
+            with autorizou_treino:
+                tema.texto_com_destaque(consentimento.TERMO_TREINO)
             avisos = ui.column().classes("w-full gap-2")
             agendar = ui.button("Agendar").props("unelevated no-caps").mark("agendar")
 

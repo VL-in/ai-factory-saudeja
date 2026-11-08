@@ -1,15 +1,18 @@
 """
-SaúdeJá — lógica da interface Streamlit,
-separada de app.py para ser testável sem o runtime do Streamlit: nada aqui
-importa `streamlit`.
+SaúdeJá — lógica da interface, separada da casca de telas (src/web/, em
+NiceGUI desde o ADR-013) para ser testável sem framework de interface: nada
+aqui importa `nicegui`. É a única camada de regra de negócio da interface; a
+casca só apresenta e chama estas funções, sempre fora do event loop
+(`web.execucao.executar_em_thread`), porque elas vão ao banco e ao modelo de
+forma síncrona.
 
 Dois backends de predição atrás de uma interface única (ClientePredicao),
 escolhidos por PREDICT_BACKEND -- reconcilia duas decisões que o repositório
 tinha em conflito:
 
-- ADR-005 (b): "Streamlit e o job chamam o modelo em processo; a API FastAPI
+- ADR-005 (b): "a interface e o job chamam o modelo em processo; a API FastAPI
   é para integrações externas" -- daí ClientePredicaoEmProcesso ser o DEFAULT:
-  em produção (Streamlit e API no mesmo container do HF Space) a UI
+  em produção (interface e API no mesmo container do HF Space) a UI
   não depende de a API estar de pé nem paga round-trip HTTP interno.
 - architecture.md §3.1: a UI como harness de teste visual da API FastAPI --
   daí ClientePredicaoAPI (PREDICT_BACKEND=api), que exercita
@@ -117,8 +120,8 @@ def montar_payload(
     hora_consulta: time,
 ) -> dict:
     """Junta os campos do formulário no payload cru que construir_features()
-    /PacienteConsultaIn esperam. O Streamlit coleta data e hora em widgets
-    separados (st.date_input/st.time_input); o modelo precisa do timestamp
+    /PacienteConsultaIn esperam. A tela coleta data e hora em campos
+    separados; o modelo precisa do timestamp
     único, de onde saem dia_de_semana e horario (src/features.py)."""
     return {
         "idade": int(idade),
@@ -146,8 +149,8 @@ def listar_especialidades() -> list[str]:
 class ClientePredicaoEmProcesso:
     """Backend default (ADR-005 b): importa src/inference.py e src/explain.py
     direto, sem HTTP. Modelo e TreeExplainer carregados na primeira predição e
-    reusados depois -- app.py ainda embrulha este objeto em st.cache_resource
-    para que o carregamento não se repita a cada rerun do Streamlit."""
+    reusados depois -- a casca guarda um cliente por backend no processo
+    (web/dados.py), para o carregamento não se repetir a cada predição."""
 
     nome = "processo"
 
@@ -1112,8 +1115,9 @@ class ErroAutenticacaoIndisponivel(ErroAutenticacao):
 
 @dataclass(frozen=True)
 class SessaoFuncionario:
-    """O que a UI guarda de quem está logado, em `st.session_state` (memória do
-    servidor, nunca cookie). Sem o token do Supabase de propósito: ele só
+    """O que a UI guarda de quem está logado, em `app.storage.tab` (memória do
+    servidor, por aba, nunca cookie; ver web/sessao.py). Sem o token do
+    Supabase de propósito: ele só
     serviu para provar a senha -- os dados continuam sendo lidos com a chave
     secreta do backend (docs/architecture.md §7) --, então guardá-lo só criaria um segredo a
     mais para vazar."""
@@ -1133,7 +1137,7 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
     equipe."""
     if exc.status == 429 or exc.code == "over_request_rate_limit":
         # O limite do Supabase Auth é por IP, e todos os funcionários chegam
-        # pelo mesmo IP (o do servidor do Streamlit) -- quem aparece aqui pode
+        # pelo mesmo IP (o do servidor da interface) -- quem aparece aqui pode
         # nem ter errado a própria senha. Ver docs/LGPD/LGPD.md §9, risco 6.
         return ErroAutenticacaoIndisponivel(
             "muitas tentativas de login em pouco tempo. Aguarde alguns minutos e tente de novo."
@@ -1212,6 +1216,7 @@ def sessao_ativa(sessao: SessaoFuncionario, agora: datetime | None = None) -> bo
 
 
 def registrar_uso(sessao: SessaoFuncionario, agora: datetime | None = None) -> SessaoFuncionario:
-    """Nova sessão com o relógio de inatividade zerado -- chamada a cada rerun
-    do Streamlit, que só acontece quando alguém interage com a tela."""
+    """Nova sessão com o relógio de inatividade zerado -- chamada a cada ação
+    de quem está na tela (web/sessao.py::funcionario_logado), nunca pelo timer
+    da tela, que não é uso."""
     return replace(sessao, ultimo_uso=agora or _agora())

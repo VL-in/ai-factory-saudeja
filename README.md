@@ -89,7 +89,7 @@ Diagramas C4 (níveis 1 e 2) em [`docs/architecture.md`](docs/architecture.md#2-
 
 ```mermaid
 flowchart LR
-    P[Paciente] -->|cadastro e agendamento| UI[Interface Streamlit]
+    P[Paciente] -->|cadastro e agendamento| UI[Interface NiceGUI]
     F[Funcionário] -->|fila do dia, predição, SHAP| UI
     UI <--> DB[(Supabase / Postgres)]
     DB -.->|gatilho das 08h17| JOB
@@ -108,7 +108,7 @@ flowchart LR
 
 | Componente | Onde está | Função |
 |---|---|---|
-| Interface | [`src/ui/`](src/ui/) | Streamlit com visão Paciente (autoagendamento) e Funcionário (login via Supabase Auth), com as abas "Fila do dia", "Pedidos do titular" e "Time técnico". A fila de cada data fica em cache por 60 s e é invalidada quando a própria tela a altera. A lógica fica em `logic.py`, testável sem o Streamlit |
+| Interface | [`src/web/`](src/web/), [`src/ui/`](src/ui/) | NiceGUI ([ADR-013](docs/adr/adr-013-interface-nicegui.md)), num processo próprio na porta 7860: tela do Paciente em `/` (autoagendamento), Política e Termos em `/privacidade` e `/termos`, e a área da equipe em `/equipe` (login via Supabase Auth), com as abas "Fila do dia", "Pedidos do titular" e "Time técnico". A fila de cada data fica em cache por 60 s, compartilhado entre as abas, e é invalidada quando a própria tela a altera. A regra de negócio fica em `src/ui/logic.py`, testável sem framework de interface |
 | API de predição | [`src/api/`](src/api/) | FastAPI com `/health` e `/predict` (probabilidade + explicação SHAP) |
 | Inferência | [`src/inference.py`](src/inference.py), [`src/explain.py`](src/explain.py) | Núcleo de predição e explicabilidade, compartilhado por interface, API e job |
 | Contrato de features | [`src/contrato_features.py`](src/contrato_features.py) | Barra dado fora da regra de negócio (quarentena) e marca dado fora do domínio do treino |
@@ -292,7 +292,8 @@ docker compose up -d app
 
 | Endereço | Serviço |
 |---|---|
-| http://localhost:7860 | Interface Streamlit |
+| http://localhost:7860 | Interface (tela do paciente; a equipe entra em `/equipe`) |
+| http://localhost:7860/healthz | Saúde da interface (`ok`) |
 | http://localhost:8000/health | Status da API e versão do modelo |
 | http://localhost:8000/docs | Documentação OpenAPI |
 
@@ -301,8 +302,8 @@ A imagem empacota o `data/model.pkl`: o build falha se o `dvc pull` não tiver r
 Sem Docker, em dois terminais:
 
 ```powershell
-python -m uvicorn api.main:app --reload --app-dir src   # API
-streamlit run src/ui/app.py                             # interface
+python -m uvicorn api.main:app --reload --app-dir src                        # API
+python -m uvicorn web.main:criar_app --factory --app-dir src --port 7860     # interface
 ```
 
 Variáveis principais:

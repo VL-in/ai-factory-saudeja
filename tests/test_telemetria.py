@@ -149,7 +149,8 @@ def test_exportador_que_falha_nao_derruba_o_log(monkeypatch):
 
 
 def test_e_idempotente_um_exportador_por_processo(exportador_de_logs):
-    """O Streamlit reexecuta o script a cada clique."""
+    """Chamada repetida (a interface antiga reexecutava o script a cada clique)
+    não cria outro exportador."""
     for _ in range(3):
         assert telemetria.configurar_telemetria(telemetria.SERVICO_UI)
     assert len(exportador_de_logs.chamadas) == 1
@@ -246,9 +247,10 @@ def test_logger_de_terceiro_sem_propagacao_tambem_exporta_e_redige(exportador_de
 
 
 def test_logger_isolado_que_aparece_depois_e_coberto_na_chamada_seguinte(exportador_de_logs):
-    """O Streamlit configura o logger dele em momento que não controlamos."""
+    """Biblioteca de terceiros configura o logger dela em momento que não
+    controlamos."""
     telemetria.configurar_telemetria(telemetria.SERVICO_UI)
-    tardio = logging.getLogger("streamlit_tardio_teste")
+    tardio = logging.getLogger("terceiro_tardio_teste")
     tardio.handlers = [logging.StreamHandler(io.StringIO())]
     tardio.propagate = False
 
@@ -286,7 +288,7 @@ def _ordem_das_chamadas(caminho: Path) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "arquivo", ["src/api/main.py", "src/ui/app.py", "src/jobs/inferencia_diaria.py"]
+    "arquivo", ["src/api/main.py", "src/web/main.py", "src/jobs/inferencia_diaria.py"]
 )
 def test_ponto_de_entrada_configura_telemetria_antes_do_logging(arquivo):
     ordem = _ordem_das_chamadas(REPO_ROOT / arquivo)

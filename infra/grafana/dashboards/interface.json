@@ -1,6 +1,6 @@
 {
   "uid": "saudeja-interface",
-  "title": "SaúdeJá — Interface (Streamlit)",
+  "title": "SaúdeJá — Interface",
   "description": "Cada ação da interface: volume, erro e latência (14 dias no Mimir; o mês, no banco).",
   "tags": [
     "saudeja"

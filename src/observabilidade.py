@@ -54,8 +54,9 @@ TIPO_ERRO = "erro"
 # desfecho, cadastro, login...). Antes da v2.2.0 a UI quase não era medida.
 TIPO_ACAO_UI = "acao_ui"
 # O que a aba "Observabilidade" e o alerta diário leem. `acao_ui` fica de
-# fora: a cada interação o Streamlit recarrega a fila, e esses eventos
-# encheriam o limite de linhas da janela, truncando o p95 das predições. Falha
+# fora: a fila é recarregada a cada minuto em cada tela aberta (do cache, mas
+# a cada prazo vencido é uma ida ao banco), e esses eventos encheriam o limite
+# de linhas da janela, truncando o p95 das predições. Falha
 # de banco na UI chega aos dois como `erro` (`logic._relatar_falha_persistencia`).
 TIPOS_DO_SLO = (TIPO_PREDICAO, TIPO_JOB_D2, TIPO_ERRO)
 # Teto de linhas dessa leitura, o mesmo na aba e no alerta diário. O p95 sai em
@@ -318,7 +319,7 @@ def _garantir_worker() -> queue.Queue[dict[str, Any]]:
         if _fila is None:
             _fila = queue.Queue(maxsize=TAMANHO_MAXIMO_FILA)
         if _worker is None or not _worker.is_alive():
-            # daemon: o processo (job, uvicorn, streamlit) nunca deve ficar
+            # daemon: o processo (job, API, interface) nunca deve ficar
             # preso esperando o worker de métrica terminar.
             _worker = threading.Thread(
                 target=_consumir_fila, args=(_fila,), name="observabilidade", daemon=True
@@ -378,7 +379,7 @@ def _obter_escritor() -> Escritor:
 def flush(timeout: float = 5.0) -> bool:
     """Espera a fila drenar. Obrigatório em processo curto (o job roda e sai):
     sem isso, os eventos enfileirados morrem com o processo antes de o worker
-    daemon gravá-los. Serviço longo (API/Streamlit) não precisa chamar.
+    daemon gravá-los. Serviço longo (API, interface) não precisa chamar.
 
     Devolve se a fila esvaziou dentro do prazo -- não levanta: um flush que
     não completou é métrica perdida, não falha de negócio."""

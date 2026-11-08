@@ -92,7 +92,7 @@ Duas correções ao texto original desta seção, decididas ao implementar a bli
 
 | Camada | O que cobre |
 |---|---|
-| Filtro de redação em todo handler do processo (`src/logging_config.py`) | O log de **terceiros** (`uvicorn`, `httpx`, `streamlit`), que é o único que existe em volume em produção e o único que não temos como reescrever |
+| Filtro de redação em todo handler do processo (`src/logging_config.py`) | O log de **terceiros** (`uvicorn`, `httpx`, `nicegui`), que é o único que existe em volume em produção e o único que não temos como reescrever |
 | Guarda estática sobre a AST de `src/` (`tests/test_coerencia_repo.py`) | Código nosso passando campo de PII para uma chamada de log — o caso que não deveria nem chegar ao filtro |
 | `scripts/auditoria_lgpd.py` | Varredura de log **local** (smoke test do deploy, artifact do Actions). Ferramenta de verificação, não a evidência apresentada no pitch |
 

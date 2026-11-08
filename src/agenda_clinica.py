@@ -44,7 +44,7 @@ SLOTS_SABADO = _slots(8, 0, 11, 30)  # sábado
 
 def horarios_do_dia(dia: date) -> list[time]:
     """Slots válidos para `dia` -- lista vazia se for domingo (clínica
-    fechada). O cadastro (src/ui/app.py) usa isto para oferecer um selectbox
+    fechada). O cadastro (src/web/paginas/paciente.py) usa isto para oferecer uma lista
     em vez de um campo de hora livre."""
     dia_semana = dia.weekday()
     if dia_semana == DIA_DOMINGO:

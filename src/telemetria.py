@@ -21,10 +21,10 @@ Cinco propriedades que o resto do módulo existe para garantir:
    `observabilidade.py`: nenhuma exceção deste módulo chega à UI, à API ou ao
    job. Os exportadores trabalham em thread própria; Grafana fora do ar vira
    aviso no stdout, não latência na predição.
-3. **Idempotente.** O Streamlit reexecuta `src/ui/app.py` inteiro a cada
-   interação; sem a guarda, cada clique criaria um exportador novo, com thread
-   e conexão próprias. A chamada repetida só pendura o handler em logger
-   isolado que tenha aparecido depois da primeira.
+3. **Idempotente.** Um exportador por processo, qualquer que seja o número de
+   chamadas (a interface antiga, em Streamlit, reexecutava o script a cada
+   clique e chamava a configuração de novo a cada vez). A chamada repetida só
+   pendura o handler em logger isolado que tenha aparecido depois da primeira.
 4. **O filtro de PII vale para o que sai por OTLP.** O handler do OTel nasce
    já com `FiltroRedacaoPII` (`src/logging_config.py`). Além disso, os pontos
    de entrada chamam `configurar_telemetria` **antes** de `configurar_logging`,
@@ -131,7 +131,7 @@ ATRIBUTOS_PERMITIDOS = frozenset(
 TAMANHO_MAXIMO_ATRIBUTO = 120
 
 # Identificadores que só um SPAN pode levar: ligam o trace ao agendamento,
-# à execução do job e à sessão do Streamlit. Ficam FORA de
+# à execução do job e à aba da interface. Ficam FORA de
 # `ATRIBUTOS_PERMITIDOS` de propósito -- aquela allowlist vale também para
 # métrica, e um uuid por agendamento lá viraria uma série por agendamento.
 # Nenhum é dado pessoal: `id_agendamento` é uuid interno, `id_execucao` é
@@ -202,9 +202,10 @@ _instrumentos: dict[str, Any] = {}
 # serviço do job. Vale com a telemetria desligada: liga `eventos_app` ao run
 # mesmo sem Grafana.
 _id_execucao_do_processo: str | None = None
-# Quem sabe a sessão da UI (`src/ui/app.py` registra um que lê o
-# `st.session_state`). Uma função, e não um valor: as ações da Fila do dia
-# rodam em callbacks (`on_click`), antes do corpo do script.
+# Quem sabe a sessão da UI (`src/web/main.py` registra
+# `web.execucao.sessao_da_telemetria`, que lê um ContextVar preenchido com o id
+# da aba antes de cada chamada a `logic` ir para a thread). Uma função, e não
+# um valor: é consultada a cada span, dentro da thread da ação.
 _provedor_de_sessao: Callable[[], str | None] | None = None
 
 logger = logging.getLogger(__name__)
@@ -231,8 +232,9 @@ def configurada() -> bool:
 def configurar_telemetria(servico: str) -> bool:
     """Liga os três provedores OTel deste processo. Devolve se ficou ativa.
 
-    Chamada uma vez por ponto de entrada (`lifespan` da API, topo de
-    `src/ui/app.py`, `main()` do job), **antes** de `configurar_logging`.
+    Chamada uma vez por ponto de entrada (`lifespan` da API, `lifespan` da
+    interface em `src/web/main.py`, `main()` do job), **antes** de
+    `configurar_logging`.
     """
     global _decidido, _ativa_no_processo, _handler, _id_execucao_do_processo
     if servico not in SERVICOS:
@@ -319,8 +321,8 @@ def _filtrar(valores: dict[str, Any] | None, permitidas: frozenset[str]) -> dict
 
 
 def definir_sessao(provedor: Callable[[], str | None] | None) -> None:
-    """Registra quem informa o `session.id` da UI. Chamado pelo
-    `src/ui/app.py`; a cada span, o provedor é consultado, e uma falha dele só
+    """Registra quem informa o `session.id` da UI. Chamado pelo `lifespan`
+    de `src/web/main.py`; a cada span, o provedor é consultado, e uma falha dele só
     deixa o span sem sessão."""
     global _provedor_de_sessao
     _provedor_de_sessao = provedor
@@ -727,8 +729,8 @@ def _pendurar_handler(handler: logging.Handler) -> None:
     """Na raiz e em todo logger que não propaga até ela.
 
     `uvicorn` e `uvicorn.access` usam `propagate=False` com handlers próprios,
-    e o Streamlit faz o mesmo com o logger `streamlit`: só a raiz deixaria de
-    fora justamente o log de acesso da API e o traceback de exceção da UI. Um
+    e bibliotecas de terceiros podem fazer o mesmo: só a raiz deixaria de
+    fora justamente o log de acesso e o de websocket do uvicorn. Um
     registro para no primeiro logger com `propagate=False` da subida, então
     pendurar em cada um deles não duplica linha.
     """

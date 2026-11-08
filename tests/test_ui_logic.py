@@ -1,6 +1,6 @@
 """
-SaúdeJá — testes da lógica da interface. Não sobem o runtime do
-Streamlit: src/ui/logic.py existe justamente para ser testável assim.
+SaúdeJá — testes da lógica da interface. Não sobem framework de
+interface: src/ui/logic.py existe justamente para ser testável assim.
 
 Filosofia do repositório (sem mock pesado): o backend em processo usa o
 data/model.pkl real (já versionado via DVC, sem re-treinar) e o backend REST
@@ -41,7 +41,7 @@ def especialidade_valida():
 
 @pytest.fixture
 def campos_formulario(especialidade_valida):
-    """Exatamente o que os widgets de src/ui/app.py entregam."""
+    """Exatamente o que os campos da tela entregam (data e hora separadas)."""
     return {
         "idade": 45,
         "sexo": "F",
@@ -120,8 +120,8 @@ def test_em_processo_sem_modelo_vira_erro_de_indisponibilidade(payload, tmp_path
 
 
 def test_em_processo_carrega_o_modelo_uma_vez_so(payload, monkeypatch):
-    """O cliente é cacheado por st.cache_resource entre reruns; se ele
-    recarregasse o artefato a cada predição, o cache não adiantaria nada."""
+    """A casca guarda um cliente por processo (web/dados.py); se ele
+    recarregasse o artefato a cada predição, guardá-lo não adiantaria nada."""
     cliente = logic.ClientePredicaoEmProcesso(MODEL_PATH)
     carregamentos = []
     original = inference.carregar_modelo

@@ -12,7 +12,7 @@ Três coisas são provadas aqui, e a segunda é a que mais importa:
 1. A redação funciona para as quatro formas de PII que o sistema manipula
    (CPF, telefone, e-mail e nome) e **não** estraga os identificadores
    pseudonimizados de que o diagnóstico depende.
-2. Ela vale para o log de **terceiros** -- `uvicorn`, `httpx`, `streamlit` --,
+2. Ela vale para o log de **terceiros** -- `uvicorn`, `httpx`, `nicegui` --,
    que é o único que existe em volume em produção. Um filtro que só cobrisse as
    linhas escritas por nós protegeria exatamente as que já estão sob controle.
 3. O ciclo fecha: a saída de um handler configurado, varrida por

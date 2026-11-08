@@ -1,4 +1,4 @@
-# Imagem combinada de deploy: API FastAPI + interface Streamlit no mesmo
+# Imagem combinada de deploy: API FastAPI + interface NiceGUI no mesmo
 # container, a mesma que roda no Hugging Face Space. Serve tambem para
 # testar o conjunto localmente do jeito que ele vai rodar no Hugging
 # Face Space). Ver infra/deploy/entrypoint.sh para o porque de dois processos.
@@ -27,9 +27,9 @@ RUN pip install --no-cache-dir -r requirements/api.txt -r requirements/ui.txt
 
 # Usuario nao-root com uid 1000: o Space roda o container
 # como uid 1000 qualquer que seja o USER daqui, entao a imagem ja' nasce assim
-# e o smoke do CI testa a mesma condicao. HOME gravavel e' o que o Streamlit
-# (~/.streamlit) e o cache do numba, que o shap usa, precisam; /app continua
-# do root e so' de leitura para o processo.
+# e o smoke do CI testa a mesma condicao. HOME gravavel e' o que o cache do
+# numba, que o shap usa, precisa; /app continua do root e so' de leitura para
+# o processo.
 RUN useradd --create-home --uid 1000 user
 ENV HOME=/home/user
 
@@ -41,9 +41,6 @@ ENV HOME=/home/user
 # de proposito -- melhor que subir um container sem modelo.
 COPY data/model.pkl /app/data/model.pkl
 COPY params.yaml .
-# Tema da UI: o Streamlit procura .streamlit/config.toml no diretorio de
-# trabalho (/app), de onde o entrypoint o inicia.
-COPY .streamlit/config.toml ./.streamlit/config.toml
 COPY infra/deploy/entrypoint.sh ./entrypoint.sh
 # Politica de privacidade e Termos de uso exibidos na tela de agendamento
 # (ADR-010): o texto e a versao gravada na ciencia saem destes arquivos, os
@@ -57,13 +54,11 @@ RUN chmod 755 ./entrypoint.sh
 COPY src/ ./src/
 RUN python -m compileall -q src
 
-# STREAMLIT_BROWSER_SERVER_ADDRESS: sem ele, o Streamlit em modo
-# headless consulta um servico externo para descobrir o IP publico da maquina
-# e o imprime no log ("External URL: http://<ip>:7860") -- uma requisicao de
-# saida que o produto nao precisa, e um IP num log que o CI varre com
-# scripts/auditoria_lgpd.py e que, no Actions, e' publico. O valor so' muda a
-# URL impressa e o CORS de upload de arquivo, que a UI nao usa; conexoes da
-# propria origem (o Space) continuam permitidas.
+# NICEGUI_STORAGE_PATH: defesa. A interface guarda estado so' na memoria da
+# aba (src/web/sessao.py) e nao grava nada em disco, mas, se algum dia gravar,
+# o padrao do NiceGUI (.nicegui/ no diretorio de trabalho) cairia em /app, que
+# e' so' de leitura para o uid 1000. A interface tambem nao imprime a mensagem
+# de boas-vindas com os IPs da maquina (show_welcome_message=False).
 #
 # PYTHONUNBUFFERED: o log do Space so' mostra o que chegou ao stdout; com
 # buffer, a linha que explica uma queda morre junto com o processo.
@@ -73,8 +68,7 @@ ENV MODEL_PATH=/app/data/model.pkl \
     API_PORT=8000 \
     UI_PORT=7860 \
     PYTHONUNBUFFERED=1 \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
-    STREAMLIT_BROWSER_SERVER_ADDRESS=localhost
+    NICEGUI_STORAGE_PATH=/home/user/.nicegui
 
 USER user
 

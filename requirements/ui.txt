@@ -1,14 +1,13 @@
-# Interface Streamlit (src/ui/). Fica separada de api.txt para a
+# Interface NiceGUI (src/web/ + src/ui/logic.py). Fica separada de api.txt para a
 # imagem da API isolada (infra/api/dockerfile) continuar enxuta (cold start,
 # SLO §2); a imagem combinada do deploy (HF Space) instala os dois.
 -r base.txt
 
-streamlit==1.56.0
-
-# Interface em NiceGUI (src/web/, ADR-013), que substitui o Streamlit. Os dois
-# convivem enquanto a casca nova e' escrita; o Streamlit sai quando a imagem
-# passar a subir a interface nova. Versao fixada: antes de atualizar, conferir
-# nas notas de versao armazenamento, telemetria e requisicoes externas.
+# NiceGUI (ADR-013), no lugar do Streamlit. Versao fixada: antes de
+# atualizar, conferir nas notas de versao armazenamento, telemetria e
+# requisicoes externas, e rodar tests/web/test_simulador.py (o que os testes
+# de tela pressupoem do simulador) e tests/web/test_infra_web.py (poda da aba,
+# que usa um atributo interno do NiceGUI).
 nicegui==3.2.0
 
 # Backend REST de src/ui/logic.py (PREDICT_BACKEND=api) -- em processo

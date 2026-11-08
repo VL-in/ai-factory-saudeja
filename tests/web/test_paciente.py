@@ -219,8 +219,14 @@ async def test_caixa_do_treino_comeca_desmarcada_e_e_a_unica_do_formulario(usuar
 
     assert _valor(usuario, "paciente-treino") is False
     with usuario:
-        caixas = [c.text for c in ElementFilter(kind=ui.checkbox)]
-    assert caixas == [consentimento.TERMO_TREINO]
+        caixas = list(ElementFilter(kind=ui.checkbox))
+        trechos = list(ElementFilter(marker="trecho-do-termo"))
+    assert [c._markers for c in caixas] == [["paciente-treino"]]
+    # O texto versionado do termo, inteiro, com o processamento fora do Brasil
+    # em negrito (art. 9º, § 3º), e não com os asteriscos do markdown.
+    assert "".join(t.text for t in trechos) == consentimento.TERMO_TREINO.replace("**", "")
+    (destaque,) = [t.text for t in trechos if "font-bold" in t.classes]
+    assert destaque == "Esse uso é feito fora do Brasil."
 
 
 async def test_agendar_repassa_a_caixa_do_treino_e_a_versao_dos_documentos(usuario, monkeypatch):

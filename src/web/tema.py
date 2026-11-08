@@ -217,3 +217,18 @@ def ler_hora(texto: str | None) -> time | None:
         return datetime.strptime((texto or "").strip(), "%H:%M").time()
     except ValueError:
         return None
+
+
+def texto_com_destaque(texto: str) -> ui.element:
+    """Texto com os trechos entre `**` em negrito, sem markdown nem HTML.
+
+    O termo do treino (`consentimento.TERMO_TREINO`) é texto versionado, com o
+    processamento fora do Brasil em destaque (art. 9º, § 3º, da LGPD). O
+    Streamlit renderizava o `**` como negrito no rótulo da caixa; aqui cada
+    trecho vira um `ui.label` em linha, que escapa o conteúdo (regra D7)."""
+    with ui.element("span").classes("text-sm") as bloco:
+        for indice, trecho in enumerate(texto.split("**")):
+            if trecho:
+                destaque = " font-bold" if indice % 2 else ""
+                ui.label(trecho).classes(f"inline{destaque}").mark("trecho-do-termo")
+    return bloco
