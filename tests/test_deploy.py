@@ -163,6 +163,8 @@ MODULOS_DO_PACOTE = {
     "shap": ["shap"],
     "httpx": ["httpx"],
     "streamlit": ["streamlit"],
+    "nicegui": ["nicegui"],
+    "pytest-asyncio": ["pytest_asyncio"],
     "supabase": ["supabase", "supabase_auth", "postgrest"],
     "matplotlib": ["matplotlib"],
     "jupyter": [],

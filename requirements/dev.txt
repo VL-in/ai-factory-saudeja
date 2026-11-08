@@ -11,6 +11,9 @@
 # Lint/format -- configuração em ruff.toml (docs/architecture.md §8)
 ruff==0.16.7
 
+# Fixtures assincronas do simulador do NiceGUI (tests/web/, ADR-013).
+pytest-asyncio==1.2.0
+
 # Type-check estatico -- configuracao em mypy.ini. Roda como
 # `mypy src scripts`, local e no CI, sem flags extras.
 mypy==2.3.1

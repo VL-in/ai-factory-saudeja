@@ -5,6 +5,12 @@
 
 streamlit==1.56.0
 
+# Interface em NiceGUI (src/web/, ADR-013), que substitui o Streamlit. Os dois
+# convivem enquanto a casca nova e' escrita; o Streamlit sai quando a imagem
+# passar a subir a interface nova. Versao fixada: antes de atualizar, conferir
+# nas notas de versao armazenamento, telemetria e requisicoes externas.
+nicegui==3.2.0
+
 # Backend REST de src/ui/logic.py (PREDICT_BACKEND=api) -- em processo
 # (default, ADR-005) a UI não abre rede nenhuma.
 httpx==0.28.1
