@@ -8,41 +8,30 @@
 
 Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia lembrete por SMS só para eles, dois dias antes do atendimento.
 
-> **Status do projeto:** em produção desde a v2.0.0 (04/10/2026). Versão atual: [v2.6.0](docs/logs/CHANGELOG.md) (19/10/2026). Próxima etapa: validação final para o pitch da disciplina AI Factory: Build, Deploy and Showcase.
-
-**Painéis ao vivo** (Grafana Cloud, sem login; detalhes em [Painéis públicos](#painéis-públicos)):
-
-[![Visão geral (SLO)](https://img.shields.io/badge/Grafana-Vis%C3%A3o%20geral%20%28SLO%29-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/4fa820057a864553b9954a5777ea44d6)
-[![Job D-2](https://img.shields.io/badge/Grafana-Job%20D--2-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/b01849b776db4343af2c00c99cf4e166)
-[![Inferência ML](https://img.shields.io/badge/Grafana-Infer%C3%AAncia%20ML-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/38561056c61249c8b3069d015c57b244)
-[![Mensageria (Infobip)](https://img.shields.io/badge/Grafana-Mensageria%20%28Infobip%29-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/e4544a72eadc44b5940136fe1a46ebda)
-[![Interface (Streamlit)](https://img.shields.io/badge/Grafana-Interface%20%28Streamlit%29-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/3bb196558d9444f4a0747ce8203b70b2)
-[![Custo de SMS](https://img.shields.io/badge/Grafana-Custo%20de%20SMS-F46800?logo=grafana&logoColor=white)](https://minilasagna354.grafana.net/public-dashboards/9d56d7fc7cd84b0990b09146e6102882)
-
-![Diagrama C4 de contexto do SaúdeJá: paciente e funcionário usam o sistema; Infobip envia o SMS; Grafana Cloud e Healthchecks.io avisam a mantenedora](docs/diagrams/SaudeJa-C1.drawio.png)
+**Demonstração:** <https://vl-in-saudeja-prod.hf.space> · **Painéis ao vivo:** [Grafana Cloud, sem login](#painéis-públicos) · **Histórico de versões:** [CHANGELOG](docs/logs/CHANGELOG.md)
 
 ## Sumário
 
 - [Visão geral](#visão-geral)
-- [Acesso](#acesso)
+- [Capturas de tela](#capturas-de-tela)
 - [Arquitetura](#arquitetura)
+- [Stack](#stack)
+- [Como rodar](#como-rodar)
+- [Testes e contribuição](#testes-e-contribuição)
+- [Troubleshooting](#troubleshooting)
+- [Limitações conhecidas](#limitações-conhecidas)
 - [Dados pessoais e LGPD](#dados-pessoais-e-lgpd)
-- [Instalação](#instalação)
-- [Uso](#uso)
-- [Contribuição](#contribuição)
-- [Operação](#operação)
-- [Roadmap](#roadmap)
-- [Suporte](#suporte)
-- [Autoria e agradecimentos](#autoria-e-agradecimentos)
-- [Licença](#licença)
+- [Operação em produção](#operação-em-produção)
+- [Documentação](#documentação)
+- [Autoria e licença](#autoria-e-licença)
 
 ## Visão geral
 
-O SaúdeJá é um SaaS para clínicas particulares de pequeno e médio porte, com agendamento online, prontuário, faturamento e comunicação com pacientes. Este repositório desenvolve a funcionalidade que prevê quais pacientes vão faltar à consulta, com um classificador LightGBM e explicação SHAP de cada previsão.
+O SaúdeJá é um SaaS (fictício) para clínicas particulares de pequeno e médio porte, com agendamento online, prontuário, faturamento e comunicação com pacientes. Este repositório desenvolve a funcionalidade que prevê quais pacientes vão faltar à consulta, com um classificador LightGBM e a explicação SHAP de cada previsão.
 
 ### Problema
 
-O no-show custa em média **R$ 180 por consulta perdida**, e a taxa nacional gira em torno de 25-35%. Para uma clínica média (1.500 consultas/mês), isso significa R$ 70k-100k de receita perdida todo mês. A primeira tentativa de reduzir o no-show foi mandar lembrete a todos os pacientes, o que saiu caro demais para clínicas com orçamento menor. A proposta atual classifica os pacientes com alta chance de não comparecer e manda lembrete só para eles, reduzindo em até 70% o gasto com mensageria.
+O no-show custa em média **R$ 180 por consulta perdida**, e a taxa nacional gira em torno de 25-35%. Para uma clínica média (1.500 consultas/mês), isso significa R$ 70k-100k de receita perdida todo mês. Mandar lembrete a todos os pacientes sai caro demais para clínicas com orçamento menor. A proposta classifica os pacientes com alta chance de não comparecer e manda lembrete só para eles, reduzindo em até 70% o gasto com mensageria.
 
 ### O que o sistema faz
 
@@ -55,41 +44,27 @@ O no-show custa em média **R$ 180 por consulta perdida**, e a taxa nacional gir
 
 ### Desempenho do modelo
 
-O repositório foi herdado com um pipeline de treinamento que reportava acurácia de 78%, F1-score de 0,65 para a classe positiva e ROC-AUC de 0,81. Medido no fold de teste isolado, o modelo em produção tem acurácia de 0,67, F1-score de 0,42 para a classe positiva e ROC-AUC de 0,64 ([`data/champion_metrics.json`](data/champion_metrics.json), [ADR-003](docs/adr/adr-003-SMOTE-NC.md)). O recall e o F1 da classe positiva ficam abaixo dos alvos do [SLO](docs/SLO.md) por limite do dataset. Essa exceção está documentada e será decidida na validação final.
+Medido no fold de teste isolado, o modelo em produção tem **acurácia de 0,67, F1-score de 0,42 para a classe positiva e ROC-AUC de 0,64** ([`data/champion_metrics.json`](data/champion_metrics.json)). O protótipo herdado reportava acurácia de 78%, F1 de 0,65 e ROC-AUC de 0,81; reproduzido, o F1 real da classe positiva era 0,235 ([ADR-003](docs/adr/adr-003-SMOTE-NC.md)). Ver [Limitações conhecidas](#limitações-conhecidas).
 
-## Acesso
+## Capturas de tela
 
-| Ambiente | Endereço |
-|---|---|
-| Produção (Hugging Face Space) | <https://vl-in-saudeja-prod.hf.space> |
-| Desenvolvimento (Hugging Face Space) | <https://vl-in-saudeja-dev.hf.space> (uso interno, para validar antes de `main`) |
-
-O Space publica só a interface Streamlit (porta 7860). A API FastAPI roda no mesmo container, mas não fica exposta publicamente. A visão **Paciente** é aberta; a visão **Funcionário** exige uma conta criada pelo administrador (ver [Criar conta de funcionário](#criar-conta-de-funcionário)).
-
-### Painéis públicos
-
-Os seis painéis de observabilidade do Grafana Cloud estão publicados por link, só para leitura e sem login:
-
-| Painel | O que mostra | Período padrão |
+| Agendamento do paciente | Celular, tema escuro | Acesso da equipe |
 |---|---|---|
-| [Visão geral (SLO)](https://minilasagna354.grafana.net/public-dashboards/4fa820057a864553b9954a5777ea44d6) | Último job D-2 com sucesso, agendamentos deixados para trás, cobertura da explicação, disponibilidade medida pela sonda, disparos e taxa de disparo, custo de SMS projetado | 30 dias |
-| [Job D-2](https://minilasagna354.grafana.net/public-dashboards/b01849b776db4343af2c00c99cf4e166) | Última execução, duração da fila, agendamentos por resultado, execuções e falhas por dia, log do job | 30 dias |
-| [Inferência ML](https://minilasagna354.grafana.net/public-dashboards/38561056c61249c8b3069d015c57b244) | Latência da predição (p50, p95, p99), distribuição da probabilidade, predições e cobertura da explicação por modelo, dado fora do domínio do treino | 30 dias |
-| [Mensageria (Infobip)](https://minilasagna354.grafana.net/public-dashboards/e4544a72eadc44b5940136fe1a46ebda) | Disparos e taxa de disparo, status do envio, latência da chamada à Infobip | 30 dias |
-| [Interface (Streamlit)](https://minilasagna354.grafana.net/public-dashboards/3bb196558d9444f4a0747ce8203b70b2) | Ações por minuto, taxa de erro, latência das ações, erros por rota, log da interface | 24 horas |
-| [Custo de SMS](https://minilasagna354.grafana.net/public-dashboards/9d56d7fc7cd84b0990b09146e6102882) | SMS no mês (US$ e R$), projeção contra o orçamento, infraestrutura, envios cobrados por mês | 90 dias |
+| ![Formulário de cadastro e agendamento com data, nome, CPF, telefone, especialidade, horário e a autorização opcional de uso no treino](docs/screenshots/paciente-formulario.png) | ![Tela de ciência da Política de privacidade e dos Termos de uso no celular, em tema escuro](docs/screenshots/paciente-celular-escuro.png) | ![Tela de login da área da equipe, com e-mail e senha](docs/screenshots/equipe-login.png) |
 
-O link só executa as consultas salvas no painel: quem visita não consegue consultar outra coisa nas fontes de dados. Os painéis mostram agregados e logs que já passaram pelo filtro de dados pessoais ([Alertas](#alertas)). Na visão pública, o painel "Traces de uma execução" do Job D-2 fica vazio, porque o compartilhamento externo da Grafana não suporta o Tempo; os traces ficam só para quem tem acesso ao stack.
+Antes de qualquer campo, o paciente declara ciência da Política de privacidade e dos Termos de uso; o formulário só é montado depois disso. A área da equipe (`/equipe`) tem as abas "Fila do dia", "Pedidos do titular" e "Time técnico".
 
 ## Arquitetura
 
-Diagramas C4 (níveis 1 e 2) em [`docs/architecture.md`](docs/architecture.md#2-high-level-system-diagram), em Mermaid e em PNG editável no draw.io ([C1](docs/diagrams/SaudeJa-C1.drawio.png), [C2](docs/diagrams/SaudeJa-C2.drawio.png)). Decisões e alternativas descartadas em [`docs/adr/`](docs/adr/).
+![Diagrama C4 de contexto do SaúdeJá: paciente e funcionário usam o sistema; Infobip envia o SMS; Grafana Cloud e Healthchecks.io avisam a mantenedora](docs/diagrams/SaudeJa-C1.drawio.png)
+
+Diagramas C4 de contexto e de containers, com a descrição de cada fluxo, em [`docs/architecture.md`](docs/architecture.md#2-high-level-system-diagram) (PNG editável no draw.io: [C1](docs/diagrams/SaudeJa-C1.drawio.png), [C2](docs/diagrams/SaudeJa-C2.drawio.png)). As decisões e alternativas descartadas estão em [`docs/adr/`](docs/adr/).
 
 ### Fluxo do produto
 
 ```mermaid
 flowchart LR
-    P[Paciente] -->|cadastro e agendamento| UI[Interface Streamlit]
+    P[Paciente] -->|cadastro e agendamento| UI[Interface NiceGUI]
     F[Funcionário] -->|fila do dia, predição, SHAP| UI
     UI <--> DB[(Supabase / Postgres)]
     DB -.->|gatilho das 08h17| JOB
@@ -100,126 +75,72 @@ flowchart LR
 ```
 
 1. O paciente se cadastra e agenda a consulta pela interface. Os dados vão para o Supabase.
-2. Todo dia às 08h17 (horário de São Paulo), o Supabase de produção dispara o job D-2 no GitHub Actions (`pg_cron`). O agendamento do próprio GitHub continua como reserva: num repositório fork, ele chegava de 3 a 9 horas atrasado. O job busca os agendamentos de amanhã até daqui a dois dias ainda sem predição, calcula a probabilidade de no-show e grava o resultado com a explicação SHAP. Rodar duas vezes no mesmo dia não manda SMS em dobro.
-3. Pacientes acima do threshold (`decision.threshold` em [`params.yaml`](params.yaml)) recebem SMS de confirmação via Infobip, só com data e hora da consulta. Toda decisão, enviada ou não, fica registrada para auditoria por 90 dias.
-4. O funcionário da clínica consulta a "Fila do dia", ordenada pelo risco da avaliação mais recente, com a explicação de cada paciente.
+2. Todo dia às 08h17 (horário de São Paulo), o Supabase dispara o job D-2 no GitHub Actions (`pg_cron`); o cron do próprio GitHub fica de reserva. O job busca os agendamentos dos próximos dois dias ainda sem predição, calcula a probabilidade de no-show e grava o resultado com a explicação SHAP. Rodar duas vezes no mesmo dia não manda SMS em dobro.
+3. Pacientes acima do threshold (`decision.threshold` em [`params.yaml`](params.yaml)) recebem SMS via Infobip, só com data e hora da consulta. Toda decisão, enviada ou não, fica registrada para auditoria por 90 dias.
+4. A equipe consulta a "Fila do dia", ordenada pelo risco da avaliação mais recente, com a explicação de cada paciente.
 
 ### Componentes
 
 | Componente | Onde está | Função |
 |---|---|---|
-| Interface | [`src/ui/`](src/ui/) | Streamlit com visão Paciente (autoagendamento) e Funcionário (login via Supabase Auth), com as abas "Fila do dia", "Pedidos do titular" e "Time técnico". A fila de cada data fica em cache por 60 s e é invalidada quando a própria tela a altera. A lógica fica em `logic.py`, testável sem o Streamlit |
-| API de predição | [`src/api/`](src/api/) | FastAPI com `/health` e `/predict` (probabilidade + explicação SHAP) |
+| Interface | [`src/web/`](src/web/), [`src/ui/logic.py`](src/ui/logic.py) | NiceGUI na porta 7860: paciente em `/`, Política e Termos em `/privacidade` e `/termos`, equipe em `/equipe` (login via Supabase Auth). A regra de negócio fica em `logic.py`, testável sem framework de interface ([ADR-013](docs/adr/adr-013-interface-nicegui.md)) |
+| API de predição | [`src/api/`](src/api/) | FastAPI com `/health` e `/predict` (probabilidade + explicação SHAP), para integrações. Não é exposta no Space |
 | Inferência | [`src/inference.py`](src/inference.py), [`src/explain.py`](src/explain.py) | Núcleo de predição e explicabilidade, compartilhado por interface, API e job |
 | Contrato de features | [`src/contrato_features.py`](src/contrato_features.py) | Barra dado fora da regra de negócio (quarentena) e marca dado fora do domínio do treino |
-| Job D-2 | [`src/jobs/inferencia_diaria.py`](src/jobs/inferencia_diaria.py) | Predição em lote e disparo de lembretes. Roda no GitHub Actions, disparado às 08h17 pelo Supabase |
-| Mensageria | [`src/messaging/`](src/messaging/) | `StubMessagingClient` (padrão, sem rede) ou `InfobipClient` (SMS real). Conta os segmentos de cada SMS, que é o que a Infobip cobra |
-| Banco | [`src/db/`](src/db/), [`supabase/migrations/`](supabase/migrations/) | Supabase na região `sa-east-1`: banco da clínica (`public`), base de treino (`treino`, só por RPC) e agregados para o Grafana (`observabilidade`). RLS habilitado; só o backend acessa, com a chave secreta |
-| LGPD | [`src/id_paciente.py`](src/id_paciente.py), [`src/pseudonimo.py`](src/pseudonimo.py), [`src/consentimento.py`](src/consentimento.py), [`src/lgpd_purga.py`](src/lgpd_purga.py), [`src/documentos_legais.py`](src/documentos_legais.py) | Identificador do paciente com HMAC, pseudônimos da base de treino, regras do consentimento, versões da política e dos termos aceitas no agendamento e purga diária (pedidos do titular e retenção) |
-| Observabilidade | [`src/observabilidade.py`](src/observabilidade.py), [`src/alerta_observabilidade.py`](src/alerta_observabilidade.py), [`src/telemetria.py`](src/telemetria.py), [`infra/grafana/`](infra/grafana/) | Latência, erros e execuções do job na tabela `eventos_app`, exibidos na aba "Time técnico → Observabilidade" e conferidos uma vez por dia pelo alerta. Logs, métricas e traces vão também para o Grafana Cloud por OpenTelemetry, sem dado pessoal. Regras de alerta, rotas e os seis painéis do Grafana ficam como código e são aplicados por [`scripts/grafana_provisionar.py`](scripts/grafana_provisionar.py) |
-| Pipeline de treino | [`dvc.yaml`](dvc.yaml), [`src/`](src/) | DVC + MLflow, cada stage em container Docker |
+| Job D-2 | [`src/jobs/inferencia_diaria.py`](src/jobs/inferencia_diaria.py) | Predição em lote e disparo de lembretes |
+| Mensageria | [`src/messaging/`](src/messaging/) | `StubMessagingClient` (padrão, sem rede) ou `InfobipClient` (SMS real) |
+| Banco | [`src/db/`](src/db/), [`supabase/migrations/`](supabase/migrations/) | Supabase em São Paulo: banco da clínica (`public`), base de treino (`treino`, só por RPC) e agregados para o Grafana (`observabilidade`). RLS em todas as tabelas |
+| LGPD | [`src/id_paciente.py`](src/id_paciente.py), [`src/pseudonimo.py`](src/pseudonimo.py), [`src/consentimento.py`](src/consentimento.py), [`src/lgpd_purga.py`](src/lgpd_purga.py) | Identificador do paciente com HMAC, pseudônimos da base de treino, consentimento e purga diária |
+| Observabilidade | [`src/observabilidade.py`](src/observabilidade.py), [`src/telemetria.py`](src/telemetria.py), [`infra/grafana/`](infra/grafana/) | Eventos em `eventos_app` e telemetria OpenTelemetry para o Grafana Cloud; alertas e painéis como código |
+| Pipeline de treino | [`dvc.yaml`](dvc.yaml) | DVC + MLflow: `validate_data` → `preprocess` → `train` (SMOTE-NC só no fold de treino + LightGBM) → `validate`, cada stage em container Docker |
 
-A interface chama o modelo **em processo**, sem passar pela API (`PREDICT_BACKEND=processo`, [ADR-005](docs/adr/adr-005-integracoes-implicitas.md)). Use `PREDICT_BACKEND=api` para exercitar a API a partir da interface.
+A interface chama o modelo **em processo**, sem passar pela API (`PREDICT_BACKEND=processo`, [ADR-005](docs/adr/adr-005-integracoes-implicitas.md)).
 
-### Pipeline de treino
+### Ambientes e CI/CD
 
-Quatro stages no [`dvc.yaml`](dvc.yaml), cada um em container próprio a partir da imagem do [`dockerfile`](dockerfile):
-
-| Stage | Script | O que faz |
+| Ambiente | Branch | Endereço |
 |---|---|---|
-| `validate_data` | `src/validate_data.py` | Barra o dataset antes do treino: schema, regra de negócio e taxa de positivos |
-| `preprocess` | `src/preprocess.py` | Feature engineering e split treino/teste estratificado |
-| `train` | `src/train.py` | SMOTE-NC só no fold de treino ([ADR-003](docs/adr/adr-003-SMOTE-NC.md)) e LightGBM. Registra a run no MLflow |
-| `validate` | `src/validate.py` | Métricas no fold de teste isolado, logadas na mesma run do MLflow |
+| Produção | `main` | <https://vl-in-saudeja-prod.hf.space> |
+| Desenvolvimento | `dev` | <https://vl-in-saudeja-dev.hf.space> (uso interno) |
 
-O dataset e o `data/model.pkl` são versionados pelo DVC num container privado do Azure Blob Storage, na região Brazil South (ver [Dados pessoais e LGPD](#dados-pessoais-e-lgpd)). O histórico de métricas fica no MLflow; o do modelo em produção, em [`data/champion_metrics.json`](data/champion_metrics.json).
-
-### CI/CD e ciclo de vida do modelo
+Cada ambiente tem Space, projeto Supabase e secrets próprios. O Space publica só a interface (porta 7860); a API roda no mesmo container, sem exposição pública.
 
 | Workflow | Gatilho | Função |
 |---|---|---|
-| `ci.yml` | PR para `dev`/`main` | `ruff`, `mypy`, `pytest`, build e smoke da imagem de deploy, testes de integração; em PR para `main`, versão SemVer nova no CHANGELOG |
-| `deploy.yml` | push em `dev` ou `main` | CI, verificação do modelo campeão, `supabase db push` e sync para o Space do ambiente; em `main`, aplica os alertas e painéis do Grafana e cria a tag `vX.Y.Z` e a Release |
-| `job_d2.yml` | diário, 08h17 (gatilho do Supabase; cron do GitHub de reserva) | Job de inferência D-2. Em dev, só por disparo manual a partir do branch `dev`, com SMS em stub |
+| `ci.yml` | PR para `dev`/`main` | `ruff`, `mypy`, `pytest`, build e smoke da imagem, testes de integração; em PR para `main`, versão nova no CHANGELOG |
+| `deploy.yml` | push em `dev` ou `main` | Confere o modelo campeão, aplica as migrations e sincroniza o Space; em `main`, cria a tag `vX.Y.Z` e a Release |
+| `job_d2.yml` | diário, 08h17 | Inferência D-2 e lembretes |
 | `retrain.yml` | dia 1 de cada mês | Re-treino com gate de promoção; abre PR do modelo desafiante |
-| `canario.yml` | diário, 09h47 | Avalia o modelo canário (20% da fila) e abre PR de promoção ou reversão ([ADR-008](docs/adr/adr-008-canario-do-modelo.md)) |
-| `alerta_observabilidade.yml` | diário, 10h17 | Lê as últimas 24h de `eventos_app` e falha quando um limite do SLO é violado |
-| `lgpd.yml` | diário, 10h37 | Purga LGPD: pedidos do titular, eliminações confirmadas pela clínica e retenção de 90 dias da base de treino e do remote do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md)) |
-| `grafana.yml` | fim do deploy em `main`; manual | Aplica regras de alerta, rotas e painéis do Grafana (`acao=aplicar`) ou lista o que chegou ao stack (`acao=conferir`). Em dev, cria cópias de verificação que só notificam o contact point de dev |
+| `canario.yml` | diário, 09h47 | Avalia o canário e abre PR de promoção ou reversão ([ADR-008](docs/adr/adr-008-canario-do-modelo.md)) |
+| `alerta_observabilidade.yml` | diário, 10h17 | Falha quando um limite do SLO é violado nas últimas 24h |
+| `lgpd.yml` | diário, 10h37 | Purga LGPD: pedidos do titular e retenção de 90 dias ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md)) |
+| `grafana.yml` | fim do deploy em `main`; manual | Aplica regras de alerta e painéis do Grafana |
 | `dependency-review.yml` | PR | Bloqueia dependência vulnerável |
 
-Há dois ambientes, cada um com Space, projeto Supabase e secrets próprios no *environment* do GitHub: `dev`, alimentado pelo branch `dev`, e `production`, alimentado por `main`. Cada deploy de produção vira uma release SemVer a partir do topo do [CHANGELOG](docs/logs/CHANGELOG.md) (detalhes em "Ambientes e releases", [architecture.md §6](docs/architecture.md#6-deployment--infrastructure)).
+Só o modelo campeão vai para produção: deploy e job D-2 conferem o hash do `model.pkl` e o threshold contra `data/champion_metrics.json`.
 
-Só o modelo campeão vai para produção: deploy e job D-2 conferem o hash do `model.pkl` e o threshold contra `data/champion_metrics.json`. O deploy envia ao Space apenas o necessário para a imagem (código, `params.yaml` e modelo), nunca o dataset nem a configuração do DVC.
+## Stack
 
-## Dados pessoais e LGPD
-
-> Situação: **em adequação e sem validação jurídica.** A análise completa (inventário, bases legais, retenção, transferência internacional, riscos) está em [`docs/LGPD/LGPD.md`](docs/LGPD/LGPD.md).
-
-A SaúdeJá é fictícia e a semente do dataset é sintética, mas o sistema é desenhado e documentado como se todo dado fosse real: especialidade, status do agendamento e histórico de faltas revelam informação de saúde e são tratados como **dados sensíveis**.
-
-Documentos publicados na versão 1.0, vigentes a partir de 18/10/2026: [Política de privacidade](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [Termos de uso](docs/LGPD/TERMOS-DE-USO.md).
-
-### Papéis
-
-| Tratamento | Controladora | Operadora |
+| Camada | Tecnologia | Por quê |
 |---|---|---|
-| Cadastro, agendamento, predição, lembrete e fila do dia | Clínica-cliente | SaúdeJá |
-| Base de treino e re-treino do modelo compartilhado entre clínicas | SaúdeJá | — |
-| Contas de login dos funcionários | SaúdeJá | — |
+| Linguagem | Python 3.10 | [ADR-001](docs/adr/adr-001-stack.md) |
+| Modelo | LightGBM 4.5, imbalanced-learn (SMOTE-NC), scikit-learn | [ADR-003](docs/adr/adr-003-SMOTE-NC.md) |
+| Explicabilidade | SHAP | Explicação por paciente na fila e na API |
+| Versionamento de dados e experimentos | DVC (remote no Azure Blob Storage, Brazil South), MLflow | [ADR-002](docs/adr/adr-002-versionamento.md) |
+| Interface | NiceGUI 3.2 | [ADR-013](docs/adr/adr-013-interface-nicegui.md) |
+| API | FastAPI + Uvicorn | [ADR-005](docs/adr/adr-005-integracoes-implicitas.md) |
+| Banco e autenticação | Supabase (Postgres, Auth, `pg_cron`) | [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
+| SMS | Infobip | Processamento no Brasil |
+| Hospedagem | Hugging Face Spaces (Docker) | |
+| CI/CD e jobs agendados | GitHub Actions | |
+| Observabilidade | OpenTelemetry, Grafana Cloud (Loki, Prometheus, Tempo, Synthetic Monitoring), Healthchecks.io | [ADR-006](docs/adr/adr-006-observabilidade.md), [ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md) |
+| Qualidade | ruff, mypy, pytest | |
 
-Pedidos de paciente chegam pela clínica, na aba "Pedidos do titular". Os pedidos sobre os dados de treino também podem ir direto à SaúdeJá. A SaúdeJá não apaga cadastro nem agendamento por iniciativa própria.
+As versões exatas estão em [`requirements/`](requirements/).
 
-**O agendamento não depende de consentimento** ([ADR-010](docs/adr/adr-010-base-de-treino-separada.md)). Antes do cadastro, o paciente marca que está ciente da Política de privacidade e dos Termos de uso, abertos por link. A única autorização opcional é a do uso dos desfechos no treino: quem autoriza vai também para a base de treino; quem recusa é agendado e lembrado do mesmo jeito.
+## Como rodar
 
-A clínica só é controladora se aprovar o que a SaúdeJá propõe no contrato do SaaS: os dados que o modelo usa, o critério do lembrete, o texto do SMS e a retenção de 90 dias. Pela ANPD, é controlador quem decide esses elementos essenciais, qualquer que seja o nome que o contrato dá às partes ([`LGPD.md` §1](docs/LGPD/LGPD.md#1-papéis-no-tratamento-de-dados)).
-
-### Onde os dados ficam
-
-| Destino | Dados | Região |
-|---|---|---|
-| Supabase (banco e login) | Todos os dados de paciente e as contas de funcionário. A base de treino fica num schema separado, sem nome, telefone, CPF nem data de nascimento, com pseudônimo HMAC | Brasil (São Paulo) |
-| Hugging Face Space (aplicação) | Tudo o que a tela recebe ou exibe, inclusive nome, telefone e o CPF antes de virar identificador | Estados Unidos |
-| Runner do GitHub Actions (job D-2, re-treino e purga) | Dados da consulta e telefone; no re-treino, só a base de treino, de quem autorizou. Nunca nome nem CPF | Fora do Brasil |
-| Azure Blob Storage (remote do DVC) | Dataset de treino pseudonimizado, sem nome, telefone nem CPF, e o `model.pkl` | Brasil (Brazil South), desde 09/10/2026 |
-| Infobip (SMS) | Telefone, data e hora da consulta | Brasil |
-
-**Transferência internacional: cláusulas-padrão da ANPD** (art. 33, II, b). O processamento no Hugging Face e no GitHub Actions, tanto dos dados da clínica quanto da base de treino, se apoia nas cláusulas-padrão aprovadas pela ANPD, adotadas sem alteração num termo aditivo ao acordo de tratamento de dados (DPA) de cada provedor. Cada destino tem a hipótese legal do próprio tratamento (art. 7º ou 11) e esse mecanismo. A Política de privacidade traz as informações que o art. 17 do Regulamento de Transferência Internacional exige. O consentimento do treino continua sendo a base legal do treino, não o mecanismo da transferência. Supabase, remote do DVC e Infobip processam no Brasil, sem transferência ([`LGPD.md` §4.2](docs/LGPD/LGPD.md#42-mecanismo-adotado)).
-
-O mecanismo parte de uma **premissa de operação**: contas pagas, com DPA e aditivo das cláusulas-padrão assinados, e contrato do SaaS em que a clínica aprova os elementos essenciais, a política de privacidade, os Termos de uso e o procedimento de revisão. As contas do protótipo (GitHub Free, Hugging Face Pro, Azure for Students e teste gratuito da Infobip) não têm esse aditivo. Com dados sintéticos, nenhum titular real é afetado.
-
-### Proteções implementadas
-
-- **CPF não é gravado**: a tela converte o CPF num identificador HMAC, com chave secreta guardada fora do banco, antes de chegar a ele. O sha256 sem chave, usado até a v2.4.0, se revertia em CPF por força bruta ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)). As linhas antigas foram migradas em dev e em produção em 18/10/2026.
-- **Nome só na fila do dia**: não vai para log, API, dataset de treino, SMS nem LLM, e cada uma dessas saídas tem um teste ([ADR-007](docs/adr/adr-007-nome-do-paciente.md)).
-- **Log sem dado pessoal**: filtro de redação em todos os handlers do processo, mais uma guarda estática sobre o código ([`src/logging_config.py`](src/logging_config.py)). O mesmo filtro vale para o que é enviado ao Grafana Cloud.
-- **Consultas ao Supabase sem dado pessoal na URL**: um teste barra filtros por CPF, telefone, nome ou data de nascimento, porque a URL fica no log do provedor.
-- **SMS sem especialidade**: o lembrete só informa data e hora. Por isso ele não traz dado de saúde e faz parte do atendimento contratado com a clínica, sem pedir consentimento; o consentimento fica só para o uso dos desfechos no treino do modelo.
-- **Base de treino separada e fechada**: só recebe a consulta de quem consentiu (o banco recusa a linha sem consentimento vigente), só é acessada por funções do banco, e identifica titular e consulta por HMAC com chave secreta ([ADR-010](docs/adr/adr-010-base-de-treino-separada.md)). O re-treino lê só ela.
-- **Purga automática** (`.github/workflows/lgpd.yml`): executa os pedidos de eliminação e revogação, inclusive nas versões do dataset no remote do DVC, e apaga as versões com mais de 90 dias, com uma credencial de exclusão que só esse workflow tem ([`docs/LGPD/PROCEDIMENTO-ELIMINACAO.md`](docs/LGPD/PROCEDIMENTO-ELIMINACAO.md)).
-- **Retenção automática**: predições, explicações e registros de lembrete são apagados em 90 dias, pelo job diário.
-- **Cópias com a mesma retenção**: o banco não tem backup; versões apagadas do remote do DVC ficam 1 dia no soft delete; cópias locais do DVC são apagadas por [`scripts/purgar_dvc_local.py`](scripts/purgar_dvc_local.py) ([`LGPD.md` §5.1](docs/LGPD/LGPD.md)).
-- **Acesso**: RLS em todas as tabelas (só o backend lê); visão Funcionário com login individual e sessão de 30 minutos.
-
-### Direitos do titular e revisão da decisão automatizada
-
-A única decisão automatizada é enviar ou não o lembrete. O paciente pede explicação ou revisão à clínica, que examina a decisão com a explicação SHAP da fila do dia e, se precisar, pede apoio técnico à SaúdeJá. O roteiro aparece na própria tela "Fila do dia" e está detalhado em [`docs/LGPD/PROCEDIMENTO-REVISAO.md`](docs/LGPD/PROCEDIMENTO-REVISAO.md).
-
-### Pendências
-
-| Pendência | Onde está decidido |
-|---|---|
-| Registro da oposição ao lembrete (o lembrete não depende de consentimento, mas o paciente pode pedir à clínica para não receber SMS) | [`LGPD.md` §9.4](docs/LGPD/LGPD.md) |
-| Validação jurídica da política de privacidade e dos Termos de uso, da caixa do treino como consentimento específico e destacado e da prova de 365 dias | [`LGPD.md` §9 e §9.5](docs/LGPD/LGPD.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md) |
-| Grafana Labs na política de privacidade (já é operadora no `LGPD.md`, com telemetria em São Paulo) e análise do acesso remoto do suporte dela a partir do exterior | [`LGPD.md` §4 e §9.6](docs/LGPD/LGPD.md), [Roadmap](#roadmap) |
-| Banco sem backup (plano gratuito do Supabase) | [`LGPD.md` §5](docs/LGPD/LGPD.md) |
-| Guarda no repositório contra mudança de feature, retenção ou texto do lembrete sem nova aprovação da clínica (o contrato do SaaS é premissa de operação) | [`LGPD.md` §1 (Quadro 1A) e §9.3](docs/LGPD/LGPD.md) |
-
-Metas de serviço relacionadas: [`docs/SLO.md`](docs/SLO.md) (§6, zero dado pessoal em log) e [`docs/SLA.md`](docs/SLA.md) (§6, comunicação de incidente).
-
-## Instalação
-
-Os comandos abaixo usam PowerShell e partem da raiz do repositório.
+Os comandos usam PowerShell e partem da raiz do repositório.
 
 ### Pré-requisitos
 
@@ -228,7 +149,7 @@ Os comandos abaixo usam PowerShell e partem da raiz do repositório.
 - [Supabase CLI](https://supabase.com/docs/guides/cli) (banco local e testes de integração)
 - Acesso ao remote do DVC (URL e connection string do Azure, fornecidas pela mantenedora)
 
-### 1. Clonar e instalar as dependências
+### 1. Clonar e instalar
 
 ```powershell
 git clone https://github.com/VL-in/ai-factory-saudeja.git
@@ -239,11 +160,11 @@ pip install -r requirements/dev.txt
 Copy-Item .env.example .env
 ```
 
-`requirements/dev.txt` reúne todas as camadas (treino, API, interface, DVC, lint). As imagens Docker instalam só o que usam (`requirements/{train,api,ui}.txt`). Preencha o `.env` conforme os comentários de [`.env.example`](.env.example).
+`requirements/dev.txt` reúne todas as camadas (treino, API, interface, DVC, lint); as imagens Docker instalam só o que usam. Preencha o `.env` conforme os comentários de [`.env.example`](.env.example).
 
 ### 2. Baixar dataset e modelo (DVC)
 
-A URL do remote não é versionada. Configure-a localmente uma vez e use a **SAS de leitura** como credencial, nunca a chave da conta (ver [`.env.example`](.env.example)). O `dvc` lê a credencial do ambiente da sessão, não do `.env`:
+A URL do remote não é versionada. Configure-a localmente uma vez e use a **SAS de leitura** como credencial, nunca a chave da conta. O `dvc` lê a credencial do ambiente da sessão, não do `.env`:
 
 ```powershell
 dvc remote add --local -f azure $env:DVC_REMOTE_URL
@@ -252,37 +173,26 @@ Get-Content .env | Where-Object { $_ -match '^AZURE_STORAGE_CONNECTION_STRING=' 
 dvc pull
 ```
 
-| Erro | Causa |
-|---|---|
-| `azure is supported, but requires 'dvc-azure'` | `requirements/dvc.txt` não instalado no venv |
-| remote `azure` não existe | faltou o `dvc remote add --local` |
-| `requires either account_name or connection_string` | `AZURE_STORAGE_CONNECTION_STRING` não definida na sessão |
-| `AuthenticationFailed`, `sp is mandatory` | a variável recebeu a "URL do SAS" do portal; use o formato `BlobEndpoint=https://<conta>.blob.core.windows.net/;SharedAccessSignature=sp=...` |
-| `AuthenticationFailed`, `Signature did not match` | a SAS foi gerada em outra conta, ou a chave que a assinou foi rotacionada |
-
-O dataset de treino tem desfechos reais de pacientes. A cópia local segue a retenção do remote ([`LGPD.md` §5.1](docs/LGPD/LGPD.md)): rode a purga local depois de cada `git pull` e pelo menos uma vez por semana. Ela reduz o cache ao que o workspace usa e apaga do workspace a versão que o remote já apagou.
-
-```powershell
-python scripts/purgar_dvc_local.py --dry-run   # mostra o que sairia
-python scripts/purgar_dvc_local.py
-```
-
-Não faça `supabase db dump` do banco de produção: o dump ficaria fora de qualquer purga.
+A cópia local do dataset segue a retenção do remote ([`LGPD.md` §5.1](docs/LGPD/LGPD.md)): rode `python scripts/purgar_dvc_local.py` depois de cada `git pull` e pelo menos uma vez por semana (`--dry-run` mostra o que sairia).
 
 ### 3. Preparar o banco
 
-Para desenvolver contra um banco local:
+Banco local:
 
 ```powershell
 supabase start    # sobe Postgres + Studio via Docker e aplica supabase/migrations/
 supabase status   # mostra a URL e a chave secreta para o .env
 ```
 
-Para usar o projeto na nuvem, coloque `SUPABASE_URL` e `SUPABASE_SECRET_KEY` (formato `sb_secret_...`, nunca a `publishable`) no `.env`. O cadastro precisa de `PACIENTE_CHAVE_IDENTIFICADOR` ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)); sem ela, o cadastro falha. Para a etapa de treino do agendamento rodar, defina também `TREINO_CHAVE_PSEUDONIMO`, uma chave diferente da anterior; sem ela, o agendamento funciona e só a base de treino deixa de receber dados. Ao criar uma migration, aplique nos dois bancos: `supabase db reset` (local) e `supabase db push` (remoto).
+No `.env`, defina:
 
-## Uso
+| Variável | Obrigatória | Para quê |
+|---|---|---|
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | sim | Acesso ao banco. A chave é a `sb_secret_...`, nunca a `publishable` |
+| `PACIENTE_CHAVE_IDENTIFICADOR` | sim, para cadastrar | Chave do HMAC do CPF ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)) |
+| `TREINO_CHAVE_PSEUDONIMO` | não | Pseudônimo da base de treino; diferente da anterior. Sem ela, o agendamento funciona e só a base de treino deixa de receber dados |
 
-### Subir a aplicação
+### 4. Subir a aplicação
 
 Com Docker, do mesmo jeito que roda em produção:
 
@@ -290,30 +200,39 @@ Com Docker, do mesmo jeito que roda em produção:
 docker compose up -d app
 ```
 
-| Endereço | Serviço |
-|---|---|
-| http://localhost:7860 | Interface Streamlit |
-| http://localhost:8000/health | Status da API e versão do modelo |
-| http://localhost:8000/docs | Documentação OpenAPI |
-
-A imagem empacota o `data/model.pkl`: o build falha se o `dvc pull` não tiver rodado. Se o modelo mudar, rebuilde.
-
 Sem Docker, em dois terminais:
 
 ```powershell
-python -m uvicorn api.main:app --reload --app-dir src   # API
-streamlit run src/ui/app.py                             # interface
+python -m uvicorn api.main:app --reload --app-dir src                        # API
+python -m uvicorn web.main:criar_app --factory --app-dir src --port 7860     # interface
 ```
 
-Variáveis principais:
+| Endereço | Serviço |
+|---|---|
+| <http://localhost:7860> | Interface (tela do paciente; a equipe entra em `/equipe`) |
+| <http://localhost:7860/healthz> | Saúde da interface (`ok`) |
+| <http://localhost:8000/health> | Status da API e versão do modelo |
+| <http://localhost:8000/docs> | Documentação OpenAPI |
+
+Variáveis de comportamento:
 
 | Variável | Efeito |
 |---|---|
-| `APP_ENV` | `dev` exibe "Time técnico → Dev: disparo manual", que executa o job D-2 pela interface e mostra o diagnóstico (ambiente, modo de predição, status do banco). Sem a variável, vale `prod` |
+| `APP_ENV` | `dev` exibe "Time técnico → Dev: disparo manual", que roda o job D-2 pela interface e mostra o diagnóstico. Sem a variável, vale `prod` |
 | `PREDICT_BACKEND` | `processo` (padrão) ou `api` |
 | `MESSAGING_PROVIDER` | `stub` (padrão, não envia nada) ou `infobip` (SMS real) |
-| `TIMEZONE_CLINICA` | Fuso usado em datas e na fila do dia (padrão `America/Sao_Paulo`) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Liga o envio de logs, métricas e traces ao Grafana Cloud. Sem ela, nada sai do processo |
+| `TIMEZONE_CLINICA` | Fuso das datas e da fila do dia (padrão `America/Sao_Paulo`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Liga o envio de telemetria ao Grafana Cloud. Sem ela, nada sai do processo |
+
+### 5. Criar uma conta de funcionário
+
+Não há cadastro aberto. O administrador cria cada conta no projeto Supabase para onde o `.env` aponta (a senha é digitada sem eco):
+
+```powershell
+python scripts/criar_funcionario.py recepcao@clinica.com.br
+```
+
+No projeto remoto, desligue "Allow new users to sign up" e defina "Minimum password length" como 8 em *Authentication → Sign In / Providers → Email*. O `supabase/config.toml` só vale para o banco local.
 
 ### Pedir uma predição à API
 
@@ -321,7 +240,7 @@ Variáveis principais:
 curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d "{\"idade\":45,\"sexo\":\"F\",\"especialidade\":\"cardiologia\",\"distancia_km\":5.5,\"dias_entre_agendamento_consulta\":14,\"historico_noshow\":1,\"data_hora_agendada\":\"2026-01-09T18:00:00\"}"
 ```
 
-Resposta com o modelo campeão atual (`6430cb3315da`), resumida:
+Resposta com o modelo campeão `6430cb3315da`, resumida:
 
 ```json
 {
@@ -335,21 +254,15 @@ Resposta com o modelo campeão atual (`6430cb3315da`), resumida:
     "..."
   ],
   "explicacao_texto": null,
-  "model_version": "6430cb3315da"
+  "model_version": "6430cb3315da",
+  "fora_do_dominio": false,
+  "campos_fora_do_dominio": []
 }
 ```
 
-A probabilidade fica abaixo do threshold, então esse paciente não receberia lembrete. A explicação traz a contribuição SHAP de cada feature, ordenada pelo valor absoluto: positiva puxa o risco para cima, negativa para baixo. `explicacao_texto` está reservado para uma explicação em linguagem natural e fica `null` até ser ativado.
+A probabilidade fica abaixo do threshold, então esse paciente não receberia lembrete. Cada item da explicação é a contribuição SHAP de uma feature, ordenada pelo valor absoluto: positiva puxa o risco para cima, negativa para baixo.
 
-### Criar conta de funcionário
-
-Não há cadastro aberto. O administrador cria cada conta no projeto Supabase para onde o `.env` aponta (a senha é digitada sem eco):
-
-```powershell
-python scripts/criar_funcionario.py recepcao@clinica.com.br
-```
-
-No projeto remoto, desligue "Allow new users to sign up" e defina "Minimum password length" como 8 em *Authentication → Sign In / Providers → Email*. O `supabase/config.toml` só vale para o banco local, e `supabase config push` sobrescreveria a configuração de produção com valores locais.
+A rota aplica o mesmo contrato de features do job D-2. Um dado fora da regra de negócio (idade acima de 120, distância acima de 500 km, antecedência acima de 180 dias, horário fora da grade da clínica) volta como 422, com o campo e a regra, sem o valor. Um dado que o modelo não viu no treino é predito e marcado em `fora_do_dominio`, com os campos em `campos_fora_do_dominio`.
 
 ### Treinar o modelo
 
@@ -365,13 +278,7 @@ dvc exp show                         # compara experimentos
 | `dvc exp apply <exp>` | Trazer um experimento escolhido para o workspace |
 | `dvc repro` | Consolidar uma mudança definitiva; atualiza `dvc.lock` e `data/model.pkl` |
 
-Ao mudar o dataset, rode `dvc add data/<arquivo>` (nunca `dvc add .`). Faça commit do código junto com `dvc.lock` e o `.dvc` correspondente, e envie os artefatos com `dvc push`.
-
-Em produção, o modelo não é trocado manualmente: o `retrain.yml` treina, compara com o campeão e abre um PR. A busca de hiperparâmetros (`src/tune.py`, GridSearchCV) é exploratória e fica fora do pipeline:
-
-```powershell
-docker compose run --rm -e MLFLOW_TRACKING_URI=http://mlflow-server:5000 train src/tune.py
-```
+Ao mudar o dataset, rode `dvc add data/<arquivo>` (nunca `dvc add .`), faça commit do código junto com `dvc.lock` e o `.dvc` correspondente, e envie os artefatos com `dvc push`. Em produção, o modelo não é trocado manualmente: o `retrain.yml` treina, compara com o campeão e abre um PR ([Operação](docs/OPERACAO.md#ciclo-de-vida-do-modelo)).
 
 ### Rodar o job D-2 manualmente
 
@@ -379,48 +286,9 @@ docker compose run --rm -e MLFLOW_TRACKING_URI=http://mlflow-server:5000 train s
 python src/jobs/inferencia_diaria.py
 ```
 
-O job recusa rodar se o `data/model.pkl` local não for o campeão. Com `MESSAGING_PROVIDER=stub`, nenhum SMS é enviado.
+Com `MESSAGING_PROVIDER=stub`, nenhum SMS é enviado.
 
-## Contribuição
-
-Código e modelo chegam a produção por caminhos diferentes. Os dois terminam num merge em `main`, feito por uma pessoa.
-
-```mermaid
-flowchart TB
-    subgraph codigo[Mudança de código]
-        F[branch de trabalho] -->|PR + CI| D[dev]
-        D -->|push| DD[deploy.yml: Space e Supabase de dev]
-        D -->|PR manual + CI + versão no CHANGELOG| M[main]
-    end
-    subgraph modelo[Mudança de modelo]
-        R[retrain.yml, dia 1] -->|gate aprovou| PC[PR: abre o canário]
-        PC -->|merge| M
-        M -.->|job D-2 manda 20% da fila ao canário| C[canario.yml, diário]
-        C -->|guardrails ok| PP[PR: promove o canário]
-        C -->|guardrail violado| PR[PR: registra a reversão]
-        PP -->|merge| M
-        PR -->|merge| M
-    end
-    M -->|push| DP[deploy.yml: produção + tag vX.Y.Z]
-    M -.->|back-merge| D
-```
-
-### Mudança de código
-
-1. Abra um branch a partir de `dev` e um PR para `dev`. O `ci.yml` roda lint, tipos, testes e o smoke da imagem.
-2. O merge em `dev` dispara o `deploy.yml` para o ambiente de dev: migration no Supabase de dev e sync do Space de dev. Teste ali.
-3. Para publicar, a mantenedora abre o PR `dev` → `main`. Nada abre esse PR automaticamente. Antes do merge, renomeie `## [Não publicado]` no [CHANGELOG](docs/logs/CHANGELOG.md) para a versão nova (`## [vX.Y.Z]`). O CI do PR confere a versão.
-4. O merge em `main` dispara o deploy de produção. Com o Space no ar, o workflow cria a tag e a Release.
-
-Mudanças só em `docs/**`, no `README.md` e nos arquivos do canário não disparam deploy.
-
-Convenções:
-
-- **Commits:** `(tipo) arquivos alterados: o que mudou e por quê`, com `tipo` entre `feat`, `fix`, `perf`, `docs`, `test` e afins.
-- **CHANGELOG:** toda mudança visível para quem usa o sistema entra em `## [Não publicado]`, no formato [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
-- **ADR:** decisão de arquitetura com alternativas descartadas ganha um registro em [`docs/adr/`](docs/adr/), a partir do [modelo](docs/adr/adr-template.md).
-
-### Testes e lint
+## Testes e contribuição
 
 ```powershell
 ruff check src tests scripts   # regras em ruff.toml
@@ -429,186 +297,135 @@ pytest                         # testes unitários
 pytest -m integracao           # exige supabase start e Docker
 ```
 
-O CI roda exatamente esses comandos. Para validar os workflows: `docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:latest`.
+O CI roda exatamente esses comandos.
 
-### Mudança de modelo
+Fluxo de uma mudança de código:
 
-O re-treino e o canário rodam a partir de `main` (o agendamento do GitHub só roda no branch padrão), e os PRs deles vão direto para `main`, sem passar por `dev`:
+1. Abra um branch a partir de `dev` e um PR para `dev`. O CI roda lint, tipos, testes e o smoke da imagem.
+2. O merge em `dev` faz o deploy no ambiente de dev. Teste ali.
+3. Para publicar, abra o PR `dev` → `main` e renomeie `## [Não publicado]` no [CHANGELOG](docs/logs/CHANGELOG.md) para a versão nova (`## [vX.Y.Z]`). O CI confere a versão.
+4. O merge em `main` faz o deploy de produção e cria a tag e a Release.
 
-1. **Dia 1, `retrain.yml`.** Remonta o dataset com os desfechos registrados pela clínica, re-treina e compara com o campeão. Se o desafiante não regredir, publica o modelo no remote do DVC e abre o PR que o coloca como **canário**. O merge desse PR não redeploya o Space.
-2. **Todo dia, `job_d2.yml` + `canario.yml`.** O job manda 20% da fila (sorteada por paciente) para o canário. A avaliação diária decide entre aguardar, promover ou reverter.
-3. **Promoção.** PR que reescreve `data/champion_metrics.json`, sobe a versão PATCH e, no merge, dispara o deploy de produção.
-4. **Reversão.** Age sozinha: o job do dia seguinte já manda 100% da fila ao campeão. O PR só formaliza a decisão e impede o gate de aprovar o mesmo modelo de novo.
+Mudanças só em `docs/**` e no `README.md` não disparam deploy.
 
-Os PRs automáticos pedem revisão a `vars.REVISOR_PRS_MODELO` ou, sem ela, ao dono do repositório.
+Convenções:
 
-Depois de qualquer merge desses em `main`, traga `main` de volta para `dev` (`gh pr create --base dev --head main`). Sem isso, o próximo PR `dev` → `main` entra em conflito no CHANGELOG. O conflito se resolve mantendo as duas seções.
+- **Commits:** `(tipo) arquivos alterados: o que mudou e por quê`, com `tipo` entre `feat`, `fix`, `perf`, `docs`, `test` e afins.
+- **CHANGELOG:** toda mudança visível para quem usa o sistema entra em `## [Não publicado]`, no formato [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
+- **ADR:** decisão de arquitetura com alternativas descartadas ganha um registro em [`docs/adr/`](docs/adr/), a partir do [modelo](docs/adr/adr-template.md).
 
-## Operação
+## Troubleshooting
 
-### Onde o humano entra
+### Instalação e DVC
 
-| Quando | Quem | O que fazer | Se ninguém fizer |
-|---|---|---|---|
-| Todo dia, depois das consultas | Equipe da clínica | Registrar na "Fila do dia" quem compareceu e quem faltou | O re-treino não tem dado novo e falha (código 2). Esses desfechos são os rótulos do modelo |
-| PR `dev` → `main` | Mantenedora | Revisar, subir a versão no CHANGELOG e fazer o merge | Nada vai para produção |
-| PR do re-treino (canário) | Mantenedora | Conferir a tabela campeão × desafiante e a taxa de disparo projetada | O canário não entra |
-| PR de promoção ou reversão do canário | Mantenedora | Conferir a evidência de produção e fazer o merge | Promoção: o modelo novo não vai ao ar. Nos dois casos, o próximo re-treino falha com código 4 enquanto houver canário em `main` |
-| Workflow vermelho, ping ausente no Healthchecks ou alerta do Grafana | Mantenedora | Ler o resumo do run ou o alerta (ver [Alertas](#alertas)) | O problema continua em silêncio |
-| Antes de o token do gatilho do job D-2 vencer | Mantenedora | Gerar um token fine-grained novo (só este repositório, "Actions: Read and write") e trocá-lo no Vault do Supabase de produção com `vault.update_secret` | O job volta a depender do cron do GitHub, atrasado, e o alerta P1 "fila D-2 não processada até 13h" dispara |
-| Depois de merge do robô em `main` | Mantenedora | Back-merge `main` → `dev` | Conflito no próximo PR de release |
-
-A proteção de `main` (PR obrigatório e checks do CI) é o que torna o merge um ponto de controle. O *environment* `production` não tem revisor obrigatório, porque ele também pararia os jobs agendados todo dia esperando aprovação.
-
-### Alertas
-
-Toda falha de workflow manda e-mail pelo GitHub. Cada workflow agendado também pinga o próprio check no Healthchecks.io e manda `/fail` quando falha. Se o GitHub desativar os crons por inatividade do repositório, é a **ausência** do ping que avisa ([ADR-006](docs/adr/adr-006-observabilidade.md)).
-
-| Workflow | Check do Healthchecks | O que significa a falha |
+| Sintoma | Causa | Solução |
 |---|---|---|
-| `job_d2.yml` | `HEALTHCHECKS_JOB_D2_URL` | Pré ou pós-checagem do job: modelo que não é o campeão, contabilidade da fila divergente ou fila inteira em quarentena |
-| `canario.yml` | `HEALTHCHECKS_CANARIO_URL` | A avaliação ou a abertura do PR falhou |
-| `retrain.yml` | `HEALTHCHECKS_RETRAIN_URL` | Gate bloqueou (1), sem dado novo (2), pipeline falhou (3) ou canário em observação (4) |
-| `alerta_observabilidade.yml` | `HEALTHCHECKS_ALERTA_URL` | Limite violado nas últimas 24h (erros, cobertura de explicação, latência) ou banco ilegível |
-| `lgpd.yml` | `HEALTHCHECKS_LGPD_URL` | A purga falhou ou deixou de rodar, e pedidos do titular podem vencer o prazo de 15 dias |
+| `.venv\Scripts\Activate.ps1 cannot be loaded because running scripts is disabled` | Política de execução do PowerShell | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| `azure is supported, but requires 'dvc-azure'` | Dependências do DVC ausentes no venv | `pip install -r requirements/dvc.txt` |
+| `dvc pull` diz que o remote `azure` não existe | O remote é configurado só localmente | `dvc remote add --local -f azure $env:DVC_REMOTE_URL` |
+| `requires either account_name or connection_string` | `AZURE_STORAGE_CONNECTION_STRING` não está na sessão (o `dvc` não lê o `.env`) | Rode o bloco do [passo 2](#2-baixar-dataset-e-modelo-dvc) na mesma sessão |
+| `AuthenticationFailed`, `sp is mandatory` | A variável recebeu a "URL do SAS" do portal | Use o formato `BlobEndpoint=https://<conta>.blob.core.windows.net/;SharedAccessSignature=sp=...` |
+| `AuthenticationFailed`, `Signature did not match` | SAS gerada em outra conta, ou chave rotacionada | Peça uma SAS nova à mantenedora |
 
-Os números do dia a dia ficam na aba "Time técnico → Observabilidade" da visão Funcionário.
+### Rodar localmente
 
-A interface, a API e o job D-2 também enviam logs, métricas e traces ao Grafana Cloud por OpenTelemetry. O envio fica desligado sem `OTEL_EXPORTER_OTLP_ENDPOINT` e com `OBSERVABILIDADE_ATIVA=false`. Antes de sair do processo, o que é enviado passa pelo mesmo filtro de dados pessoais do log, e os traces perdem query string, IP e mensagem de erro. O Grafana guarda esses dados por 14 dias. Para os números de longo prazo, ele lê o Supabase pelo papel `grafana_leitura`, que só enxerga as views de totais do schema `observabilidade`: disparos e taxa de disparo, predições e cobertura da explicação, latência p50/p95/p99, envios cobrados e segmentos de SMS por mês. O preço do SMS e o orçamento ficam no bloco `custo` do [`params.yaml`](params.yaml).
-
-Os seis painéis ficam em [`infra/grafana/dashboards/`](infra/grafana/dashboards/): visão geral do SLO, interface, inferência, job D-2, mensageria e custo. Todos estão publicados por link (ver [Painéis públicos](#painéis-públicos)).
-
-As regras de alerta do Grafana ficam em [`infra/grafana/`](infra/grafana/) e são aplicadas pelo `grafana.yml` no fim de cada deploy em `main`; em produção, foram aplicadas pela primeira vez em 18/10/2026. São 17 regras, cada uma com os rótulos `severidade`, `area` e `ambiente`, e só as de produção notificam:
-
-| Criticidade | Exemplos | Notificação |
+| Sintoma | Causa | Solução |
 |---|---|---|
-| P1 (crítico) | job D-2 sem sucesso até 13h, fila inteira em quarentena, agendamento deixado sem predição e sem lembrete, dado pessoal num log do Loki, chave fora da lista permitida em `eventos_app` | contact point de plantão, repetido a cada hora até resolver |
-| P2 (alto) | erro de banco na interface, erro de predição, falha de SMS, predição sem explicação, disparos fora de ±40% da média, custo projetado acima de 80% do orçamento | e-mail, repetido a cada 24 h; com `area=modelo`, vai também à responsável pelo modelo |
-| P3 (médio) | quarentena parcial, dado fora do domínio do treino, job acima de 10 min, p95 da predição acima de 2 s, banco perto da cota gratuita | resumo às segundas, das 9h às 10h |
+| `docker compose build` falha em `COPY data/model.pkl` | A imagem empacota o modelo, que vem do DVC | Rode `dvc pull` antes do build; rebuilde sempre que o modelo mudar |
+| `supabase start` falha | Docker parado | Inicie o Docker Desktop e tente de novo |
+| `address already in use` na 7860 ou na 8000 | Outro processo (ou o container `app`) na porta | `docker compose down`, ou suba com outra `--port` |
+| A linha de partida do `uvicorn` mostra `http://<REDIGIDO>` | Esperado: o filtro de log redige qualquer endereço IP | Acesse `http://localhost:7860` ou `:8000` normalmente |
+| A tela diz "Não foi possível cadastrar agora" | Falta `PACIENTE_CHAVE_IDENTIFICADOR`, ou o banco está inacessível | Confira o `.env`; o motivo exato aparece no log do processo |
+| A tela da equipe pede para "avisar a equipe técnica" | Configuração do banco ausente ou migration não aplicada | `supabase db reset` (local) ou `supabase db push` (remoto); detalhe em "Time técnico" e no log |
+| Login da equipe recusado com credenciais certas | A conta foi criada em outro projeto Supabase | Rode `criar_funcionario.py` com o `.env` apontando para o projeto da interface |
+| A aba "Dev: disparo manual" não aparece | `APP_ENV` diferente de `dev` (sem a variável, vale `prod`) | `APP_ENV=dev` no `.env` e reinicie a interface |
+| Nada chega ao Grafana Cloud | `OTEL_EXPORTER_OTLP_ENDPOINT` vazio ou `OBSERVABILIDADE_ATIVA=false` | Preencha o endpoint e os headers conforme o `.env.example` |
+| A sessão da equipe volta ao login sozinha | Sessão expira após 30 minutos sem uso | Entre de novo |
 
-Os limites ficam nos blocos `observabilidade` e `custo` do `params.yaml`. Os contact points são criados à mão no Grafana, porque e-mails não entram no repositório. A regra de dado pessoal no Loki foi testada de ponta a ponta em dev; as demais ainda não tiveram um alerta real por nível, e até lá os canais do GitHub e do Healthchecks continuam valendo.
+### Modelo, job e deploy
 
-A disponibilidade do Space é medida de fora, pelo Synthetic Monitoring do Grafana Cloud, com uma sonda em São Paulo:
-
-| Check | URL | Intervalo | Alerta |
-|---|---|---|---|
-| `SaudeJa prod` | `https://vl-in-saudeja-prod.hf.space/_stcore/health` | 5 min | crítico (P1) com 2 falhas em 10 min, por e-mail à mantenedora; é a medida do [SLO §1.1](docs/SLO.md#11-disponibilidade-da-interface) |
-| `SaudeJa dev` | `https://vl-in-saudeja-dev.hf.space/_stcore/health` | 5 min | nenhum; só histórico, sem SLO |
-
-Os dois são checks HTTP que esperam status 2xx **e** o corpo `ok`. Exigir 2 falhas seguidas evita alerta por uma falha isolada, como a troca de container num deploy. A sonda bate em `/_stcore/health`, e não em `/health`: o Space publica só a porta do Streamlit, e nela qualquer caminho desconhecido devolve 200 com o HTML da página, mesmo com a interface quebrada. `/_stcore/health` é respondido pelo servidor do Streamlit e é o mesmo critério do smoke do deploy (`scripts/smoke_deploy.py space`). Com uma batida a cada 5 minutos o Space não fica ocioso tempo bastante para hibernar.
-
-### Rollback
-
-Escolha pelo que precisa voltar:
-
-| O que voltar | Como | Age em | Precisa de PR? |
-|---|---|---|---|
-| Canário, na hora | variável `CANARIO_DESLIGADO=true` | próximo job D-2 | não (temporário) |
-| Canário, de vez | `canario.yml` com `acao=reverter` | próximo job D-2 | sim, para registrar |
-| Campeão já promovido | restaurar os ponteiros do campeão anterior | merge do PR | sim |
-| Código ou interface | revert num branch a partir de `main` | merge do PR | sim |
-
-#### Canário (modelo em observação, ainda não promovido)
-
-1. **Desligar na hora.** Defina a variável no environment `production`. O job D-2 seguinte ignora `data/canario/` e manda 100% da fila ao campeão. O canário continua em `main`, e por isso o re-treino seguinte sai com código 4: use isto como freio enquanto decide, não como solução.
-
-   ```powershell
-   gh variable set CANARIO_DESLIGADO --env production --body "true"
-   ```
-
-2. **Reverter de vez.** Rode o `canario.yml` com um motivo. Ele grava a reversão no banco (vale já no job seguinte, com ou sem merge), registra o modelo em `data/canario_historico.json` para o gate nunca mais aprová-lo e abre o PR.
-
-   ```powershell
-   gh workflow run canario.yml -f acao=reverter -f motivo="taxa de disparo acima do esperado"
-   ```
-
-3. Faça o merge do PR de reversão. Se tiver usado o passo 1, volte a variável para vazio depois do merge (`gh variable set CANARIO_DESLIGADO --env production --body ""`).
-
-#### Campeão (modelo já promovido)
-
-Não há botão. Restaure, num PR para `main`, os três arquivos que apontam para o campeão anterior:
-
-```powershell
-git switch main; git pull
-git switch -c rollback/modelo-anterior
-# O commit que promoveu o modelo é o mais recente desta lista; o campeão
-# anterior está no pai dele (<sha>^1).
-git log --oneline --first-parent main -- data/champion_metrics.json
-git checkout <sha>^1 -- data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc
-python scripts/versao_release.py subir-patch --item "Rollback do modelo campeão para a versão anterior."
-git add data/champion_metrics.json dvc.lock data/consultas-treino.csv.dvc docs/logs/CHANGELOG.md
-git commit -m "(fix) data/champion_metrics.json, dvc.lock: rollback do modelo campeão"
-git push -u origin rollback/modelo-anterior
-gh pr create --base main
-```
-
-- O modelo antigo continua no remote do DVC por 90 dias depois de substituído: o workflow de purga ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md)) só apaga versões que deixaram de ser vigentes em `main` há mais tempo que isso. O rollback do campeão continua possível dentro dessa janela.
-- O merge dispara o deploy, que confere o hash do modelo restaurado contra o `champion_metrics.json` antes de subir o Space. O job D-2 do dia seguinte já usa o modelo restaurado.
-- O `champion_metrics.json` também guarda o threshold. Se `decision.threshold` em `params.yaml` mudou depois da promoção, restaure o valor antigo no mesmo PR, ou o deploy e o job D-2 recusam o modelo.
-- Esse caminho não registra o modelo descartado em `data/canario_historico.json`, então o gate pode aprová-lo de novo num re-treino futuro.
-- **Não use `git revert` do PR de promoção.** Ele apagaria a versão do CHANGELOG, e o deploy recusa uma versão que já tem tag. Na promoção de um canário, o revert também recriaria `data/canario/` e reativaria o modelo que acabou de ser tirado.
-
-#### Código ou interface
-
-1. Num branch a partir de `main`, reverta o commit (`git revert <sha>`, ou `git revert -m 1 <sha>` se for o merge de um PR).
-2. Se o revert desfez a seção da versão no CHANGELOG, restaure o arquivo (`git checkout HEAD~1 -- docs/logs/CHANGELOG.md`) e acrescente uma versão PATCH nova: `python scripts/versao_release.py subir-patch --item "Rollback de ..."`.
-3. Abra o PR para `main` e, depois do merge, faça o back-merge `main` → `dev`.
-
-- **Migrations não voltam com o código.** O `supabase db push` só aplica migrations novas. Se a versão revertida trouxe uma migration aditiva (coluna ou tabela nova), o código antigo convive com ela. Se a migration foi destrutiva, o caminho é uma correção para frente, não um revert.
-- O `workflow_dispatch` do `deploy.yml` não serve para voltar a uma tag antiga: fora de `main`, ele escolhe o environment `dev`. Em `main`, ele só reenvia o commit atual.
-- Este caminho foi ensaiado em `dev` no [RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md): 6 min 56 s do push do revert até o Space saudável, quase tudo de CI. Em produção, some o CI do PR e o do deploy.
-- Para conferir o que está no ar, compare o digest da árvore do Space, não o SHA do commit: o `hub-sync` cria um commit novo a cada sync, mesmo com conteúdo idêntico. Os comandos estão no RB-001.
-
-### Registros de incidente e de rollback
-
-| Tipo | Pasta | Registros |
+| Sintoma | Causa | Solução |
 |---|---|---|
-| Post-mortem | [`docs/post-mortem/`](docs/post-mortem/) | [PM-001](docs/post-mortem/PM-001.md): falhas no primeiro deploy de dev (04/10/2026, SEV-3) |
-| Relatório de rollback | [`docs/rollbacks/`](docs/rollbacks/) | [RB-001](docs/rollbacks/RB-001-ensaio-rollback-dev.md): ensaio de rollback de código em dev (05/10/2026) |
+| Job D-2 ou deploy recusa o modelo | O `model.pkl` ou o `decision.threshold` não batem com `data/champion_metrics.json` | `dvc pull` para baixar o campeão; não altere o threshold sem uma promoção |
+| Paciente agendado não aparece com risco na fila | O job ainda não rodou para a data, ou o agendamento caiu em quarentena (dado fora da regra de negócio) | Aguarde o job das 08h17 ou rode-o manualmente; a quarentena aparece no painel "Job D-2" |
+| `retrain.yml` termina com código 1, 2, 3 ou 4 | Gate bloqueou, sem dado novo, pipeline falhou ou canário em observação | Ver [Operação → Ciclo de vida do modelo](docs/OPERACAO.md#ciclo-de-vida-do-modelo) |
+| CI do PR para `main` falha na versão | `## [Não publicado]` não foi renomeado, ou a versão já tem tag | Use uma versão SemVer nova no topo do CHANGELOG |
+| PR `dev` → `main` com conflito no CHANGELOG | Faltou o back-merge depois de um PR automático em `main` | `gh pr create --base dev --head main` e mantenha as duas seções no conflito |
+| Validar workflows localmente | | `docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:latest` |
 
-Cada registro termina com uma tabela de ações. As ações em aberto também aparecem no [Roadmap](#roadmap).
+## Limitações conhecidas
 
-## Roadmap
+- **Desempenho do modelo abaixo da meta.** Recall e F1 da classe positiva ficam abaixo dos alvos do [SLO](docs/SLO.md) por limite do dataset; a exceção está documentada no SLO (§3), com decisão prevista entre recalibrar o threshold ou aceitar o gap.
+- **Dados sintéticos.** A clínica é fictícia e a semente do dataset é sintética ([`data/AVISO-DADOS-SINTETICOS.md`](data/AVISO-DADOS-SINTETICOS.md)). O desempenho em dados reais é desconhecido.
+- **LGPD sem validação jurídica.** Política de privacidade, Termos de uso e a caixa de consentimento do treino ainda não foram revisados por profissional do direito.
+- **Premissa de operação não cumprida no protótipo.** A transferência internacional se apoia em contas pagas com as cláusulas-padrão da ANPD assinadas; as contas atuais (planos gratuitos, estudante e teste) não têm esse aditivo.
+- **Infraestrutura em planos gratuitos.** O banco não tem backup (plano gratuito do Supabase), e o Space roda nos Estados Unidos.
+- **Alertas parcialmente testados.** Das 17 regras do Grafana, só a de dado pessoal no Loki teve teste de ponta a ponta (em dev).
+- **Funcionalidades pendentes.** O registro da oposição ao lembrete (paciente que pede para não receber SMS) não está implementado, e `explicacao_texto` da API fica `null` até a explicação em linguagem natural ser ativada.
 
-- [x] Etapa 1: adoção do protótipo
-- [x] Etapa 2: escolha da stack (ADR-001)
-- [x] Etapa 3: arquitetura C4 + ADR-002 + repositório
-- [x] Etapa 4: produto deployável — inferência, SHAP, API, interface, banco, job D-2, mensageria e blindagem LGPD
-- [x] Etapa 5: CI/CD, re-treino mensal com gate, canário do modelo e observabilidade com alertas
-- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 a v2.6.0)
-- [ ] Etapa 7: operação e ensaios
-  - [x] Ensaio de rollback de código
-  - [x] Telemetria no Grafana Cloud, sonda de disponibilidade, alertas por criticidade e painéis como código
-  - [x] Gatilho do job D-2 no horário, pelo Supabase
-  - [x] Teste de ponta a ponta da regra de dado pessoal no Loki (P1), em dev
-  - [ ] Alerta real de ponta a ponta para cada nível de criticidade (P1, P2 e P3) em produção
-  - [x] ADR da observabilidade com Grafana Cloud e OpenTelemetry, que revê o ADR-006 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
-  - [ ] Saída do alerta diário (`alerta_observabilidade.yml`) depois da paridade com o Grafana, não antes de 01/11/2026 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
-- [ ] Adequação à LGPD ([pendências](#pendências))
-  - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
-  - [x] Procedimento de revisão da decisão automatizada
-  - [x] Agendamento sem consentimento, base de treino separada, eliminação e purga do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md))
-  - [x] Identificador do paciente com HMAC e chave própria, com as linhas antigas migradas ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md))
-  - [x] Levantamento dos DPAs e do mecanismo de transferência internacional
-  - [x] Publicação da política de privacidade e dos Termos de uso, versão 1.0, vigentes a partir de 18/10/2026 ([política](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), [termos](docs/LGPD/TERMOS-DE-USO.md))
-  - [x] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md), com o Grafana Cloud em `sa-east-1`
-  - [ ] Grafana Labs na política de privacidade
-  - [ ] Validação jurídica da política, dos termos e da caixa de consentimento do treino
-- [ ] Validação final para o pitch, com a decisão sobre a exceção do SLO de recall e F1 da classe positiva
+## Dados pessoais e LGPD
 
-## Suporte
+O sistema é desenhado como se todo dado fosse real: especialidade, status do agendamento e histórico de faltas revelam informação de saúde e são tratados como **dados sensíveis**. A análise completa (papéis, bases legais, retenção, transferência internacional e riscos) está em [`docs/LGPD/LGPD.md`](docs/LGPD/LGPD.md).
 
-- **Dúvidas técnicas sobre o repositório:** fale com a mantenedora pelo perfil [@VL-in](https://github.com/VL-in) no GitHub. As issues estão desativadas neste repositório.
-- **Pacientes e titulares de dados:** os pedidos vão à clínica onde a consulta foi agendada. Pedidos sobre o uso dos dados no treino do modelo e sobre contas de funcionário vão ao encarregado do SaúdeJá ([Política de privacidade, seção 9](docs/LGPD/POLITICA-DE-PRIVACIDADE.md#9-encarregado-de-dados-dpo)).
-- **Incidentes e prazos de atendimento:** [`docs/SLA.md`](docs/SLA.md).
+Documentos publicados: [Política de privacidade](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [Termos de uso](docs/LGPD/TERMOS-DE-USO.md).
 
-## Autoria e agradecimentos
+**O agendamento não depende de consentimento** ([ADR-010](docs/adr/adr-010-base-de-treino-separada.md)). A única autorização opcional é a do uso dos desfechos no treino: quem recusa é agendado e lembrado do mesmo jeito.
+
+| Destino | Dados | Região |
+|---|---|---|
+| Supabase (banco e login) | Dados de paciente e contas de funcionário. A base de treino fica num schema separado, sem nome, telefone, CPF nem data de nascimento | Brasil |
+| Hugging Face Space | Tudo o que a tela recebe ou exibe | Estados Unidos |
+| GitHub Actions (job D-2, re-treino, purga) | Dados da consulta e telefone; nunca nome nem CPF | Fora do Brasil |
+| Azure Blob Storage (DVC) | Dataset de treino pseudonimizado e o modelo | Brasil |
+| Infobip | Telefone, data e hora da consulta | Brasil |
+| Grafana Cloud | Telemetria sem dado pessoal e agregados | Brasil |
+
+Proteções implementadas:
+
+- **CPF não é gravado:** vira um identificador HMAC com chave secreta guardada fora do banco ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md)).
+- **Nome só na fila do dia:** não vai para log, API, dataset de treino, SMS nem telemetria, com um teste para cada saída ([ADR-007](docs/adr/adr-007-nome-do-paciente.md)).
+- **Log sem dado pessoal:** filtro de redação em todos os handlers, também aplicado ao que vai para o Grafana ([`src/logging_config.py`](src/logging_config.py)).
+- **SMS sem dado de saúde:** o lembrete só informa data e hora.
+- **Base de treino separada:** só recebe quem consentiu, só é acessada por funções do banco e usa pseudônimos com chave secreta.
+- **Retenção e purga automáticas:** predições, explicações e registros de lembrete saem em 90 dias; pedidos do titular são executados pelo `lgpd.yml`, inclusive nas versões do dataset no DVC ([procedimento](docs/LGPD/PROCEDIMENTO-ELIMINACAO.md)).
+- **Acesso:** RLS em todas as tabelas; área da equipe com login individual e sessão de 30 minutos.
+- **Revisão da decisão automatizada:** a única decisão automatizada é enviar ou não o lembrete; o paciente pede explicação ou revisão à clínica ([procedimento](docs/LGPD/PROCEDIMENTO-REVISAO.md)).
+
+## Operação em produção
+
+Pontos de decisão humana, alertas por criticidade, disponibilidade e procedimentos de rollback (canário, campeão e código) estão em [`docs/OPERACAO.md`](docs/OPERACAO.md).
+
+### Painéis públicos
+
+Os seis painéis do Grafana Cloud estão publicados por link, só para leitura e sem login. Eles mostram agregados e logs que já passaram pelo filtro de dados pessoais.
+
+| Painel | O que mostra |
+|---|---|
+| [Visão geral (SLO)](https://minilasagna354.grafana.net/public-dashboards/4fa820057a864553b9954a5777ea44d6) | Último job D-2, cobertura da explicação, disponibilidade, disparos, custo projetado |
+| [Job D-2](https://minilasagna354.grafana.net/public-dashboards/b01849b776db4343af2c00c99cf4e166) | Execuções, duração, agendamentos por resultado, log do job |
+| [Inferência ML](https://minilasagna354.grafana.net/public-dashboards/38561056c61249c8b3069d015c57b244) | Latência p50/p95/p99, distribuição da probabilidade, dado fora do domínio |
+| [Mensageria (Infobip)](https://minilasagna354.grafana.net/public-dashboards/e4544a72eadc44b5940136fe1a46ebda) | Disparos, status do envio, latência da Infobip |
+| [Interface](https://minilasagna354.grafana.net/public-dashboards/3bb196558d9444f4a0747ce8203b70b2) | Ações por minuto, taxa de erro, latência, log da interface |
+| [Custo de SMS](https://minilasagna354.grafana.net/public-dashboards/9d56d7fc7cd84b0990b09146e6102882) | Gasto no mês, projeção contra o orçamento |
+
+Na visão pública, o painel de traces do Job D-2 fica vazio, porque o compartilhamento externo da Grafana não suporta o Tempo.
+
+## Documentação
+
+| Documento | Conteúdo |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | Arquitetura detalhada, diagramas C4 e roadmap técnico |
+| [`docs/adr/`](docs/adr/) | Registros de decisão de arquitetura |
+| [`docs/OPERACAO.md`](docs/OPERACAO.md) | Operação, alertas e rollback |
+| [`docs/SLO.md`](docs/SLO.md), [`docs/SLA.md`](docs/SLA.md) | Metas de serviço |
+| [`docs/LGPD/`](docs/LGPD/) | Análise LGPD, política, termos e procedimentos do titular |
+| [`docs/logs/CHANGELOG.md`](docs/logs/CHANGELOG.md) | Histórico de versões |
+| [`docs/post-mortem/`](docs/post-mortem/), [`docs/rollbacks/`](docs/rollbacks/) | Registros de incidente e de rollback |
+
+## Autoria e licença
 
 Desenvolvido por **Vanessa Hoysan Lin** na disciplina AI Factory: Build, Deploy and Showcase, com apoio do [Claude Code](https://claude.com/claude-code) na implementação e na documentação.
 
-- Repositório-base da disciplina, com o protótipo herdado: [wmonteiro-ai/ai-factory-saudeja](https://github.com/wmonteiro-ai/ai-factory-saudeja), de Wellington R. Monteiro.
-- O notebook e o README do protótipo original estão preservados em [`docs/herdado/`](docs/herdado/).
+- Repositório-base da disciplina, com o protótipo herdado: [wmonteiro-ai/ai-factory-saudeja](https://github.com/wmonteiro-ai/ai-factory-saudeja), de Wellington R. Monteiro. O notebook e o README originais estão em [`docs/herdado/`](docs/herdado/).
 
-## Licença
-
-[MIT](LICENSE)
+Licença [MIT](LICENSE).

@@ -1,6 +1,6 @@
 """
-SaúdeJá — testes da lógica da interface. Não sobem o runtime do
-Streamlit: src/ui/logic.py existe justamente para ser testável assim.
+SaúdeJá — testes da lógica da interface. Não sobem framework de
+interface: src/ui/logic.py existe justamente para ser testável assim.
 
 Filosofia do repositório (sem mock pesado): o backend em processo usa o
 data/model.pkl real (já versionado via DVC, sem re-treinar) e o backend REST
@@ -41,7 +41,7 @@ def especialidade_valida():
 
 @pytest.fixture
 def campos_formulario(especialidade_valida):
-    """Exatamente o que os widgets de src/ui/app.py entregam."""
+    """Exatamente o que os campos da tela entregam (data e hora separadas)."""
     return {
         "idade": 45,
         "sexo": "F",
@@ -108,8 +108,35 @@ def test_em_processo_retorna_probabilidade_e_explicacao(payload):
 def test_em_processo_especialidade_desconhecida_vira_erro_de_validacao(payload):
     payload["especialidade"] = "especialidade-nunca-vista"
 
-    with pytest.raises(logic.ErroValidacao, match="especialidade-nunca-vista"):
+    with pytest.raises(logic.ErroValidacao, match=r"^especialidade:"):
         logic.ClientePredicaoEmProcesso(MODEL_PATH).predizer(payload)
+
+
+@pytest.mark.parametrize(
+    "campo, valor",
+    [
+        ("idade", 150),
+        ("distancia_km", -3.0),
+        ("dias_entre_agendamento_consulta", 400),
+        ("data_hora_agendada", datetime(2026, 1, 11, 3, 0)),  # domingo, 3h
+    ],
+)
+def test_em_processo_aplica_o_contrato_como_o_job(payload, campo, valor):
+    """O "Testar predição" do Time técnico não prediz sobre o que o job D-2
+    mandaria para a quarentena."""
+    payload[campo] = valor
+
+    with pytest.raises(logic.ErroValidacao, match=rf"^{campo}:"):
+        logic.ClientePredicaoEmProcesso(MODEL_PATH).predizer(payload)
+
+
+def test_em_processo_marca_o_que_o_modelo_nao_viu_no_treino(payload):
+    payload["dias_entre_agendamento_consulta"] = 120
+
+    resultado = logic.ClientePredicaoEmProcesso(MODEL_PATH).predizer(payload)
+
+    assert resultado.fora_do_dominio
+    assert resultado.campos_fora_do_dominio == ("dias_entre_agendamento_consulta",)
 
 
 def test_em_processo_sem_modelo_vira_erro_de_indisponibilidade(payload, tmp_path):
@@ -120,8 +147,8 @@ def test_em_processo_sem_modelo_vira_erro_de_indisponibilidade(payload, tmp_path
 
 
 def test_em_processo_carrega_o_modelo_uma_vez_so(payload, monkeypatch):
-    """O cliente é cacheado por st.cache_resource entre reruns; se ele
-    recarregasse o artefato a cada predição, o cache não adiantaria nada."""
+    """A casca guarda um cliente por processo (web/dados.py); se ele
+    recarregasse o artefato a cada predição, guardá-lo não adiantaria nada."""
     cliente = logic.ClientePredicaoEmProcesso(MODEL_PATH)
     carregamentos = []
     original = inference.carregar_modelo
@@ -161,8 +188,17 @@ def test_api_saude_reporta_backend_e_versao_do_modelo():
 def test_api_especialidade_desconhecida_vira_erro_de_validacao(payload):
     payload["especialidade"] = "especialidade-nunca-vista"
 
-    with TestClient(app) as http, pytest.raises(logic.ErroValidacao, match="nunca-vista"):
+    with TestClient(app) as http, pytest.raises(logic.ErroValidacao, match=r"^especialidade:"):
         logic.ClientePredicaoAPI(cliente_http=http).predizer(payload)
+
+
+def test_api_devolve_a_marca_de_fora_do_dominio(payload):
+    payload["distancia_km"] = 120.0
+
+    with TestClient(app) as http:
+        resultado = logic.ClientePredicaoAPI(cliente_http=http).predizer(payload)
+
+    assert resultado.campos_fora_do_dominio == ("distancia_km",)
 
 
 def test_api_422_do_pydantic_vira_mensagem_legivel(payload):
@@ -214,6 +250,7 @@ def test_backends_produzem_a_mesma_predicao(payload):
     assert via_api.threshold_usado == pytest.approx(em_processo.threshold_usado)
     assert via_api.model_version == em_processo.model_version
     assert via_api.explicacao == em_processo.explicacao
+    assert via_api.campos_fora_do_dominio == em_processo.campos_fora_do_dominio
 
 
 # --- fila do dia e cadastro, sem tocar no banco ---------------------------------
@@ -372,8 +409,6 @@ def _agendar(monkeypatch, treino, **sobrescritos):
     monkeypatch.setattr(logic, "hoje_na_clinica", lambda: date(2026, 9, 29))
     return logic.cadastrar_paciente_e_agendamento(
         **_campos_validos(**sobrescritos),
-        sexo="F",
-        distancia_km=5.5,
         consentimentos={"treino": treino},
         versao_documentos=VERSAO_DOCUMENTOS,
     )
@@ -388,8 +423,6 @@ def test_cadastro_sem_ciencia_e_recusado_antes_de_tocar_o_banco(monkeypatch):
     with pytest.raises(logic.ErroValidacaoCadastro) as erro:
         logic.cadastrar_paciente_e_agendamento(
             **_campos_validos(),
-            sexo="F",
-            distancia_km=5.5,
             consentimentos={"treino": True},
             versao_documentos=None,
         )
@@ -531,11 +564,15 @@ def test_banco_sem_a_migration_diz_o_que_fazer(monkeypatch):
     with pytest.raises(logic.ErroPersistencia) as capturado:
         logic.buscar_fila_do_dia(date(2026, 9, 28))
 
-    mensagem = str(capturado.value)
-    assert "supabase db push" in mensagem
+    detalhe = capturado.value.detalhe
+    assert "supabase db push" in detalhe
     # A mensagem original continua junto: sem ela não dá para saber QUAL
     # migration falta.
-    assert "nome_completo" in mensagem
+    assert "nome_completo" in detalhe
+    # O conselho é da equipe técnica: a recepção vê só o que fazer.
+    tela = str(capturado.value)
+    assert "supabase" not in tela and "nome_completo" not in tela
+    assert logic.MENSAGEM_AVISE_A_EQUIPE in tela
 
 
 def test_falha_de_banco_comum_nao_vira_conselho_sobre_migration(monkeypatch):
@@ -550,7 +587,41 @@ def test_falha_de_banco_comum_nao_vira_conselho_sobre_migration(monkeypatch):
     with pytest.raises(logic.ErroPersistencia) as capturado:
         logic.buscar_fila_do_dia(date(2026, 9, 28))
 
-    assert "supabase db push" not in str(capturado.value)
+    assert "supabase db push" not in capturado.value.detalhe
+    assert "connection failure" in capturado.value.detalhe
+    assert str(capturado.value) == (
+        f"Não foi possível consultar a fila do dia. {logic.MENSAGEM_TENTE_DE_NOVO}"
+    )
+
+
+@pytest.mark.parametrize(
+    "erro",
+    [
+        logic.ConfiguracaoSupabaseAusente("SUPABASE_URL não definida -- configure no .env"),
+        _ErroDeSchema("42P01", 'relation "public.pedidos" does not exist'),
+        _ErroDeSchema("PGRST301", "JWT expired"),
+        RuntimeError("{'code': '23514', 'message': 'violates check constraint'}"),
+    ],
+    ids=["sem-configuracao", "schema-desatualizado", "postgrest", "check-do-banco"],
+)
+def test_mensagem_da_tela_nunca_leva_o_detalhe_tecnico(monkeypatch, erro):
+    """A "Fila do dia" e os "Pedidos do titular" são da recepção, e a casca
+    mostra `str(exc)`: variável de ambiente, código do PostgREST e comando de
+    migration ficam no `detalhe`, que só a aba "Time técnico" exibe."""
+
+    def _falha(_dia):
+        raise erro
+
+    monkeypatch.setattr(logic.repositories, "buscar_fila_do_dia", _falha)
+
+    with pytest.raises(logic.ErroPersistencia) as capturado:
+        logic.buscar_fila_do_dia(date(2026, 9, 28))
+
+    tela = str(capturado.value)
+    assert tela.startswith("Não foi possível consultar a fila do dia")
+    for termo_tecnico in ("SUPABASE", ".env", "{", "code", "supabase", "JWT", "relation"):
+        assert termo_tecnico not in tela
+    assert str(erro).split(" ")[0] in capturado.value.detalhe
 
 
 def _predicao(criado_em, probabilidade, model_version, **extra):
@@ -933,8 +1004,12 @@ def test_conta_banida_explica_que_o_acesso_foi_desativado():
     ids=["limite-de-tentativas", "erro-500", "gateway", "sem-rede", "provedor-email-desligado"],
 )
 def test_falha_do_servico_de_auth_nao_culpa_quem_digitou(erro):
-    with pytest.raises(logic.ErroAutenticacaoIndisponivel):
+    with pytest.raises(logic.ErroAutenticacaoIndisponivel) as capturado:
         _autenticar_com_erro(erro)
+
+    # Nem detalhe técnico: o código HTTP e a classe da exceção vão para o log.
+    for termo_tecnico in ("500", "503", "Error", "Supabase", "gateway", "sem rede"):
+        assert termo_tecnico not in str(capturado.value)
 
 
 def test_autenticar_sem_supabase_configurado_e_indisponibilidade(monkeypatch):
@@ -942,8 +1017,12 @@ def test_autenticar_sem_supabase_configurado_e_indisponibilidade(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "")
 
-    with pytest.raises(logic.ErroAutenticacaoIndisponivel, match="SUPABASE_URL"):
+    with pytest.raises(logic.ErroAutenticacaoIndisponivel) as capturado:
         logic.autenticar_funcionario("a@clinica.test", "senha")
+
+    # A tela de login é da recepção: o nome da variável fica no log.
+    assert "SUPABASE" not in str(capturado.value)
+    assert logic.MENSAGEM_AVISE_A_EQUIPE in str(capturado.value)
 
 
 def test_login_usa_client_descartavel_nunca_o_singleton_do_backend(monkeypatch):
@@ -1076,7 +1155,9 @@ def _campos_validos(**sobrescritos):
         "cpf": "529.982.247-25",
         "telefone": "(11) 98765-4321",
         "data_nascimento": date(1990, 1, 1),
+        "sexo": "F",
         "especialidade": "cardiologia",
+        "distancia_km": 5.5,
         "data_consulta": date(2026, 9, 30),
         "hora_consulta": time(10, 0),
     }
@@ -1114,15 +1195,84 @@ def test_validar_cadastro_devolve_todos_os_problemas_de_uma_vez(hoje_fixo):
 @pytest.mark.parametrize(
     "data_nascimento, valida",
     [
-        (date(1900, 1, 1), True),
-        (date(1899, 12, 31), False),
+        (date(1905, 10, 1), True),  # 120 anos no dia da consulta
+        (date(1905, 9, 30), False),  # 121 anos no dia da consulta
+        (date(1900, 1, 1), False),  # o antigo limite fixo, que o job recusava
         (HOJE_FIXO, True),  # recém-nascido: a clínica atende pediatria
         (HOJE_FIXO + timedelta(days=1), False),
         (None, False),
     ],
 )
-def test_data_nascimento_entre_1900_e_hoje(data_nascimento, valida):
-    assert logic.data_nascimento_valida(data_nascimento, hoje=HOJE_FIXO) is valida
+def test_data_nascimento_ate_hoje_e_ate_120_anos_na_consulta(data_nascimento, valida):
+    assert (
+        logic.data_nascimento_valida(data_nascimento, date(2026, 9, 30), hoje=HOJE_FIXO) is valida
+    )
+
+
+def test_idade_e_medida_na_data_da_consulta_como_no_job():
+    """120 anos hoje, 121 no dia da consulta: o job D-2 calcula a idade na
+    data da consulta e mandaria o agendamento para a quarentena."""
+    nascimento = date(1905, 10, 15)
+
+    assert logic.data_nascimento_valida(nascimento, date(2026, 10, 1), hoje=HOJE_FIXO)
+    assert not logic.data_nascimento_valida(nascimento, date(2026, 10, 20), hoje=HOJE_FIXO)
+
+
+@pytest.mark.parametrize(
+    "referencia, minima",
+    [
+        (date(2026, 9, 29), date(1905, 9, 30)),
+        (date(2028, 2, 29), date(1907, 3, 1)),  # 29/02 sem par 121 anos antes
+    ],
+)
+def test_data_nascimento_minima_e_a_de_quem_tem_120_anos(referencia, minima):
+    assert logic.data_nascimento_minima(referencia) == minima
+    assert logic.calcular_idade(minima, referencia) == logic.IDADE_MAXIMA
+    assert logic.calcular_idade(minima - timedelta(days=1), referencia) == logic.IDADE_MAXIMA + 1
+
+
+@pytest.mark.parametrize(
+    "sobrescritos, problema",
+    [
+        ({"distancia_km": None}, "Informe a distância até a clínica, em km."),
+        ({"distancia_km": -3.0}, "Distância inválida -- informe um valor entre 0 e 500 km."),
+        ({"distancia_km": 500.5}, "Distância inválida -- informe um valor entre 0 e 500 km."),
+        (
+            {"distancia_km": float("nan")},
+            "Distância inválida -- informe um valor entre 0 e 500 km.",
+        ),
+        ({"sexo": "X"}, "Sexo inválido -- escolha uma das opções da lista."),
+        ({"sexo": None}, "Sexo inválido -- escolha uma das opções da lista."),
+    ],
+    ids=["distancia-vazia", "distancia-negativa", "acima-de-500", "nan", "sexo-x", "sexo-vazio"],
+)
+def test_distancia_e_sexo_sao_conferidos_no_servidor(hoje_fixo, sobrescritos, problema):
+    """O `ui.number` do NiceGUI só aplica o mínimo e o máximo quando o campo
+    perde o foco: quem recusa é a validação. Distância vazia é erro, nunca
+    0 km gravado no lugar."""
+    assert logic.validar_cadastro(**_campos_validos(**sobrescritos)) == [problema]
+
+
+@pytest.mark.parametrize("distancia", [0.0, 500.0])
+def test_distancia_nos_limites_do_contrato_e_aceita(hoje_fixo, distancia):
+    assert logic.validar_cadastro(**_campos_validos(distancia_km=distancia)) == []
+
+
+def test_regra_do_contrato_que_o_cadastro_nao_conhece_ainda_recusa(hoje_fixo, monkeypatch):
+    """A rede do fim de `validar_cadastro`: uma regra nova no contrato barra
+    o cadastro antes de qualquer mensagem própria ser escrita para ela."""
+    original = logic.contrato_features.violacao_ou_none
+
+    def contrato_mais_estrito(payload, especialidades):
+        if payload["historico_noshow"] == 0:
+            return logic.contrato_features.ViolacaoDoContrato("historico_noshow", "regra nova")
+        return original(payload, especialidades)
+
+    monkeypatch.setattr(logic.contrato_features, "violacao_ou_none", contrato_mais_estrito)
+
+    assert logic.validar_cadastro(**_campos_validos()) == [
+        "Faltas anteriores: valor não aceito -- confira o campo."
+    ]
 
 
 def test_especialidade_fora_da_lista_e_recusada(hoje_fixo):

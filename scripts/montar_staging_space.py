@@ -46,7 +46,6 @@ ARQUIVOS = (
     ("requirements/ui.txt", "requirements/ui.txt"),
     ("params.yaml", "params.yaml"),
     ("infra/deploy/entrypoint.sh", "infra/deploy/entrypoint.sh"),
-    (".streamlit/config.toml", ".streamlit/config.toml"),
     ("data/model.pkl", "data/model.pkl"),
     # Politica de privacidade e Termos de uso que a tela de agendamento exibe
     # (src/documentos_legais.py, ADR-010). Os dois unicos arquivos de docs/

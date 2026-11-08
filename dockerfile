@@ -9,8 +9,6 @@ COPY requirements/ ./requirements/
 RUN pip install --no-cache-dir -r requirements/train.txt
 
 COPY src/ ./src/
-COPY tests/ ./tests/
-COPY pytest.ini .
 COPY params.yaml .
 
 # Sem CMD/ENV de stage default -- imagem compartilhada pelas 3 etapas do

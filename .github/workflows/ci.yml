@@ -58,6 +58,9 @@ jobs:
         # Em PR, a integracao so' e' obrigatoria quando o PR toca o que conversa
         # com o Supabase: o CI rapido ja' cobre a logica, e subir o stack do
         # Supabase custa minutos. Em main (via deploy) e por dispatch, sempre.
+        # `src/ui/logic.py` entra porque e' a unica porta da interface para o
+        # banco: o cadastro, a fila e os pedidos tem teste contra o Supabase
+        # local em tests/test_db.py.
         env:
           EVENTO: ${{ github.event_name }}
           BASE: ${{ github.base_ref }}
@@ -65,7 +68,7 @@ jobs:
           if [ "$EVENTO" != "pull_request" ]; then
             echo "integracao=true" >> "$GITHUB_OUTPUT"
           elif git diff --name-only "origin/${BASE}...HEAD" \
-              | grep -qE '^(src/jobs/|src/db/|src/export_treino\.py|src/canario\.py|src/pseudonimo\.py|src/consentimento\.py|supabase/)'; then
+              | grep -qE '^(src/jobs/|src/db/|src/ui/logic\.py|src/export_treino\.py|src/canario\.py|src/pseudonimo\.py|src/consentimento\.py|supabase/)'; then
             echo "integracao=true" >> "$GITHUB_OUTPUT"
           else
             echo "integracao=false" >> "$GITHUB_OUTPUT"

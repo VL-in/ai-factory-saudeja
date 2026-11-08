@@ -1,15 +1,18 @@
 """
-SaúdeJá — lógica da interface Streamlit,
-separada de app.py para ser testável sem o runtime do Streamlit: nada aqui
-importa `streamlit`.
+SaúdeJá — lógica da interface, separada da casca de telas (src/web/, em
+NiceGUI desde o ADR-013) para ser testável sem framework de interface: nada
+aqui importa `nicegui`. É a única camada de regra de negócio da interface; a
+casca só apresenta e chama estas funções, sempre fora do event loop
+(`web.execucao.executar_em_thread`), porque elas vão ao banco e ao modelo de
+forma síncrona.
 
 Dois backends de predição atrás de uma interface única (ClientePredicao),
 escolhidos por PREDICT_BACKEND -- reconcilia duas decisões que o repositório
 tinha em conflito:
 
-- ADR-005 (b): "Streamlit e o job chamam o modelo em processo; a API FastAPI
+- ADR-005 (b): "a interface e o job chamam o modelo em processo; a API FastAPI
   é para integrações externas" -- daí ClientePredicaoEmProcesso ser o DEFAULT:
-  em produção (Streamlit e API no mesmo container do HF Space) a UI
+  em produção (interface e API no mesmo container do HF Space) a UI
   não depende de a API estar de pé nem paga round-trip HTTP interno.
 - architecture.md §3.1: a UI como harness de teste visual da API FastAPI --
   daí ClientePredicaoAPI (PREDICT_BACKEND=api), que exercita
@@ -39,6 +42,7 @@ from supabase_auth.errors import AuthApiError  # noqa: E402
 
 import agenda_clinica  # noqa: E402
 import consentimento  # noqa: E402
+import contrato_features  # noqa: E402
 import db.client as db_client  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import db.repositorio_treino as repositorio_treino  # noqa: E402
@@ -96,7 +100,8 @@ class ErroValidacaoCadastro(Exception):
 @dataclass(frozen=True)
 class ResultadoPredicao:
     """Mesma forma do PredictOut da API (src/api/schemas.py), para os dois
-    backends devolverem uma estrutura só e app.py não saber qual usou."""
+    backends devolverem uma estrutura só e a casca (src/web/) não saber qual
+    usou."""
 
     probabilidade: float
     classe_prevista: int
@@ -104,6 +109,14 @@ class ResultadoPredicao:
     model_version: str
     explicacao: list = field(default_factory=list)
     explicacao_texto: str | None = None
+    # Contrato de features: campos que o modelo não viu no treino (a
+    # probabilidade é extrapolação). Mesma marca que o job grava em
+    # `predicoes.fora_do_dominio`; aqui vai também o nome dos campos.
+    campos_fora_do_dominio: tuple[str, ...] = ()
+
+    @property
+    def fora_do_dominio(self) -> bool:
+        return bool(self.campos_fora_do_dominio)
 
 
 def montar_payload(
@@ -117,8 +130,8 @@ def montar_payload(
     hora_consulta: time,
 ) -> dict:
     """Junta os campos do formulário no payload cru que construir_features()
-    /PacienteConsultaIn esperam. O Streamlit coleta data e hora em widgets
-    separados (st.date_input/st.time_input); o modelo precisa do timestamp
+    /PacienteConsultaIn esperam. A tela coleta data e hora em campos
+    separados; o modelo precisa do timestamp
     único, de onde saem dia_de_semana e horario (src/features.py)."""
     return {
         "idade": int(idade),
@@ -133,7 +146,7 @@ def montar_payload(
 
 def listar_especialidades() -> list[str]:
     """Especialidades que o cadastro e o formulário de teste oferecem
-    (selectbox em vez de texto livre).
+    (lista de opções em vez de texto livre).
 
     Vêm de `params.yaml` (`cadastro.especialidades`), não mais do
     mapa do modelo: o que a clínica atende é configuração, e não efeito
@@ -146,8 +159,8 @@ def listar_especialidades() -> list[str]:
 class ClientePredicaoEmProcesso:
     """Backend default (ADR-005 b): importa src/inference.py e src/explain.py
     direto, sem HTTP. Modelo e TreeExplainer carregados na primeira predição e
-    reusados depois -- app.py ainda embrulha este objeto em st.cache_resource
-    para que o carregamento não se repita a cada rerun do Streamlit."""
+    reusados depois -- a casca guarda um cliente por backend no processo
+    (web/dados.py), para o carregamento não se repetir a cada predição."""
 
     nome = "processo"
 
@@ -185,9 +198,16 @@ class ClientePredicaoEmProcesso:
             origem=observabilidade.ORIGEM_PROCESSO,
             model_version=self._model_version,
         ):
+            # O mesmo contrato do job D-2 e da rota /predict: o que o job
+            # mandaria para a quarentena é recusado aqui, e o que o modelo não
+            # viu no treino é predito e marcado.
             try:
-                X = inference.construir_features(payload, self._mapa_especialidade)
-            except inference.EspecialidadeDesconhecidaError as exc:
+                linha = contrato_features.validar_payload(payload, self._mapa_especialidade)
+                X = inference.construir_features(linha.valores, self._mapa_especialidade)
+            except (
+                contrato_features.ViolacaoDoContrato,
+                inference.EspecialidadeDesconhecidaError,
+            ) as exc:
                 raise ErroValidacao(str(exc)) from exc
 
             probabilidade = float(inference.predizer(self._model, X)[0])
@@ -203,6 +223,7 @@ class ClientePredicaoEmProcesso:
                 explicacao_texto=self._explicador_llm.explicar_em_texto(
                     contribuicoes, contexto={}
                 ),
+                campos_fora_do_dominio=linha.campos_fora_do_dominio,
             )
 
 
@@ -234,6 +255,7 @@ class ClientePredicaoAPI:
             model_version=corpo["model_version"],
             explicacao=corpo.get("explicacao", []),
             explicacao_texto=corpo.get("explicacao_texto"),
+            campos_fora_do_dominio=tuple(corpo.get("campos_fora_do_dominio", ())),
         )
 
     def _requisitar(self, metodo: str, rota: str, **kwargs) -> dict:
@@ -288,7 +310,19 @@ def backend_ativo() -> str:
 class ErroPersistencia(Exception):
     """Falha ao ler/gravar no Supabase (indisponível, mal configurado ou
     rejeitou a operação) -- mesma filosofia de ErroPredicao: a UI mostra uma
-    mensagem, não o traceback do cliente HTTP interno do supabase-py."""
+    mensagem, não o traceback do cliente HTTP interno do supabase-py.
+
+    Duas mensagens, para dois públicos:
+
+    - `str(exc)` é a da **tela**: fixa por ação, sem nome de variável de
+      ambiente, código do PostgREST nem comando. É o default de propósito:
+      quem só faz `str(exc)` na casca já mostra a versão segura à recepção.
+    - `detalhe` é o **diagnóstico** para a equipe técnica (aba "Time técnico"):
+      o que falta e o que fazer. Sem detalhe próprio, repete a mensagem."""
+
+    def __init__(self, mensagem: str, detalhe: str | None = None):
+        super().__init__(mensagem)
+        self.detalhe = detalhe if detalhe is not None else mensagem
 
 
 @dataclass(frozen=True)
@@ -342,10 +376,19 @@ class ItemFila:
 _CODIGOS_DE_SCHEMA_DESATUALIZADO = frozenset({"42703", "42P01"})
 
 
+MENSAGEM_TENTE_DE_NOVO = "Tente de novo em alguns minutos. Se continuar, avise a equipe técnica."
+MENSAGEM_AVISE_A_EQUIPE = "Avise a equipe técnica."
+
+
 def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoReturn:
     """Traduz a falha do banco na mensagem que a tela mostra -- e, antes,
     deixa rastro dela: antes da v2.2.0 a falha virava só a mensagem
     amigável, sem log nem evento, e o alerta diário não tinha como vê-la.
+
+    `acao` abre a mensagem da tela ("Não foi possível ..."). A tela recebe só
+    ela e a orientação; o texto da exceção fica em `ErroPersistencia.detalhe`.
+    Configuração ausente e banco sem migration não passam com o tempo, então
+    não mandam "tentar de novo".
 
     `rota` é o rótulo fixo da operação. Só ele e o **nome da classe** da
     exceção vão para o log e para `eventos_app`: a mensagem de um erro do
@@ -358,7 +401,10 @@ def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoRetur
         detalhe={"rota": rota, "excecao": excecao},
     )
     if isinstance(exc, ConfiguracaoSupabaseAusente):
-        raise ErroPersistencia(str(exc)) from exc
+        raise ErroPersistencia(
+            f"{acao}: o sistema está sem conexão com o banco de dados. {MENSAGEM_AVISE_A_EQUIPE}",
+            detalhe=f"{acao}: {exc}",
+        ) from exc
     if getattr(exc, "code", None) in _CODIGOS_DE_SCHEMA_DESATUALIZADO:
         # Aconteceu de verdade em 2026-09-28, ao ligar `nome_completo`: a
         # migration estava aplicada no Supabase local (onde os testes de
@@ -369,11 +415,14 @@ def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoRetur
         # mesma situação volta a cada migration nova, inclusive no deploy do
         # HF Space.
         raise ErroPersistencia(
-            f"{acao}: o banco está desatualizado em relação às migrations do "
-            f"repositório ({exc}). Aplique com `supabase db push` (projeto remoto) "
-            "ou `supabase db reset` (local) -- ver README, seção 'Banco de dados'."
+            f"{acao}: o banco de dados precisa de atualização. {MENSAGEM_AVISE_A_EQUIPE}",
+            detalhe=(
+                f"{acao}: o banco está desatualizado em relação às migrations do "
+                f"repositório ({exc}). Aplique com `supabase db push` (projeto remoto) "
+                "ou `supabase db reset` (local) -- ver README, seção 'Banco de dados'."
+            ),
         ) from exc
-    raise ErroPersistencia(f"{acao}: {exc}") from exc
+    raise ErroPersistencia(f"{acao}. {MENSAGEM_TENTE_DE_NOVO}", detalhe=f"{acao}: {exc}") from exc
 
 
 def _acao_ui(acao: str, *recusas: type[BaseException]):
@@ -394,7 +443,9 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
     try:
         linhas = repositories.buscar_fila_do_dia(dia or hoje_na_clinica())
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao consultar a fila do dia", rota="fila_do_dia")
+        _relatar_falha_persistencia(
+            exc, "Não foi possível consultar a fila do dia", rota="fila_do_dia"
+        )
 
     itens = []
     for linha in linhas:
@@ -517,7 +568,7 @@ def atualizar_status_agendamento(
         ) from exc
     except Exception as exc:
         _relatar_falha_persistencia(
-            exc, "Falha ao registrar desfecho do agendamento", rota="desfecho"
+            exc, "Não foi possível registrar o desfecho", rota="desfecho"
         )
 
 
@@ -619,9 +670,10 @@ def dias_ate_consulta(data_consulta: date, hoje: date | None = None) -> int:
 
 
 def status_banco() -> dict:
-    """Indicador para a sidebar. Devolve estrutura em vez de levantar: é
-    diagnóstico exibido de forma passiva, não uma operação que o usuário
-    pediu -- quem chama quer pintar um rótulo, não tratar exceção."""
+    """Indicador do diagnóstico da aba "Dev: disparo manual". Devolve
+    estrutura em vez de levantar: é diagnóstico exibido de forma passiva, não
+    uma operação que o usuário pediu -- quem chama quer pintar um rótulo, não
+    tratar exceção."""
     try:
         repositories.verificar_conexao()
     except ConfiguracaoSupabaseAusente:
@@ -645,20 +697,53 @@ def nome_valido(nome_completo: str) -> bool:
     return NOME_MINIMO <= len((nome_completo or "").strip()) <= NOME_MAXIMO
 
 
-# Limite inferior do formulário e da validação do cadastro (decisão da autora,
-# 2026-10-05). Note que o contrato de features aceita idade só até 120 anos
-# (`contrato_features`, faixa de negócio): quem nasceu antes disso passa aqui
-# e é recusado no job D-2.
-DATA_NASCIMENTO_MINIMA = date(1900, 1, 1)
+# Limites que o cadastro lê do contrato de features, em vez de copiar o
+# número: o que a tela aceita, o job D-2 e o export do re-treino aceitam.
+_FAIXA_IDADE = contrato_features.faixa_de_negocio("idade")
+_FAIXA_DISTANCIA = contrato_features.faixa_de_negocio("distancia_km")
+IDADE_MAXIMA = int(_FAIXA_IDADE.maximo or 0)
+DISTANCIA_MAXIMA_KM = contrato_features.DISTANCIA_MAXIMA_KM
 
 
-def data_nascimento_valida(data_nascimento: date | None, hoje: date | None = None) -> bool:
-    """Obrigatória e dentro da faixa do formulário. Sem limite mínimo de
-    idade: a clínica atende pediatria, então um recém-nascido é paciente
+def data_nascimento_minima(referencia: date) -> date:
+    """Nascimento mais antigo de quem tem até `IDADE_MAXIMA` anos em
+    `referencia`. Até 2026-11-08 o limite era fixo em 01/01/1900, e quem
+    nasceu entre 1900 e 120 anos atrás passava no cadastro e ia para a
+    quarentena do job D-2: sem predição, sem lembrete e fora do export."""
+    ano = referencia.year - (IDADE_MAXIMA + 1)
+    try:
+        limite = referencia.replace(year=ano)
+    except ValueError:  # 29/02 num ano que não é bissexto
+        limite = date(ano, 2, 28)
+    return limite + timedelta(days=1)
+
+
+def data_nascimento_valida(
+    data_nascimento: date | None,
+    data_consulta: date | None = None,
+    hoje: date | None = None,
+) -> bool:
+    """Obrigatória, nunca no futuro, e com no máximo `IDADE_MAXIMA` anos **na
+    data da consulta** -- o mesmo cálculo do job D-2 (`calcular_idade`), que
+    é quem aplica o contrato depois. Medir em relação a hoje deixaria passar
+    quem faz aniversário entre o agendamento e a consulta. Sem limite mínimo
+    de idade: a clínica atende pediatria, então um recém-nascido é paciente
     válido."""
     if data_nascimento is None:
         return False
-    return DATA_NASCIMENTO_MINIMA <= data_nascimento <= (hoje or hoje_na_clinica())
+    hoje = hoje or hoje_na_clinica()
+    referencia = max(data_consulta or hoje, hoje)
+    return data_nascimento <= hoje and _FAIXA_IDADE.contem(
+        calcular_idade(data_nascimento, referencia)
+    )
+
+
+def _distancia_valida(distancia_km: object) -> bool:
+    try:
+        numero = contrato_features.coagir_numero("distancia_km", distancia_km, inteiro=False)
+    except contrato_features.ViolacaoDoContrato:
+        return False
+    return _FAIXA_DISTANCIA.contem(numero)
 
 
 def validar_cadastro(
@@ -666,13 +751,23 @@ def validar_cadastro(
     cpf: str,
     telefone: str,
     data_nascimento: date | None,
+    sexo: str | None,
     especialidade: str,
+    distancia_km: float | None,
     data_consulta: date,
     hora_consulta: time | None,
 ) -> list[str]:
     """Todos os problemas do formulário, na ordem em que os campos aparecem
     na tela -- lista vazia quando dá para gravar. Só confere a forma: não
     muda valor, formato nem opção que vira feature do modelo.
+
+    **O que passa aqui passa no contrato de features**, por construção: depois
+    das mensagens por campo, o payload que o job D-2 montaria passa pelo
+    próprio `contrato_features` (`_violacao_do_contrato`). Antes, o limite do
+    campo na tela era a única barreira da distância, e o `ui.number` do
+    NiceGUI só o aplica quando o campo perde o foco (o Streamlit recusava no
+    servidor): uma distância negativa chegava ao banco e virava falha, não
+    recusa.
 
     `nome_completo=None` continua aceito (quem chama sem nome, ver
     `cadastrar_paciente_e_agendamento`); string vazia é campo em branco."""
@@ -689,11 +784,13 @@ def validar_cadastro(
         problemas.append("Telefone inválido -- informe DDD + número (ex. (11) 98765-4321).")
     if data_nascimento is None:
         problemas.append("Informe a data de nascimento.")
-    elif not data_nascimento_valida(data_nascimento, hoje):
+    elif not data_nascimento_valida(data_nascimento, data_consulta, hoje):
         problemas.append(
-            "Data de nascimento inválida -- informe uma data entre "
-            f"{DATA_NASCIMENTO_MINIMA:%d/%m/%Y} e hoje."
+            "Data de nascimento inválida -- informe uma data até hoje, de quem terá no "
+            f"máximo {IDADE_MAXIMA} anos na data da consulta."
         )
+    if sexo not in contrato_features.SEXOS_VALIDOS:
+        problemas.append("Sexo inválido -- escolha uma das opções da lista.")
 
     # Antes, sem lista de especialidades, o formulário caía em texto livre e
     # gravava qualquer coisa -- o erro só aparecia no job D-2, dias depois,
@@ -706,6 +803,15 @@ def validar_cadastro(
         )
     elif especialidade not in especialidades:
         problemas.append("Especialidade inválida -- escolha uma das opções da lista.")
+
+    # Vazio é erro, nunca 0 km: a distância é feature do modelo, e um zero
+    # inventado vira predição sobre quem mora na porta da clínica.
+    if distancia_km is None:
+        problemas.append("Informe a distância até a clínica, em km.")
+    elif not _distancia_valida(distancia_km):
+        problemas.append(
+            f"Distância inválida -- informe um valor entre 0 e {DISTANCIA_MAXIMA_KM:g} km."
+        )
 
     if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje):
         problemas.append(
@@ -720,7 +826,39 @@ def validar_cadastro(
             "08h-11h30/13h-18h, sáb 08h-11h30, fechado aos domingos)."
         )
 
+    if not problemas and data_nascimento is not None and hora_consulta is not None:
+        violacao = _violacao_do_contrato(
+            {
+                "idade": calcular_idade(data_nascimento, data_consulta),
+                "sexo": sexo,
+                "especialidade": especialidade,
+                "distancia_km": distancia_km,
+                "dias_entre_agendamento_consulta": dias_ate_consulta(data_consulta, hoje),
+                "historico_noshow": 0,
+                "data_hora_agendada": datetime.combine(
+                    data_consulta, hora_consulta, tzinfo=fuso_da_clinica()
+                ),
+            },
+            especialidades,
+        )
+        if violacao is not None:
+            rotulo = ROTULOS_FEATURES.get(violacao.campo, violacao.campo)
+            problemas.append(f"{rotulo}: valor não aceito -- confira o campo.")
+
     return problemas
+
+
+def _violacao_do_contrato(
+    payload: dict, especialidades: list[str]
+) -> contrato_features.ViolacaoDoContrato | None:
+    """O contrato sobre o payload que o job D-2 vai montar deste cadastro
+    (idade na data da consulta, data e hora no fuso da clínica). As mensagens
+    por campo de `validar_cadastro` já cobrem cada regra de hoje; esta é a
+    rede para a regra que o contrato ganhar e o cadastro ainda não conhecer.
+
+    `historico_noshow` só é contado depois de o paciente existir no banco; o
+    0 cumpre a regra (`>= 0`), que uma contagem cumpre sempre."""
+    return contrato_features.violacao_ou_none(payload, especialidades)
 
 
 MENSAGEM_SEM_CIENCIA = (
@@ -736,7 +874,7 @@ def cadastrar_paciente_e_agendamento(
     data_nascimento: date | None,
     sexo: str,
     especialidade: str,
-    distancia_km: float,
+    distancia_km: float | None,
     data_consulta: date,
     hora_consulta: time | None,
     nome_completo: str | None = None,
@@ -788,15 +926,22 @@ def cadastrar_paciente_e_agendamento(
         cpf=cpf,
         telefone=telefone,
         data_nascimento=data_nascimento,
+        sexo=sexo,
         especialidade=especialidade,
+        distancia_km=distancia_km,
         data_consulta=data_consulta,
         hora_consulta=hora_consulta,
     )
     if not versao_documentos:
         problemas.insert(0, MENSAGEM_SEM_CIENCIA)
-    # As duas checagens de None nunca valem sem `problemas` (validar_cadastro
-    # já as reporta): estão aqui só para o mypy estreitar o tipo abaixo.
-    if problemas or data_nascimento is None or hora_consulta is None:
+    # As checagens de None nunca valem sem `problemas` (validar_cadastro já
+    # as reporta): estão aqui só para o mypy estreitar o tipo abaixo.
+    if (
+        problemas
+        or data_nascimento is None
+        or hora_consulta is None
+        or distancia_km is None
+    ):
         raise ErroValidacaoCadastro(problemas)
 
     try:
@@ -822,7 +967,7 @@ def cadastrar_paciente_e_agendamento(
             versao_documentos=versao_documentos,
         )
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao cadastrar paciente/agendamento", rota="cadastro")
+        _relatar_falha_persistencia(exc, "Não foi possível concluir o agendamento", rota="cadastro")
 
     # Daqui em diante o agendamento está confirmado.
     treino_ok = registrar_no_treino(
@@ -945,7 +1090,9 @@ def registrar_pedido_da_clinica(codigo_agendamento: str, tipo: str) -> None:
     except ErroPedido:
         raise
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao registrar o pedido", rota="registrar_pedido")
+        _relatar_falha_persistencia(
+            exc, "Não foi possível registrar o pedido", rota="registrar_pedido"
+        )
 
 
 @_acao_ui("encaminhar_pedido", ErroPedido)
@@ -961,7 +1108,7 @@ def encaminhar_pedido_ao_treino(cpf: str) -> None:
         repositorio_treino.registrar_pedido(pseudonimo.id_titular(cpf), "eliminacao", "clinica")
     except Exception as exc:
         _relatar_falha_persistencia(
-            exc, "Falha ao encaminhar o pedido ao SaúdeJá", rota="encaminhar_pedido"
+            exc, "Não foi possível encaminhar o pedido ao SaúdeJá", rota="encaminhar_pedido"
         )
 
 
@@ -978,7 +1125,9 @@ def listar_pedidos_da_clinica() -> list[dict]:
     try:
         return repositories.pedidos_abertos()
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao listar os pedidos", rota="listar_pedidos")
+        _relatar_falha_persistencia(
+            exc, "Não foi possível listar os pedidos", rota="listar_pedidos"
+        )
 
 
 @_acao_ui("decidir_pedido")
@@ -997,7 +1146,9 @@ def decidir_pedido_da_clinica(id_pedido: str, decisao: str) -> bool:
     try:
         return acoes[decisao](id_pedido)
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao atualizar o pedido", rota="decidir_pedido")
+        _relatar_falha_persistencia(
+            exc, "Não foi possível atualizar o pedido", rota="decidir_pedido"
+        )
 
 
 def disparar_job_diario(dia: date | None = None) -> dict:
@@ -1009,7 +1160,7 @@ def disparar_job_diario(dia: date | None = None) -> dict:
         return job_inferencia_diaria.processar_dia(dia)
     except Exception as exc:
         _relatar_falha_persistencia(
-            exc, "Falha ao rodar o job de inferência diária", rota="job_manual"
+            exc, "Não foi possível rodar o job de inferência diária", rota="job_manual"
         )
 
 
@@ -1052,7 +1203,7 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
         )
     except Exception as exc:
         _relatar_falha_persistencia(
-            exc, "Falha ao consultar a observabilidade", rota="observabilidade"
+            exc, "Não foi possível consultar a observabilidade", rota="observabilidade"
         )
 
     predicoes = [e for e in eventos if e["tipo"] == observabilidade.TIPO_PREDICAO]
@@ -1112,8 +1263,9 @@ class ErroAutenticacaoIndisponivel(ErroAutenticacao):
 
 @dataclass(frozen=True)
 class SessaoFuncionario:
-    """O que a UI guarda de quem está logado, em `st.session_state` (memória do
-    servidor, nunca cookie). Sem o token do Supabase de propósito: ele só
+    """O que a UI guarda de quem está logado, em `app.storage.tab` (memória do
+    servidor, por aba, nunca cookie; ver web/sessao.py). Sem o token do
+    Supabase de propósito: ele só
     serviu para provar a senha -- os dados continuam sendo lidos com a chave
     secreta do backend (docs/architecture.md §7) --, então guardá-lo só criaria um segredo a
     mais para vazar."""
@@ -1127,13 +1279,33 @@ def _agora() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# A tela da equipe não diz o código HTTP nem a classe da exceção: não ajudam
+# quem está no balcão. Ficam no log (`_logar_falha_de_auth`).
+MENSAGEM_AUTENTICACAO_FORA_DO_AR = (
+    "o serviço de autenticação não respondeu. Tente de novo em alguns minutos."
+)
+
+
+def _logar_falha_de_auth(exc: Exception) -> None:
+    """O diagnóstico que saiu da tela: classe, status e código do Supabase
+    Auth. Nunca o e-mail digitado nem a mensagem crua da exceção."""
+    logger.warning(
+        "login indisponível",
+        extra={
+            "excecao": type(exc).__name__,
+            "status_http": getattr(exc, "status", None),
+            "codigo": getattr(exc, "code", None),
+        },
+    )
+
+
 def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
     """Nenhuma mensagem distingue "e-mail não existe" de "senha errada": dizer
     qual dos dois falhou ensina a quem tenta adivinhar quais e-mails são da
     equipe."""
     if exc.status == 429 or exc.code == "over_request_rate_limit":
         # O limite do Supabase Auth é por IP, e todos os funcionários chegam
-        # pelo mesmo IP (o do servidor do Streamlit) -- quem aparece aqui pode
+        # pelo mesmo IP (o do servidor da interface) -- quem aparece aqui pode
         # nem ter errado a própria senha. Ver docs/LGPD/LGPD.md §9, risco 6.
         return ErroAutenticacaoIndisponivel(
             "muitas tentativas de login em pouco tempo. Aguarde alguns minutos e tente de novo."
@@ -1149,10 +1321,10 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
         # dizê-lo não ajuda a adivinhar quem é da equipe -- e "senha incorreta"
         # mandaria todo mundo redefinir a senha à toa.
         return ErroAutenticacaoIndisponivel(
-            "login por e-mail desligado no Supabase. Procure o administrador do sistema."
+            "o login por e-mail está desativado. Procure o administrador do sistema."
         )
     if exc.status is not None and exc.status >= 500:
-        return ErroAutenticacaoIndisponivel(f"serviço de autenticação respondeu {exc.status}.")
+        return ErroAutenticacaoIndisponivel(MENSAGEM_AUTENTICACAO_FORA_DO_AR)
     return ErroCredenciais(MENSAGEM_CREDENCIAIS_INVALIDAS)
 
 
@@ -1178,20 +1350,26 @@ def autenticar_funcionario(
         cliente = (criar_client or db_client.criar_client_autenticacao)()
         resposta = cliente.auth.sign_in_with_password({"email": email, "password": senha})
     except ConfiguracaoSupabaseAusente as exc:
-        raise ErroAutenticacaoIndisponivel(str(exc)) from exc
-    except AuthApiError as exc:
-        raise _traduzir_erro_de_auth(exc) from exc
-    except Exception as exc:  # rede, timeout, AuthRetryableError
+        _logar_falha_de_auth(exc)
         raise ErroAutenticacaoIndisponivel(
-            f"serviço de autenticação inacessível ({exc.__class__.__name__})."
+            f"o login está sem conexão com o serviço de autenticação. {MENSAGEM_AVISE_A_EQUIPE}"
         ) from exc
+    except AuthApiError as exc:
+        erro = _traduzir_erro_de_auth(exc)
+        if isinstance(erro, ErroAutenticacaoIndisponivel):
+            _logar_falha_de_auth(exc)
+        raise erro from exc
+    except Exception as exc:  # rede, timeout, AuthRetryableError
+        _logar_falha_de_auth(exc)
+        raise ErroAutenticacaoIndisponivel(MENSAGEM_AUTENTICACAO_FORA_DO_AR) from exc
 
     usuario = resposta.user
     if usuario is None:
         # O supabase-py levanta quando a senha não confere; resposta sem
         # usuário não é "login recusado", é o serviço respondendo fora do
         # contrato -- tratado como indisponível, nunca como sucesso.
-        raise ErroAutenticacaoIndisponivel("resposta do serviço de autenticação sem usuário.")
+        logger.warning("login indisponível", extra={"excecao": "resposta_sem_usuario"})
+        raise ErroAutenticacaoIndisponivel(MENSAGEM_AUTENTICACAO_FORA_DO_AR)
     # Revoga já o refresh token desta sessão do Supabase: a UI não o usa (ver
     # SessaoFuncionario), e um token válido que ninguém guarda é só superfície.
     # `local` e não o default `global`, que derrubaria as sessões do mesmo
@@ -1212,6 +1390,7 @@ def sessao_ativa(sessao: SessaoFuncionario, agora: datetime | None = None) -> bo
 
 
 def registrar_uso(sessao: SessaoFuncionario, agora: datetime | None = None) -> SessaoFuncionario:
-    """Nova sessão com o relógio de inatividade zerado -- chamada a cada rerun
-    do Streamlit, que só acontece quando alguém interage com a tela."""
+    """Nova sessão com o relógio de inatividade zerado -- chamada a cada ação
+    de quem está na tela (web/sessao.py::funcionario_logado), nunca pelo timer
+    da tela, que não é uso."""
     return replace(sessao, ultimo_uso=agora or _agora())

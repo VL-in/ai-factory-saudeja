@@ -12,7 +12,7 @@ Três coisas são provadas aqui, e a segunda é a que mais importa:
 1. A redação funciona para as quatro formas de PII que o sistema manipula
    (CPF, telefone, e-mail e nome) e **não** estraga os identificadores
    pseudonimizados de que o diagnóstico depende.
-2. Ela vale para o log de **terceiros** -- `uvicorn`, `httpx`, `streamlit` --,
+2. Ela vale para o log de **terceiros** -- `uvicorn`, `httpx`, `nicegui` --,
    que é o único que existe em volume em produção. Um filtro que só cobrisse as
    linhas escritas por nós protegeria exatamente as que já estão sob controle.
 3. O ciclo fecha: a saída de um handler configurado, varrida por
@@ -100,6 +100,16 @@ CASOS_DE_PII = [
     ("paciente_nome=Ana Souza", "Ana Souza"),
     ("sobrenome=Souza", "Souza"),
     ("Infobip recusou: {'to': '5511987654321'}", TELEFONE),
+    # IP, família própria: a contagem de dígitos da regra numérica deixava
+    # passar todo IPv4 com menos de 10 dígitos.
+    ("cliente 10.1.2.3 conectado", "10.1.2.3"),
+    ("cliente 189.145.212.170 conectado", "189.145.212.170"),
+    ('10.1.2.3:4444 - "WebSocket /_nicegui_ws/socket.io/" [accepted]', "10.1.2.3"),
+    ("conexão de ('172.17.0.2', 51234) recusada", "172.17.0.2"),
+    ("proxy em [2001:db8::1]:443", "2001:db8::1"),
+    ("escutando em ::1 apenas", "::1"),
+    ("origem 2001:0db8:0000:0000:0000:ff00:0042:8329", "2001:0db8:0000:0000:0000:ff00:0042:8329"),
+    ("fim de frase com o IP 10.1.2.3.", "10.1.2.3"),
 ]
 
 
@@ -121,6 +131,13 @@ TEXTOS_DE_DIAGNOSTICO = [
     "nomeacao=automatica",
     "job D-2 concluído id_execucao=gh-38830675560-1",
     "span 4bf92f3577b34da6a3ce929d0e0e4736 status_http=500",
+    # O que a família `ip` não pode levar junto: versão, número decimal,
+    # horário e o run do Actions têm ponto ou dois-pontos, mas não a forma de IP.
+    "release 2.6.0 publicada",
+    "probabilidade 0.82 acima do threshold 0.6",
+    "consulta às 14:30:00 de 2026-11-07T14:30:00+00:00",
+    "pacote opentelemetry 1.44.0 e instrumentação 0.65b0",
+    "versão com quatro números em sequência 1.2.3.4.5",
 ]
 
 
@@ -282,6 +299,94 @@ def test_filtro_alcanca_handler_de_terceiro_instalado_antes(monkeypatch):
     assert MARCADOR in buffer.getvalue()
 
 
+def _logger_de_acesso_do_uvicorn(monkeypatch):
+    """O logger `uvicorn.access` de verdade, com o `AccessFormatter` de verdade
+    -- o formatador é a peça que quebrava, então imitá-lo não provaria nada."""
+    from uvicorn.logging import AccessFormatter
+
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(
+        AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False)
+    )
+    handler.addFilter(FiltroRedacaoPII())
+    # `handleError` imprime no stderr e engole a exceção: sem isto, um
+    # formatador quebrado passaria no teste com o buffer simplesmente vazio.
+    monkeypatch.setattr(logging, "raiseExceptions", True)
+    monkeypatch.setattr(handler, "handleError", lambda _record: (_ for _ in ()).throw(
+        AssertionError("o formatador de acesso do uvicorn quebrou")
+    ))
+
+    logger = logging.getLogger("uvicorn.access")
+    monkeypatch.setattr(logger, "handlers", [handler])
+    monkeypatch.setattr(logger, "propagate", False)
+    monkeypatch.setattr(logger, "level", logging.INFO)
+    return logger, buffer
+
+
+# IPv4 com menos de 10 dígitos: a regra numérica sozinha não o pegaria.
+IP_CURTO = "189.45.12.7"
+
+
+def test_linha_de_acesso_do_uvicorn_sai_inteira_e_sem_ip(monkeypatch):
+    """Zerar `record.args` derrubava o `AccessFormatter` (ele desempacota
+    cinco campos): a linha de acesso sumia e o "--- Logging error ---" ia ao
+    stderr com a mensagem -- IP do cliente incluído. A linha agora sai, com o
+    status e o caminho, e o cliente vira marcador sempre."""
+    logger, buffer = _logger_de_acesso_do_uvicorn(monkeypatch)
+
+    logger.info(
+        '%s - "%s %s HTTP/%s" %d', f"{IP_CURTO}:51234", "POST", "/predict", "1.1", 200
+    )
+
+    saida = buffer.getvalue()
+    assert IP_CURTO not in saida
+    assert saida.strip() == f'{MARCADOR} - "POST /predict HTTP/1.1" 200 OK'
+
+
+def test_query_string_da_linha_de_acesso_e_redigida(monkeypatch):
+    logger, buffer = _logger_de_acesso_do_uvicorn(monkeypatch)
+
+    logger.info(
+        '%s - "%s %s HTTP/%s" %d', "10.0.0.1:1", "GET", f"/health?contato={EMAIL}", "1.1", 404
+    )
+
+    saida = buffer.getvalue()
+    assert EMAIL not in saida
+    assert "404 Not Found" in saida
+
+
+def test_falha_na_redacao_da_linha_de_acesso_nao_quebra_o_formatador(monkeypatch):
+    """Fail-closed também aqui: a linha sai só com marcadores, e o formatador
+    do uvicorn (que exige os cinco campos e um status inteiro) não quebra."""
+
+    def _explodir(_texto):
+        raise RuntimeError("regex quebrada")
+
+    monkeypatch.setattr(logging_config, "redigir", _explodir)
+    logger, buffer = _logger_de_acesso_do_uvicorn(monkeypatch)
+
+    logger.info(
+        '%s - "%s %s HTTP/%s" %d', f"{IP_CURTO}:51234", "GET", f"/x?e={EMAIL}", "1.1", 200
+    )
+
+    saida = buffer.getvalue()
+    assert IP_CURTO not in saida
+    assert EMAIL not in saida
+    assert MARCADOR in saida
+
+
+def test_outros_loggers_com_cinco_args_seguem_a_regra_geral():
+    """O tratamento campo a campo vale só para `uvicorn.access`: num logger
+    qualquer, cinco argumentos não dizem nada sobre o formato, e a regra geral
+    (mensagem resolvida e redigida) é a que protege `nome=%s`."""
+    logger, buffer = _logger_com_captura("teste.cinco_args", formato="texto")
+
+    logger.info("nome=%s %s %s %s %s", "Ana Souza", "b", "c", "d", "e")
+
+    assert "Ana Souza" not in buffer.getvalue()
+
+
 def test_configurar_logging_e_idempotente():
     """A UI reexecuta o script a cada interação e a API importa os mesmos
     módulos -- chamada repetida não pode duplicar handler (linha dobrada no log)
@@ -310,6 +415,51 @@ def test_httpx_fica_em_warning():
     assert logging.getLogger("httpx").level == logging.WARNING
 
 
+# --- linhas de websocket do uvicorn (interface em NiceGUI, ADR-013) -------------
+# O uvicorn loga cada websocket pelo logger `uvicorn.error`, com o cliente
+# como `ip:porta` no primeiro argumento. O `connection open`/`connection
+# closed` vem da biblioteca `websockets`, pelo mesmo logger, sem o endereço:
+# entra aqui para provar que a linha passa intacta e sem IP.
+LINHAS_DE_WEBSOCKET_DO_UVICORN = [
+    ('%s - "WebSocket %s" [accepted]', ("10.1.2.3:4444", "/_nicegui_ws/socket.io/")),
+    ('%s - "WebSocket %s" 403', ("189.45.12.7:51234", "/_nicegui_ws/socket.io/")),
+    ('%s - "WebSocket %s" %d', ("[2001:db8::1]:443", "/_nicegui_ws/socket.io/", 1000)),
+    ("connection open", ()),
+    ("connection closed", ()),
+]
+
+
+@pytest.mark.parametrize("modelo,args", LINHAS_DE_WEBSOCKET_DO_UVICORN)
+def test_linhas_de_websocket_do_uvicorn_saem_sem_ip(modelo, args):
+    """Com o logger `uvicorn.error` de verdade e o handler blindado do jeito
+    que `configurar_logging` o deixa (`propagate=False` do uvicorn
+    incluído)."""
+    logger = logging.getLogger("uvicorn.error")
+    estado = (list(logger.handlers), logger.propagate, logger.level)
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(FormatadorJSON())
+    try:
+        logger.handlers = [handler]
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        aplicar_filtro_em_handlers_existentes()
+
+        logger.info(modelo, *args)
+    finally:
+        logger.handlers, logger.propagate, _nivel = estado
+        logger.setLevel(_nivel)
+
+    linha = json.loads(buffer.getvalue().strip())
+    for endereco in ("10.1.2.3", "189.45.12.7", "2001:db8::1"):
+        assert endereco not in linha["mensagem"]
+    assert auditoria_lgpd.auditar_texto(buffer.getvalue(), "<websocket>") == []
+    if args:
+        assert linha["mensagem"].startswith(f'{MARCADOR} - "WebSocket /_nicegui_ws/')
+    else:
+        assert linha["mensagem"] == modelo
+
+
 # --- ciclo fechado com scripts/auditoria_lgpd.py ------------------------------
 
 
@@ -323,7 +473,7 @@ def test_auditoria_acha_pii_em_log_nao_blindado():
     )
     achados = auditoria_lgpd.auditar_texto(linhas, "<teste>")
 
-    assert {a["regra"] for a in achados} == {"chave-de-pii", "email", "cpf-telefone-ip"}
+    assert {a["regra"] for a in achados} == {"chave-de-pii", "email", "cpf-telefone"}
     # O relatório nunca reimprime o valor encontrado -- senão a auditoria é o
     # vazamento com outro nome.
     for achado in achados:
@@ -342,6 +492,18 @@ def test_auditoria_nao_acha_nada_no_que_o_filtro_ja_produziu():
     logger.info("fila do dia", extra={"nome": "Ana Souza", "id_agendamento": UUID_AGENDAMENTO})
 
     assert auditoria_lgpd.auditar_texto(buffer.getvalue(), "<ciclo>") == []
+
+
+def test_auditoria_acha_ip_cru_e_nao_acha_o_redigido():
+    """O IP é a família nova: a auditoria do log do container (smoke do CI) tem
+    de acusá-lo cru, e o mesmo texto depois do filtro tem de passar limpo."""
+    linha = '10.1.2.3:4444 - "WebSocket /_nicegui_ws/socket.io/" [accepted]'
+
+    achados = auditoria_lgpd.auditar_texto(linha, "<teste>")
+
+    assert [a["regra"] for a in achados] == ["ip"]
+    assert "10.1.2.3" not in achados[0]["excerto"]
+    assert auditoria_lgpd.auditar_texto(redigir(linha), "<teste>") == []
 
 
 def test_auditoria_ignora_duracao_e_identificador_interno():

@@ -3,7 +3,7 @@ Smoke da imagem de deploy e do Space publicado.
 
 Dois modos, um para cada lado do sync:
 
-- `local` (job `imagem` do `ci.yml`): espera a UI (`/_stcore/health`) e a API
+- `local` (job `imagem` do `ci.yml`): espera a UI (`/healthz`) e a API
   (`/health`) do container recém-buildado ficarem de pé e confere que a
   `model_version` servida é a do `model.pkl` empacotado no staging. Substitui
   o laço de `curl` que vivia no YAML: o mesmo critério de "saudável" passa a
@@ -12,7 +12,7 @@ Dois modos, um para cada lado do sync:
   e ficava verde mesmo com o build do Space quebrado. Aqui ele espera o
   runtime do Space sair do build **no commit que acabou de subir** (o `sha`
   do runtime igual ao `sha` do repositório do Space) e bate em
-  `/_stcore/health` na URL pública. A `model_version` não é conferida neste
+  `/healthz` na URL pública. A `model_version` não é conferida neste
   modo: o Space publica uma porta só (`app_port: 7860`, a UI) e a API em 8000
   não é pública -- depende da decisão, ainda em aberto, sobre expor a API pública
   (proxy reverso na frente das duas portas, ou API em outro endereço).
@@ -42,6 +42,10 @@ from campeao import calcular_model_version  # noqa: E402
 from saida_actions import anexar_ao_resumo  # noqa: E402
 
 API_HF = "https://huggingface.co/api/spaces"
+# Rota de saúde da interface (src/web/main.py, ADR-013). O alias
+# `/_stcore/health` continua respondendo só para a sonda externa do Grafana
+# até ela trocar de rota; o smoke, que é do repositório, já usa a rota nova.
+ROTA_SAUDE_UI = "/healthz"
 
 # Estágios do runtime do Space (huggingface_hub.SpaceStage). Os de erro só
 # contam quando o runtime já está no sha novo -- antes disso, um BUILD_ERROR é
@@ -106,7 +110,7 @@ def verificar_local(
     relogio: Callable[[], float] = time.monotonic,
 ) -> None:
     def pronto() -> str | None:
-        status_ui, _ = buscar(f"{url_ui}/_stcore/health", {})
+        status_ui, _ = buscar(f"{url_ui}{ROTA_SAUDE_UI}", {})
         if status_ui != 200:
             return f"UI respondeu {status_ui or 'nada'}"
         status_api, _ = buscar(f"{url_api}/health", {})
@@ -188,10 +192,10 @@ def verificar_space(
     url = f"https://{dominio}"
 
     def ui_saudavel() -> str | None:
-        status, _ = buscar(f"{url}/_stcore/health", {})
+        status, _ = buscar(f"{url}{ROTA_SAUDE_UI}", {})
         return None if status == 200 else f"UI pública respondeu {status or 'nada'}"
 
-    # RUNNING diz que o container subiu; o health diz que o Streamlit atende.
+    # RUNNING diz que o container subiu; o health diz que a interface atende.
     _esperar(ui_saudavel, min(timeout, 180), 5, dormir, relogio)
     return url
 

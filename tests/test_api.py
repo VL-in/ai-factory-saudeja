@@ -65,7 +65,9 @@ def test_predict_especialidade_desconhecida_retorna_422_nao_500(payload_valido):
         resposta = client.post("/predict", json=payload_valido)
 
     assert resposta.status_code == 422
-    assert "especialidade-nunca-vista" in resposta.json()["detail"]
+    # O contrato de features diz o campo e a regra, nunca o valor recebido.
+    assert resposta.json()["detail"].startswith("especialidade:")
+    assert "especialidade-nunca-vista" not in resposta.json()["detail"]
 
 
 @pytest.mark.parametrize("campo, valor_invalido", [("idade", -1), ("sexo", "X")])
@@ -76,6 +78,50 @@ def test_predict_payload_invalido_retorna_422(payload_valido, campo, valor_inval
         resposta = client.post("/predict", json=payload_valido)
 
     assert resposta.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "campo, valor",
+    [
+        ("idade", 121),
+        ("distancia_km", 500.5),
+        ("dias_entre_agendamento_consulta", 181),
+        ("data_hora_agendada", "2026-01-04T10:00:00"),  # domingo
+        ("data_hora_agendada", "2026-01-05T12:00:00"),  # almoço
+    ],
+)
+def test_predict_fora_da_regra_de_negocio_retorna_422_com_o_campo(payload_valido, campo, valor):
+    """A rota aplica o contrato do job D-2: o que lá iria para a quarentena
+    aqui não é predito."""
+    payload_valido[campo] = valor
+
+    with TestClient(app) as client:
+        resposta = client.post("/predict", json=payload_valido)
+
+    assert resposta.status_code == 422
+    assert resposta.json()["detail"].startswith(f"{campo}:")
+
+
+def test_predict_dentro_do_dominio_nao_e_marcado(payload_valido):
+    with TestClient(app) as client:
+        corpo = client.post("/predict", json=payload_valido).json()
+
+    assert corpo["fora_do_dominio"] is False
+    assert corpo["campos_fora_do_dominio"] == []
+
+
+def test_predict_fora_do_dominio_do_treino_e_predito_e_marcado(payload_valido):
+    """Decisão da autora para o contrato: marcar, nunca rejeitar."""
+    payload_valido["idade"] = 95
+    payload_valido["distancia_km"] = 120.0
+
+    with TestClient(app) as client:
+        resposta = client.post("/predict", json=payload_valido)
+
+    assert resposta.status_code == 200
+    corpo = resposta.json()
+    assert corpo["fora_do_dominio"] is True
+    assert corpo["campos_fora_do_dominio"] == ["idade", "distancia_km"]
 
 
 def test_predict_classe_prevista_respeita_threshold_de_params(payload_valido, monkeypatch):

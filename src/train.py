@@ -117,3 +117,5 @@ if __name__ == "__main__":
 # TODO: precisaria adicionar API com FastAPI / Flask / Streamlit
 # pra o time de Produto integrar com o sistema das clínicas.
 # Abri o ticket SAUDEJA-241 mas não vou conseguir pegar antes das férias.
+# -> Atendido depois: API de predição em src/api/ (FastAPI) e interface em
+#    src/web/ (NiceGUI, ADR-013).

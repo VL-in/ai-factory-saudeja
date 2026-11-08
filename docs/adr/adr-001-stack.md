@@ -9,7 +9,9 @@ As decisões abaixo foram **substituídas** pelo ADR-004, que resolveu com escol
 - Gateway de LLM: não decidido aqui → ADR-004 decide **TrueFoundry**.
 - Plataforma de deploy: ADR-001 deixava em aberto HF Spaces/HF Inference Endpoints/Modal → ADR-004 decide **Hugging Face Space** (SDK Docker).
 
-Seguem **válidas** (não contestadas pelo ADR-004): Python-first, GitHub+DVC+MLflow para versionamento/rastreabilidade, Streamlit como frontend, FastAPI para as chamadas RESTful do modelo.
+Seguem **válidas** (não contestadas pelo ADR-004): Python-first, GitHub+DVC+MLflow para versionamento/rastreabilidade, FastAPI para as chamadas RESTful do modelo.
+
+O **Streamlit como frontend** foi substituído pelo NiceGUI no [ADR-013](adr-013-interface-nicegui.md) — 2026-11-07. Até a implementação chegar a produção, o Streamlit continua sendo a interface publicada.
 
 ## Contexto
 Qual é o problema que estamos resolvendo? Qual é o estado atual?

@@ -20,7 +20,6 @@ convenção. Aqui ela vira teste, sem Docker e sem rede:
 
 O build de verdade, como uid 1000, é o job `imagem` do `ci.yml`.
 """
-import ast
 import json
 import re
 import subprocess
@@ -141,7 +140,9 @@ def test_entrypoint_sobe_os_dois_processos_e_cai_junto():
     texto = ENTRYPOINT.read_bytes()
     assert b"\r\n" not in texto  # CRLF no shebang quebra o container
     assert b"wait -n" in texto
-    assert b"api.main:app" in texto and b"src/ui/app.py" in texto
+    assert b"api.main:app" in texto and b"web.main:criar_app" in texto
+    assert b"--factory" in texto
+    assert b"streamlit" not in texto
 
 
 # --------------------------------------------------------------------------
@@ -162,7 +163,8 @@ MODULOS_DO_PACOTE = {
     "uvicorn": ["uvicorn"],
     "shap": ["shap"],
     "httpx": ["httpx"],
-    "streamlit": ["streamlit"],
+    "nicegui": ["nicegui"],
+    "pytest-asyncio": ["pytest_asyncio"],
     "supabase": ["supabase", "supabase_auth", "postgrest"],
     "matplotlib": ["matplotlib"],
     "jupyter": [],
@@ -208,19 +210,6 @@ def _todos_os_pacotes() -> set[str]:
 
 def _bloqueados(instalados: set[str]) -> list[str]:
     return sorted(m for p in _todos_os_pacotes() - instalados for m in MODULOS_DO_PACOTE[p])
-
-
-def _imports_de_topo(arquivo: Path) -> list[str]:
-    """Para o app Streamlit, que executa a tela ao ser importado: só os
-    imports do topo do script."""
-    arvore = ast.parse(arquivo.read_text(encoding="utf-8"))
-    nomes = []
-    for no in arvore.body:
-        if isinstance(no, ast.Import):
-            nomes += [a.name for a in no.names]
-        elif isinstance(no, ast.ImportFrom) and no.module and no.level == 0:
-            nomes += [f"{no.module}:{a.name}" for a in no.names]
-    return nomes
 
 
 def _ambientes_dos_workflows() -> dict[str, tuple[set[str], list[str]]]:
@@ -318,12 +307,14 @@ def test_cada_workflow_importa_o_que_executa_so_com_o_que_instala(ambiente):
 
 
 def test_imagem_do_space_importa_api_e_ui_so_com_api_e_ui_txt():
-    """O mesmo para a imagem de deploy: `api.main` (uvicorn) e os imports do
-    `src/ui/app.py` (streamlit run), com tudo que não vem de api.txt/ui.txt
+    """O mesmo para a imagem de deploy: `api.main` e `web.main`, os dois apps
+    que o entrypoint sobe com uvicorn, com tudo que não vem de api.txt/ui.txt
     -- matplotlib, imbalanced-learn, DVC -- bloqueado. É a prova, sem Docker,
-    de que a UI e a API não dependem do ambiente de treino."""
+    de que a UI e a API não dependem do ambiente de treino. `web.main` não
+    monta nada no import (fábrica `criar_app`), então importá-lo puxa todas as
+    páginas e `ui.logic` sem subir servidor."""
     instalados = _pacotes(REQUIREMENTS / "api.txt") | _pacotes(REQUIREMENTS / "ui.txt")
-    alvos = ["api.main", *_imports_de_topo(REPO_ROOT / "src" / "ui" / "app.py")]
+    alvos = ["api.main", "web.main"]
 
     resultado = _importar_sem(_bloqueados(instalados), alvos)
 
@@ -376,7 +367,7 @@ def test_local_espera_ui_e_api_e_confere_o_modelo():
     relogio = _Relogio()
     buscar = _http(
         {
-            f"{UI}/_stcore/health": [(0, ""), (0, ""), (200, "ok")],
+            f"{UI}/healthz": [(0, ""), (0, ""), (200, "ok")],
             f"{API}/health": [(200, json.dumps({"status": "ok", "model_version": "abc123"}))],
         }
     )
@@ -392,7 +383,7 @@ def test_local_falha_se_a_api_serve_outro_modelo():
     relogio = _Relogio()
     buscar = _http(
         {
-            f"{UI}/_stcore/health": [(200, "ok")],
+            f"{UI}/healthz": [(200, "ok")],
             f"{API}/health": [(200, json.dumps({"model_version": "velho"}))],
         }
     )
@@ -404,7 +395,7 @@ def test_local_falha_se_a_api_serve_outro_modelo():
 
 def test_local_falha_no_timeout_com_o_ultimo_motivo():
     relogio = _Relogio()
-    buscar = _http({f"{UI}/_stcore/health": [(200, "ok")], f"{API}/health": [(500, "")]})
+    buscar = _http({f"{UI}/healthz": [(200, "ok")], f"{API}/health": [(500, "")]})
     with pytest.raises(smoke_deploy.FalhaSmoke, match="API respondeu 500"):
         smoke_deploy.verificar_local(
             UI, API, "x", timeout=10, buscar=buscar, dormir=relogio.dormir, relogio=relogio
@@ -432,7 +423,7 @@ def test_space_espera_o_commit_novo_sair_do_build_e_responder():
                 _runtime("APP_STARTING", "novo"),
                 _runtime("RUNNING", "novo"),
             ],
-            "https://vl-in-saude-ja.hf.space/_stcore/health": [(502, ""), (200, "ok")],
+            "https://vl-in-saude-ja.hf.space/healthz": [(502, ""), (200, "ok")],
         }
     )
 

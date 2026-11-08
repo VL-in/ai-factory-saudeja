@@ -93,9 +93,18 @@ class CampoNumerico:
     dominio: Faixa
 
 
+# Distância máxima da regra de negócio (decisão da autora, 2026-11-08): o
+# mesmo limite do campo na tela do paciente, que lê esta constante. Antes a
+# faixa não tinha máximo, e a API predizia sobre 9999 km sem marcar nada além
+# de "fora do domínio". Acima de 500 km o dado é erro de preenchimento, não um
+# paciente que o modelo não viu.
+DISTANCIA_MAXIMA_KM = 500.0
+
 CAMPOS_NUMERICOS = (
     CampoNumerico("idade", inteiro=True, negocio=Faixa(0, 120), dominio=Faixa(0, 85)),
-    CampoNumerico("distancia_km", inteiro=False, negocio=Faixa(0, None), dominio=Faixa(0, 50)),
+    CampoNumerico(
+        "distancia_km", inteiro=False, negocio=Faixa(0, DISTANCIA_MAXIMA_KM), dominio=Faixa(0, 50)
+    ),
     CampoNumerico(
         "dias_entre_agendamento_consulta",
         inteiro=True,
@@ -111,6 +120,16 @@ CAMPOS_DO_PAYLOAD = (
     CAMPO_ESPECIALIDADE,
     CAMPO_DATA_HORA,
 )
+
+
+def faixa_de_negocio(nome: str) -> Faixa:
+    """A faixa da regra de negócio de um campo numérico, para quem precisa
+    do limite fora do contrato (a mensagem e o calendário do cadastro), sem
+    copiar o número."""
+    for campo in CAMPOS_NUMERICOS:
+        if campo.nome == nome:
+            return campo.negocio
+    raise KeyError(nome)
 
 
 @dataclass(frozen=True)

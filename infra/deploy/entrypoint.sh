@@ -1,10 +1,12 @@
 #!/bin/bash
 # SaudeJa -- um container, dois processos (a imagem do HF Space).
 #
-# Por que os dois na mesma imagem: o Streamlit chama o modelo EM PROCESSO
-# (ADR-005 b), entao ele nao precisa da API para funcionar; a API existe ao
-# lado dele para servir integracoes externas ao ecossistema Saude Ja (diagrama
-# C2 do architecture.md). Dois servicos always-on separados custariam o dobro
+# Por que os dois na mesma imagem: a interface (NiceGUI, ADR-013) chama o
+# modelo EM PROCESSO (ADR-005 b), entao ela nao precisa da API para funcionar;
+# a API existe ao lado dela para servir integracoes externas ao ecossistema
+# Saude Ja (diagrama C2 do architecture.md). A interface roda num processo
+# proprio, e nao montada no app da API: montada, publicaria /predict e /docs
+# sem autenticacao na URL do Space. Dois servicos always-on separados custariam o dobro
 # contra um orcamento de US$100/mes (BRIEFING.md).
 #
 # Sem supervisord/s6 de proposito: sao dois processos sem ordem de
@@ -30,10 +32,13 @@ python -m uvicorn api.main:app \
     --port "${API_PORT:-8000}" &
 PID_API=$!
 
-python -m streamlit run src/ui/app.py \
-    --server.address 0.0.0.0 \
-    --server.port "${UI_PORT:-7860}" \
-    --server.headless true &
+# Fabrica (--factory): o app da interface e' montado na partida, nao no
+# import de web.main (ver o docstring de src/web/main.py).
+python -m uvicorn web.main:criar_app \
+    --factory \
+    --app-dir src \
+    --host 0.0.0.0 \
+    --port "${UI_PORT:-7860}" &
 PID_UI=$!
 
 if wait -n; then

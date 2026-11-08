@@ -189,7 +189,7 @@ jobs:
         # Sem isto o workflow terminava verde no sync, mesmo com o build do
         # Space quebrado. Espera o runtime chegar no commit que acabou de subir
         # (sha do runtime == sha do repositorio do Space), falha em
-        # BUILD_ERROR/RUNTIME_ERROR e bate em /_stcore/health na URL publica.
+        # BUILD_ERROR/RUNTIME_ERROR e bate em /healthz na URL publica.
         # A model_version nao e' conferida aqui: a API (8000) nao e' publica
         # enquanto nao houver decisao sobre a porta unica do Space (so' a UI,
         # em 7860, e' publicada).

@@ -1,6 +1,6 @@
 """
 SaúdeJá — Política de privacidade e Termos de uso na tela de agendamento
-(ADR-010, decisão D2), sem Streamlit.
+(ADR-010, decisão D2), sem framework de interface.
 
 Antes do cadastro, o paciente marca uma caixa de **ciência** dos dois
 documentos e só então o botão "Continuar" libera o formulário. A ciência não é
