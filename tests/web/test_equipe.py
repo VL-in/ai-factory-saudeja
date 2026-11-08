@@ -46,7 +46,7 @@ def _contar_buscas(monkeypatch, fila=None):
 
 
 def _abas(usuario) -> list[str]:
-    return textos(usuario, kind=ui.tab)
+    return textos(usuario, marker="aba-principal")
 
 
 # --- login (E1 a E7) ----------------------------------------------------------------

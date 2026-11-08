@@ -17,6 +17,7 @@ Três decisões (ADR-013):
 Nada aqui recebe dado do banco ou do usuário como HTML (regra D7 da migração):
 o CSS é constante, e os textos vão por `ui.label`, que escapa o conteúdo.
 """
+from datetime import date, datetime, time
 from pathlib import Path
 
 from nicegui import ui
@@ -144,3 +145,75 @@ def cartao_metrica(rotulo: str, valor: object, icone: str, cor: str, ajuda: str 
         if ajuda:
             ui.tooltip(ajuda)
     return cartao
+
+
+# Formato das datas digitadas, o mesmo da interface antiga (`YYYY/MM/DD`): data
+# é entrada do modelo, e o formato não muda por causa da troca de interface.
+FORMATO_DATA = "%Y/%m/%d"
+MASCARA_DATA_QUASAR = "YYYY/MM/DD"
+
+
+def texto_da_data(valor: date | None) -> str:
+    return valor.strftime(FORMATO_DATA) if valor else ""
+
+
+def ler_data(texto: str | None) -> date | None:
+    """Data digitada ou escolhida no calendário; `None` se vazia ou inválida
+    (a validação de `logic` diz ao usuário o que falta)."""
+    try:
+        return datetime.strptime((texto or "").strip(), FORMATO_DATA).date()
+    except ValueError:
+        return None
+
+
+def campo_de_data(
+    rotulo: str,
+    valor: date | None = None,
+    minimo: date | None = None,
+    maximo: date | None = None,
+    ao_mudar=None,
+) -> ui.input:
+    """Campo de texto com calendário. Os limites vão ao calendário como opção
+    (só datas do intervalo ficam clicáveis); a regra continua no servidor, em
+    `logic`, que recusa data digitada fora dele."""
+    campo = ui.input(rotulo, value=texto_da_data(valor)).props(
+        f'outlined dense mask="####/##/##" placeholder="{MASCARA_DATA_QUASAR}"'
+    )
+    opcoes = ""
+    if minimo or maximo:
+        condicoes = []
+        if minimo:
+            condicoes.append(f"d >= '{texto_da_data(minimo)}'")
+        if maximo:
+            condicoes.append(f"d <= '{texto_da_data(maximo)}'")
+        opcoes = f':options="d => {" && ".join(condicoes)}"'
+    with campo.add_slot("append"):
+        icone = ui.icon("edit_calendar").classes("cursor-pointer")
+        with ui.menu() as menu:
+            calendario = ui.date(on_change=lambda: menu.close()).props(
+                f'mask="{MASCARA_DATA_QUASAR}" {opcoes}'.strip()
+            )
+            calendario.bind_value(campo)
+        icone.on("click", menu.open)
+    if ao_mudar is not None:
+        campo.on_value_change(ao_mudar)
+    return campo
+
+
+def campo_de_hora(rotulo: str, valor: time) -> ui.input:
+    campo = ui.input(rotulo, value=valor.strftime("%H:%M")).props(
+        'outlined dense mask="##:##" placeholder="HH:MM"'
+    )
+    with campo.add_slot("append"):
+        icone = ui.icon("schedule").classes("cursor-pointer")
+        with ui.menu() as menu:
+            ui.time().props('format24h mask="HH:mm"').bind_value(campo)
+        icone.on("click", menu.open)
+    return campo
+
+
+def ler_hora(texto: str | None) -> time | None:
+    try:
+        return datetime.strptime((texto or "").strip(), "%H:%M").time()
+    except ValueError:
+        return None

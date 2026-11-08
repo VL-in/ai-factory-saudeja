@@ -180,9 +180,9 @@ class AreaDaEquipe:
 
     async def _abas(self) -> None:
         with ui.tabs().props("align=left no-caps inline-label").classes("w-full") as abas:
-            ui.tab(ABA_FILA, icon="today")
-            ui.tab(ABA_PEDIDOS, icon="assignment_ind")
-            ui.tab(ABA_TIME_TECNICO, icon="insights")
+            ui.tab(ABA_FILA, icon="today").mark("aba-principal")
+            ui.tab(ABA_PEDIDOS, icon="assignment_ind").mark("aba-principal")
+            ui.tab(ABA_TIME_TECNICO, icon="insights").mark("aba-principal")
         with ui.tab_panels(abas, value=ABA_FILA).classes("w-full bg-transparent"):
             with ui.tab_panel(ABA_FILA).classes("px-0"):
                 self.fila = FilaDoDia(self)
