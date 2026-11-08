@@ -57,8 +57,8 @@ groups:
     folder: "${PASTA}"
     interval: 1m
     rules:
-      # O padrao e' logging_config.regex_de_pii_re2(): as tres familias do
-      # filtro de redacao (chave de PII, e-mail, CPF/telefone/IP) em RE2, que
+      # O padrao e' logging_config.regex_de_pii_re2(): as quatro familias do
+      # filtro de redacao (chave de PII, e-mail, IP, CPF/telefone) em RE2, que
       # casam o dado cru e nao a saida do filtro. O filtro de linha so' olha o
       # corpo do log; os atributos (extra=) passam pelo mesmo filtro no
       # processo.

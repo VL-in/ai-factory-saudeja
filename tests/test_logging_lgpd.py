@@ -100,6 +100,16 @@ CASOS_DE_PII = [
     ("paciente_nome=Ana Souza", "Ana Souza"),
     ("sobrenome=Souza", "Souza"),
     ("Infobip recusou: {'to': '5511987654321'}", TELEFONE),
+    # IP, família própria: a contagem de dígitos da regra numérica deixava
+    # passar todo IPv4 com menos de 10 dígitos.
+    ("cliente 10.1.2.3 conectado", "10.1.2.3"),
+    ("cliente 189.145.212.170 conectado", "189.145.212.170"),
+    ('10.1.2.3:4444 - "WebSocket /_nicegui_ws/socket.io/" [accepted]', "10.1.2.3"),
+    ("conexão de ('172.17.0.2', 51234) recusada", "172.17.0.2"),
+    ("proxy em [2001:db8::1]:443", "2001:db8::1"),
+    ("escutando em ::1 apenas", "::1"),
+    ("origem 2001:0db8:0000:0000:0000:ff00:0042:8329", "2001:0db8:0000:0000:0000:ff00:0042:8329"),
+    ("fim de frase com o IP 10.1.2.3.", "10.1.2.3"),
 ]
 
 
@@ -121,6 +131,13 @@ TEXTOS_DE_DIAGNOSTICO = [
     "nomeacao=automatica",
     "job D-2 concluído id_execucao=gh-38830675560-1",
     "span 4bf92f3577b34da6a3ce929d0e0e4736 status_http=500",
+    # O que a família `ip` não pode levar junto: versão, número decimal,
+    # horário e o run do Actions têm ponto ou dois-pontos, mas não a forma de IP.
+    "release 2.6.0 publicada",
+    "probabilidade 0.82 acima do threshold 0.6",
+    "consulta às 14:30:00 de 2026-11-07T14:30:00+00:00",
+    "pacote opentelemetry 1.44.0 e instrumentação 0.65b0",
+    "versão com quatro números em sequência 1.2.3.4.5",
 ]
 
 
@@ -398,6 +415,51 @@ def test_httpx_fica_em_warning():
     assert logging.getLogger("httpx").level == logging.WARNING
 
 
+# --- linhas de websocket do uvicorn (interface em NiceGUI, ADR-013) -------------
+# O uvicorn loga cada websocket pelo logger `uvicorn.error`, com o cliente
+# como `ip:porta` no primeiro argumento. O `connection open`/`connection
+# closed` vem da biblioteca `websockets`, pelo mesmo logger, sem o endereço:
+# entra aqui para provar que a linha passa intacta e sem IP.
+LINHAS_DE_WEBSOCKET_DO_UVICORN = [
+    ('%s - "WebSocket %s" [accepted]', ("10.1.2.3:4444", "/_nicegui_ws/socket.io/")),
+    ('%s - "WebSocket %s" 403', ("189.45.12.7:51234", "/_nicegui_ws/socket.io/")),
+    ('%s - "WebSocket %s" %d', ("[2001:db8::1]:443", "/_nicegui_ws/socket.io/", 1000)),
+    ("connection open", ()),
+    ("connection closed", ()),
+]
+
+
+@pytest.mark.parametrize("modelo,args", LINHAS_DE_WEBSOCKET_DO_UVICORN)
+def test_linhas_de_websocket_do_uvicorn_saem_sem_ip(modelo, args):
+    """Com o logger `uvicorn.error` de verdade e o handler blindado do jeito
+    que `configurar_logging` o deixa (`propagate=False` do uvicorn
+    incluído)."""
+    logger = logging.getLogger("uvicorn.error")
+    estado = (list(logger.handlers), logger.propagate, logger.level)
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(FormatadorJSON())
+    try:
+        logger.handlers = [handler]
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        aplicar_filtro_em_handlers_existentes()
+
+        logger.info(modelo, *args)
+    finally:
+        logger.handlers, logger.propagate, _nivel = estado
+        logger.setLevel(_nivel)
+
+    linha = json.loads(buffer.getvalue().strip())
+    for endereco in ("10.1.2.3", "189.45.12.7", "2001:db8::1"):
+        assert endereco not in linha["mensagem"]
+    assert auditoria_lgpd.auditar_texto(buffer.getvalue(), "<websocket>") == []
+    if args:
+        assert linha["mensagem"].startswith(f'{MARCADOR} - "WebSocket /_nicegui_ws/')
+    else:
+        assert linha["mensagem"] == modelo
+
+
 # --- ciclo fechado com scripts/auditoria_lgpd.py ------------------------------
 
 
@@ -411,7 +473,7 @@ def test_auditoria_acha_pii_em_log_nao_blindado():
     )
     achados = auditoria_lgpd.auditar_texto(linhas, "<teste>")
 
-    assert {a["regra"] for a in achados} == {"chave-de-pii", "email", "cpf-telefone-ip"}
+    assert {a["regra"] for a in achados} == {"chave-de-pii", "email", "cpf-telefone"}
     # O relatório nunca reimprime o valor encontrado -- senão a auditoria é o
     # vazamento com outro nome.
     for achado in achados:
@@ -430,6 +492,18 @@ def test_auditoria_nao_acha_nada_no_que_o_filtro_ja_produziu():
     logger.info("fila do dia", extra={"nome": "Ana Souza", "id_agendamento": UUID_AGENDAMENTO})
 
     assert auditoria_lgpd.auditar_texto(buffer.getvalue(), "<ciclo>") == []
+
+
+def test_auditoria_acha_ip_cru_e_nao_acha_o_redigido():
+    """O IP é a família nova: a auditoria do log do container (smoke do CI) tem
+    de acusá-lo cru, e o mesmo texto depois do filtro tem de passar limpo."""
+    linha = '10.1.2.3:4444 - "WebSocket /_nicegui_ws/socket.io/" [accepted]'
+
+    achados = auditoria_lgpd.auditar_texto(linha, "<teste>")
+
+    assert [a["regra"] for a in achados] == ["ip"]
+    assert "10.1.2.3" not in achados[0]["excerto"]
+    assert auditoria_lgpd.auditar_texto(redigir(linha), "<teste>") == []
 
 
 def test_auditoria_ignora_duracao_e_identificador_interno():

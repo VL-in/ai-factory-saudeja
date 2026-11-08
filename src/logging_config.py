@@ -84,8 +84,9 @@ _PADRAO_CHAVE_VALOR = re.compile(
 
 _PADRAO_EMAIL = re.compile(r"(?<![\w.])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
-# Sequência numérica candidata a CPF (11 dígitos), telefone brasileiro (10 a 13
-# com código do país) ou IP. A contagem de dígitos é conferida em
+# Sequência numérica candidata a CPF (11 dígitos) ou telefone brasileiro (10 a
+# 13 com código do país). IP tem família própria (`_PADRAO_IP`, abaixo): a
+# contagem de dígitos não serve para ele. A contagem de dígitos é conferida em
 # `_redigir_sequencia_numerica`, não na própria regex: o que separa um telefone
 # de um `duracao_ms` é quantos dígitos tem, e expressar isso em regex sobre um
 # texto com separadores variados (`(11) 98765-4321`, `+55 11 98765-4321`,
@@ -98,6 +99,35 @@ _PADRAO_SEQUENCIA_NUMERICA = re.compile(r"(?<![\w\-])\+?\d[\d\s().\-]{8,20}\d(?!
 
 _DIGITOS_MINIMOS = 10  # telefone fixo com DDD
 _DIGITOS_MAXIMOS = 13  # celular com código do país (55 + DDD + 9 dígitos)
+
+# Endereço IP, v4 e v6, com ou sem porta. IP é dado pessoal sob a LGPD e não tem
+# contagem de dígitos útil: um IPv4 tem de 4 a 12, então `10.1.2.3:4444` (a forma
+# em que o uvicorn loga o cliente de cada websocket, `'%s - "WebSocket %s"
+# [accepted]'`) passava inteiro pela regra numérica. Por isso a família redige
+# sempre, sem conferir nada além da forma.
+#
+# As fronteiras são o que separa um IP do resto do log:
+# - IPv4 exige quatro octetos e não pode estar colado a letra, dígito ou ponto,
+#   então versão SemVer (`2.6.0`), probabilidade (`0.82`) e um quinto grupo
+#   (`1.2.3.4.5`) não casam. Um ponto final de frase depois do IP é aceito;
+# - IPv6 exige os oito grupos ou o `::` da forma comprimida, com pelo menos um
+#   grupo. Um horário (`14:30:00`) tem dois-pontos simples e nunca oito grupos;
+# - o IPv6 entre colchetes (`[2001:db8::1]:443`) sai com os colchetes e a porta.
+# A tupla `('172.17.0.2', 51234)` perde o endereço; a porta sozinha não
+# identifica ninguém.
+_OCTETO = r"\d{1,3}"
+_IPV4 = rf"{_OCTETO}(?:\.{_OCTETO}){{3}}"
+_HEX = r"[0-9A-Fa-f]{1,4}"
+_IPV6 = (
+    rf"(?:{_HEX}:){{7}}{_HEX}"
+    rf"|(?:{_HEX}(?::{_HEX}){{0,6}})?::{_HEX}(?::{_HEX}){{0,6}}"
+    rf"|{_HEX}(?::{_HEX}){{0,6}}::"
+)
+_PADRAO_IP = re.compile(
+    rf"\[(?:{_IPV6})\](?::\d{{1,5}})?"
+    rf"|(?<![\w.:])(?:{_IPV6})(?![\w:]|\.\d)"
+    rf"|(?<![\w.]){_IPV4}(?::\d{{1,5}})?(?!\.?\w)"
+)
 
 # Atributos que o próprio `logging` põe em todo LogRecord -- o que sobrar são
 # os campos passados por `extra=`, que é o que o formatador serializa e o
@@ -127,12 +157,11 @@ def _redigir_por_completo(casamento: re.Match) -> str:
 
 
 def _redigir_sequencia_numerica(casamento: re.Match) -> str:
-    """Redige só o que tem contagem de dígitos de CPF/telefone/IP.
+    """Redige só o que tem contagem de dígitos de CPF/telefone.
 
-    Erra para o lado de redigir: um epoch em milissegundos (13 dígitos) ou um
-    IP de cliente no log de acesso do uvicorn caem aqui. No caso do IP isso não
-    é dano colateral -- endereço IP é dado pessoal sob a LGPD, e o `ts` de cada
-    linha já vem do formatador, não da mensagem.
+    Erra para o lado de redigir: um epoch em milissegundos (13 dígitos) cai
+    aqui, e o `ts` de cada linha já vem do formatador, não da mensagem. IP não
+    depende desta contagem: tem família própria (`_PADRAO_IP`).
     """
     trecho = casamento.group(0)
     digitos = sum(1 for c in trecho if c.isdigit())
@@ -148,15 +177,18 @@ def _redigir_sequencia_numerica(casamento: re.Match) -> str:
 #
 # Cada regra é (nome, padrão, substituição). A substituição é o que decide se
 # há PII: para a sequência numérica ela devolve o próprio trecho quando a
-# contagem de dígitos não é de CPF/telefone/IP, e isso é o que faz um
-# `duracao_ms` não virar achado.
+# contagem de dígitos não é de CPF/telefone, e isso é o que faz um
+# `duracao_ms` não virar achado. O IP vem antes da sequência numérica, que é a
+# mais propensa a casar demais: um IP seguido de outro número não pode ser
+# engolido pela metade por ela.
 REGRAS_DE_PII = (
     ("chave-de-pii", _PADRAO_CHAVE_VALOR, _redigir_chave_valor),
     ("email", _PADRAO_EMAIL, _redigir_por_completo),
-    ("cpf-telefone-ip", _PADRAO_SEQUENCIA_NUMERICA, _redigir_sequencia_numerica),
+    ("ip", _PADRAO_IP, _redigir_por_completo),
+    ("cpf-telefone", _PADRAO_SEQUENCIA_NUMERICA, _redigir_sequencia_numerica),
 )
 
-# As mesmas três famílias, traduzidas para RE2 (o regex do Loki), para a regra
+# As mesmas quatro famílias, traduzidas para RE2 (o regex do Loki), para a regra
 # P1 "PII em log" do Grafana (infra/grafana/alertas/lgpd.yaml). O RE2 não tem
 # lookbehind nem lookahead, e a contagem de dígitos que
 # `_redigir_sequencia_numerica` faz em Python vira repetição no próprio
@@ -172,8 +204,16 @@ REGRAS_DE_PII_RE2 = (
         r"""[^\s<,;)}\]])""",
     ),
     ("email", r"(?:^|[^\w.])[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
+    # As fronteiras de `_PADRAO_IP` viram caractere consumido antes e depois.
+    # Nenhum dígito sobra na saída do filtro (`<REDIGIDO>`), então a linha já
+    # redigida não casa.
     (
-        "cpf-telefone-ip",
+        "ip",
+        rf"(?:^|[^\w.:])(?:{_IPV6})(?:[^\w:.]|$|\.[^\d]|\.$)"
+        rf"|(?:^|[^\w.]){_IPV4}(?:[^\w.]|$|\.[^\w]|\.$)",
+    ),
+    (
+        "cpf-telefone",
         rf"(?:^|[^\w-])\+?\d(?:[\s().-]{{0,4}}\d)"
         rf"{{{_DIGITOS_MINIMOS - 1},{_DIGITOS_MAXIMOS - 1}}}(?:[^\w-]|$)",
     ),
@@ -181,18 +221,19 @@ REGRAS_DE_PII_RE2 = (
 
 
 def regex_de_pii_re2() -> str:
-    """As três regras de `REGRAS_DE_PII_RE2` numa alternância só, pronta para
+    """As quatro regras de `REGRAS_DE_PII_RE2` numa alternância só, pronta para
     o filtro de linha do LogQL (`|~`). Sem crase: o LogQL a recebe entre
     crases."""
     return "|".join(f"(?:{padrao})" for _nome, padrao in REGRAS_DE_PII_RE2)
 
 
 def redigir(texto: str) -> str:
-    """Aplica as três famílias de regra a um texto já renderizado.
+    """Aplica as quatro famílias de regra a um texto já renderizado.
 
     A ordem de `REGRAS_DE_PII` importa: a regra de chave primeiro, porque ela
     apaga o valor inteiro (inclusive um nome, que nenhuma outra pegaria);
-    depois e-mail; por fim a sequência numérica, a mais propensa a casar demais.
+    depois e-mail e IP; por fim a sequência numérica, a mais propensa a casar
+    demais.
     """
     if not texto:
         return texto
@@ -281,9 +322,9 @@ def _linha_de_acesso_do_uvicorn(record: logging.LogRecord) -> bool:
 def _redigir_args_de_acesso(args: tuple) -> tuple:
     """Mantém o formato que o `AccessFormatter` exige e redige campo a campo.
 
-    O endereço do cliente sai **sempre**, sem passar pela regra numérica: um
-    IPv4 tem de 4 a 12 dígitos, e só os de 10 a 13 seriam pegos por
-    `_redigir_sequencia_numerica` -- `189.45.12.7:51234` passaria inteiro. O
+    O endereço do cliente sai **sempre**, sem depender de regex: o campo é o
+    cliente por definição, qualquer que seja a forma (um socket Unix, um nome de
+    host atrás de proxy). A família `ip` cobre o IP no resto das linhas. O
     diagnóstico não precisa dele (o `/health` e o SLO não olham cliente). O
     caminho passa por `redigir` porque a query string pode carregar valor
     digitado. Método, versão e status não têm como conter PII e o status
@@ -294,7 +335,9 @@ def _redigir_args_de_acesso(args: tuple) -> tuple:
 
 
 def _redigir_record(record: logging.LogRecord) -> None:
-    if _linha_de_acesso_do_uvicorn(record):
+    # O `isinstance` repete o que `_linha_de_acesso_do_uvicorn` já conferiu: o
+    # mypy não estreita o tipo de `record.args` através da chamada.
+    if _linha_de_acesso_do_uvicorn(record) and isinstance(record.args, tuple):
         record.args = _redigir_args_de_acesso(record.args)
     else:
         # `getMessage()` resolve msg % args; guardar o resultado e zerar args é

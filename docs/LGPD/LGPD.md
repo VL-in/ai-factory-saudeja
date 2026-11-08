@@ -494,7 +494,7 @@ Fonte: elaboração própria (2026).
 
 O [SLO](../SLO.md) (seção 6) exige zero ocorrência de dado pessoal em log. O log de execução do Hugging Face Space é efêmero, apagado a cada restart e sem busca. Desde a v2.2.0, o log também é exportado ao Loki, no Grafana Cloud, onde fica 14 dias: é a primeira cópia de log que sobrevive ao restart ([ADR-012](../adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md)). A garantia é preventiva, em três camadas ([ADR-006](../adr/adr-006-observabilidade.md)), com uma camada detectiva depois do envio:
 
-a) **filtro de redação** (`src/logging_config.py`), aplicado a todos os handlers do processo, inclusive os do `uvicorn` e do `streamlit`, que geram a maior parte do log real, e o do OpenTelemetry, que exporta ao Loki. Dados com formato reconhecível (CPF, telefone, e-mail, IP) são detectados por padrão. O nome não tem formato, então o filtro reconhece a chave que o anuncia (`nome=`, `"nome":`, `extra={"nome": ...}`);
+a) **filtro de redação** (`src/logging_config.py`), aplicado a todos os handlers do processo, inclusive os do `uvicorn` e do `streamlit`, que geram a maior parte do log real, e o do OpenTelemetry, que exporta ao Loki. Dados com formato reconhecível (CPF, telefone, e-mail, IP) são detectados por padrão, cada um na sua família de regra. O IP, v4 ou v6, com ou sem porta, é sempre redigido, sem contagem de dígitos. O nome não tem formato, então o filtro reconhece a chave que o anuncia (`nome=`, `"nome":`, `extra={"nome": ...}`);
 
 b) **guarda estática** (`tests/test_coerencia_repo.py::test_nenhuma_chamada_de_log_em_src_referencia_campo_de_pii`), que percorre a AST de `src/*.py` e falha se alguma chamada de log referenciar campo proibido. A guarda tem controle negativo próprio;
 
@@ -502,7 +502,7 @@ c) **varredura de log** (`scripts/auditoria_lgpd.py`), usada no smoke test do de
 
 d) **detecção no Loki**, depois do envio: a regra P1 "Dado pessoal em log exportado ao Loki" varre o Loki com as mesmas `REGRAS_DE_PII` e aciona o plantão. Foi testada de ponta a ponta em dev, com uma linha sintética enviada sem passar pelo filtro. Detecta, mas não impede: a linha fica no Loki até vencer (subseção 9.6, item 36).
 
-Quando a redação falha, a linha é substituída por um marcador, em vez de sair sem redação. A regra numérica erra para o lado de redigir a mais, mas só pega sequências de 10 a 13 dígitos, e um IPv4 tem de 4 a 12. Por isso, no log de acesso do `uvicorn`, o endereço do cliente é sempre trocado pelo marcador, sem passar pela contagem de dígitos. Os scripts do pipeline de treino (`preprocess`, `train`, `validate`) ficam fora do escopo, porque processam só o dataset pseudonimizado e a saída deles é lida no terminal e no MLflow.
+Quando a redação falha, a linha é substituída por um marcador, em vez de sair sem redação. A regra numérica (CPF e telefone) erra para o lado de redigir a mais e só pega sequências de 10 a 13 dígitos. Um IPv4 tem de 4 a 12, então ela não serve para o IP, que tem família própria e cobre qualquer linha, inclusive as de websocket do `uvicorn` (`10.1.2.3:4444 - "WebSocket ..."`). No log de acesso do `uvicorn`, o campo do cliente continua sendo trocado pelo marcador sem depender de padrão nenhum. Os scripts do pipeline de treino (`preprocess`, `train`, `validate`) ficam fora do escopo, porque processam só o dataset pseudonimizado e a saída deles é lida no terminal e no MLflow.
 
 ### 8.1 Logs dos provedores
 
