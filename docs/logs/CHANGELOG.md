@@ -15,6 +15,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
 ### Modificado
 - **A tela do paciente passa de `/` para `/paciente`.** Quem tinha a URL do Space salva cai na tela inicial e escolhe "Sou paciente". Os links "Voltar ao agendamento" da Política e dos Termos levam a `/paciente`; a página de erro passa a levar ao início.
+- **Tela de agendamento redesenhada, na mesma linha da tela inicial.** O topo traz a mesma foto esmaecida (servida pela própria aplicação, com o véu do tema claro ou escuro), um link de volta ao início e um indicador das três etapas (privacidade, cadastro e horário, confirmação). O formulário fica dividido em "Sua consulta" e "Seus dados", com um resumo ao lado que acompanha a data, o horário, a especialidade e a antecedência escolhidos. O botão "Confirmar agendamento" mostra que está processando e não aceita um segundo clique, os campos de nome e telefone ajudam o preenchimento automático do navegador, e o sexo aparece por extenso. A confirmação ganha destaque e um link de volta ao início. Os campos, os formatos, a validação e a ordem das etapas não mudam: a ciência continua antes de qualquer campo ([ADR-010](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-010-base-de-treino-separada.md)).
 
 ## [v3.0.0] (Vanessa + Claude) - 2026-11-08
 

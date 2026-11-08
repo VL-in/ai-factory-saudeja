@@ -314,3 +314,11 @@ async def test_ciencia_perdida_na_poda_da_aba_volta_a_ser_cobrada(usuario, monke
 
     await usuario.should_see("Política de privacidade e dos Termos de uso", retries=20)
     assert chamadas == []
+
+
+def test_css_do_topo_aponta_para_a_imagem_do_inicio():
+    """O CSS é literal (guarda de HTML cru): se a URL da imagem mudar no
+    início, este teste pega o topo que ficaria sem foto em silêncio."""
+    from web.paginas import inicio, paciente
+
+    assert f'url("{inicio.URL_IMAGEM_DE_FUNDO}")' in paciente.CSS_PACIENTE
