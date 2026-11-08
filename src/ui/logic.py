@@ -42,6 +42,7 @@ from supabase_auth.errors import AuthApiError  # noqa: E402
 
 import agenda_clinica  # noqa: E402
 import consentimento  # noqa: E402
+import contrato_features  # noqa: E402
 import db.client as db_client  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import db.repositorio_treino as repositorio_treino  # noqa: E402
@@ -108,6 +109,14 @@ class ResultadoPredicao:
     model_version: str
     explicacao: list = field(default_factory=list)
     explicacao_texto: str | None = None
+    # Contrato de features: campos que o modelo não viu no treino (a
+    # probabilidade é extrapolação). Mesma marca que o job grava em
+    # `predicoes.fora_do_dominio`; aqui vai também o nome dos campos.
+    campos_fora_do_dominio: tuple[str, ...] = ()
+
+    @property
+    def fora_do_dominio(self) -> bool:
+        return bool(self.campos_fora_do_dominio)
 
 
 def montar_payload(
@@ -189,9 +198,16 @@ class ClientePredicaoEmProcesso:
             origem=observabilidade.ORIGEM_PROCESSO,
             model_version=self._model_version,
         ):
+            # O mesmo contrato do job D-2 e da rota /predict: o que o job
+            # mandaria para a quarentena é recusado aqui, e o que o modelo não
+            # viu no treino é predito e marcado.
             try:
-                X = inference.construir_features(payload, self._mapa_especialidade)
-            except inference.EspecialidadeDesconhecidaError as exc:
+                linha = contrato_features.validar_payload(payload, self._mapa_especialidade)
+                X = inference.construir_features(linha.valores, self._mapa_especialidade)
+            except (
+                contrato_features.ViolacaoDoContrato,
+                inference.EspecialidadeDesconhecidaError,
+            ) as exc:
                 raise ErroValidacao(str(exc)) from exc
 
             probabilidade = float(inference.predizer(self._model, X)[0])
@@ -207,6 +223,7 @@ class ClientePredicaoEmProcesso:
                 explicacao_texto=self._explicador_llm.explicar_em_texto(
                     contribuicoes, contexto={}
                 ),
+                campos_fora_do_dominio=linha.campos_fora_do_dominio,
             )
 
 
@@ -238,6 +255,7 @@ class ClientePredicaoAPI:
             model_version=corpo["model_version"],
             explicacao=corpo.get("explicacao", []),
             explicacao_texto=corpo.get("explicacao_texto"),
+            campos_fora_do_dominio=tuple(corpo.get("campos_fora_do_dominio", ())),
         )
 
     def _requisitar(self, metodo: str, rota: str, **kwargs) -> dict:
@@ -679,20 +697,53 @@ def nome_valido(nome_completo: str) -> bool:
     return NOME_MINIMO <= len((nome_completo or "").strip()) <= NOME_MAXIMO
 
 
-# Limite inferior do formulário e da validação do cadastro (decisão da autora,
-# 2026-10-05). Note que o contrato de features aceita idade só até 120 anos
-# (`contrato_features`, faixa de negócio): quem nasceu antes disso passa aqui
-# e é recusado no job D-2.
-DATA_NASCIMENTO_MINIMA = date(1900, 1, 1)
+# Limites que o cadastro lê do contrato de features, em vez de copiar o
+# número: o que a tela aceita, o job D-2 e o export do re-treino aceitam.
+_FAIXA_IDADE = contrato_features.faixa_de_negocio("idade")
+_FAIXA_DISTANCIA = contrato_features.faixa_de_negocio("distancia_km")
+IDADE_MAXIMA = int(_FAIXA_IDADE.maximo or 0)
+DISTANCIA_MAXIMA_KM = contrato_features.DISTANCIA_MAXIMA_KM
 
 
-def data_nascimento_valida(data_nascimento: date | None, hoje: date | None = None) -> bool:
-    """Obrigatória e dentro da faixa do formulário. Sem limite mínimo de
-    idade: a clínica atende pediatria, então um recém-nascido é paciente
+def data_nascimento_minima(referencia: date) -> date:
+    """Nascimento mais antigo de quem tem até `IDADE_MAXIMA` anos em
+    `referencia`. Até 2026-11-08 o limite era fixo em 01/01/1900, e quem
+    nasceu entre 1900 e 120 anos atrás passava no cadastro e ia para a
+    quarentena do job D-2: sem predição, sem lembrete e fora do export."""
+    ano = referencia.year - (IDADE_MAXIMA + 1)
+    try:
+        limite = referencia.replace(year=ano)
+    except ValueError:  # 29/02 num ano que não é bissexto
+        limite = date(ano, 2, 28)
+    return limite + timedelta(days=1)
+
+
+def data_nascimento_valida(
+    data_nascimento: date | None,
+    data_consulta: date | None = None,
+    hoje: date | None = None,
+) -> bool:
+    """Obrigatória, nunca no futuro, e com no máximo `IDADE_MAXIMA` anos **na
+    data da consulta** -- o mesmo cálculo do job D-2 (`calcular_idade`), que
+    é quem aplica o contrato depois. Medir em relação a hoje deixaria passar
+    quem faz aniversário entre o agendamento e a consulta. Sem limite mínimo
+    de idade: a clínica atende pediatria, então um recém-nascido é paciente
     válido."""
     if data_nascimento is None:
         return False
-    return DATA_NASCIMENTO_MINIMA <= data_nascimento <= (hoje or hoje_na_clinica())
+    hoje = hoje or hoje_na_clinica()
+    referencia = max(data_consulta or hoje, hoje)
+    return data_nascimento <= hoje and _FAIXA_IDADE.contem(
+        calcular_idade(data_nascimento, referencia)
+    )
+
+
+def _distancia_valida(distancia_km: object) -> bool:
+    try:
+        numero = contrato_features.coagir_numero("distancia_km", distancia_km, inteiro=False)
+    except contrato_features.ViolacaoDoContrato:
+        return False
+    return _FAIXA_DISTANCIA.contem(numero)
 
 
 def validar_cadastro(
@@ -700,13 +751,23 @@ def validar_cadastro(
     cpf: str,
     telefone: str,
     data_nascimento: date | None,
+    sexo: str | None,
     especialidade: str,
+    distancia_km: float | None,
     data_consulta: date,
     hora_consulta: time | None,
 ) -> list[str]:
     """Todos os problemas do formulário, na ordem em que os campos aparecem
     na tela -- lista vazia quando dá para gravar. Só confere a forma: não
     muda valor, formato nem opção que vira feature do modelo.
+
+    **O que passa aqui passa no contrato de features**, por construção: depois
+    das mensagens por campo, o payload que o job D-2 montaria passa pelo
+    próprio `contrato_features` (`_violacao_do_contrato`). Antes, o limite do
+    campo na tela era a única barreira da distância, e o `ui.number` do
+    NiceGUI só o aplica quando o campo perde o foco (o Streamlit recusava no
+    servidor): uma distância negativa chegava ao banco e virava falha, não
+    recusa.
 
     `nome_completo=None` continua aceito (quem chama sem nome, ver
     `cadastrar_paciente_e_agendamento`); string vazia é campo em branco."""
@@ -723,11 +784,13 @@ def validar_cadastro(
         problemas.append("Telefone inválido -- informe DDD + número (ex. (11) 98765-4321).")
     if data_nascimento is None:
         problemas.append("Informe a data de nascimento.")
-    elif not data_nascimento_valida(data_nascimento, hoje):
+    elif not data_nascimento_valida(data_nascimento, data_consulta, hoje):
         problemas.append(
-            "Data de nascimento inválida -- informe uma data entre "
-            f"{DATA_NASCIMENTO_MINIMA:%d/%m/%Y} e hoje."
+            "Data de nascimento inválida -- informe uma data até hoje, de quem terá no "
+            f"máximo {IDADE_MAXIMA} anos na data da consulta."
         )
+    if sexo not in contrato_features.SEXOS_VALIDOS:
+        problemas.append("Sexo inválido -- escolha uma das opções da lista.")
 
     # Antes, sem lista de especialidades, o formulário caía em texto livre e
     # gravava qualquer coisa -- o erro só aparecia no job D-2, dias depois,
@@ -740,6 +803,15 @@ def validar_cadastro(
         )
     elif especialidade not in especialidades:
         problemas.append("Especialidade inválida -- escolha uma das opções da lista.")
+
+    # Vazio é erro, nunca 0 km: a distância é feature do modelo, e um zero
+    # inventado vira predição sobre quem mora na porta da clínica.
+    if distancia_km is None:
+        problemas.append("Informe a distância até a clínica, em km.")
+    elif not _distancia_valida(distancia_km):
+        problemas.append(
+            f"Distância inválida -- informe um valor entre 0 e {DISTANCIA_MAXIMA_KM:g} km."
+        )
 
     if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje):
         problemas.append(
@@ -754,7 +826,39 @@ def validar_cadastro(
             "08h-11h30/13h-18h, sáb 08h-11h30, fechado aos domingos)."
         )
 
+    if not problemas and data_nascimento is not None and hora_consulta is not None:
+        violacao = _violacao_do_contrato(
+            {
+                "idade": calcular_idade(data_nascimento, data_consulta),
+                "sexo": sexo,
+                "especialidade": especialidade,
+                "distancia_km": distancia_km,
+                "dias_entre_agendamento_consulta": dias_ate_consulta(data_consulta, hoje),
+                "historico_noshow": 0,
+                "data_hora_agendada": datetime.combine(
+                    data_consulta, hora_consulta, tzinfo=fuso_da_clinica()
+                ),
+            },
+            especialidades,
+        )
+        if violacao is not None:
+            rotulo = ROTULOS_FEATURES.get(violacao.campo, violacao.campo)
+            problemas.append(f"{rotulo}: valor não aceito -- confira o campo.")
+
     return problemas
+
+
+def _violacao_do_contrato(
+    payload: dict, especialidades: list[str]
+) -> contrato_features.ViolacaoDoContrato | None:
+    """O contrato sobre o payload que o job D-2 vai montar deste cadastro
+    (idade na data da consulta, data e hora no fuso da clínica). As mensagens
+    por campo de `validar_cadastro` já cobrem cada regra de hoje; esta é a
+    rede para a regra que o contrato ganhar e o cadastro ainda não conhecer.
+
+    `historico_noshow` só é contado depois de o paciente existir no banco; o
+    0 cumpre a regra (`>= 0`), que uma contagem cumpre sempre."""
+    return contrato_features.violacao_ou_none(payload, especialidades)
 
 
 MENSAGEM_SEM_CIENCIA = (
@@ -770,7 +874,7 @@ def cadastrar_paciente_e_agendamento(
     data_nascimento: date | None,
     sexo: str,
     especialidade: str,
-    distancia_km: float,
+    distancia_km: float | None,
     data_consulta: date,
     hora_consulta: time | None,
     nome_completo: str | None = None,
@@ -822,15 +926,22 @@ def cadastrar_paciente_e_agendamento(
         cpf=cpf,
         telefone=telefone,
         data_nascimento=data_nascimento,
+        sexo=sexo,
         especialidade=especialidade,
+        distancia_km=distancia_km,
         data_consulta=data_consulta,
         hora_consulta=hora_consulta,
     )
     if not versao_documentos:
         problemas.insert(0, MENSAGEM_SEM_CIENCIA)
-    # As duas checagens de None nunca valem sem `problemas` (validar_cadastro
-    # já as reporta): estão aqui só para o mypy estreitar o tipo abaixo.
-    if problemas or data_nascimento is None or hora_consulta is None:
+    # As checagens de None nunca valem sem `problemas` (validar_cadastro já
+    # as reporta): estão aqui só para o mypy estreitar o tipo abaixo.
+    if (
+        problemas
+        or data_nascimento is None
+        or hora_consulta is None
+        or distancia_km is None
+    ):
         raise ErroValidacaoCadastro(problemas)
 
     try:

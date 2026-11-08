@@ -24,6 +24,7 @@ if str(SRC_DIR) not in sys.path:
 
 from fastapi import FastAPI, HTTPException, Request  # noqa: E402
 
+import contrato_features  # noqa: E402
 import inference  # noqa: E402
 import observabilidade  # noqa: E402
 import telemetria  # noqa: E402
@@ -150,9 +151,18 @@ def health():
 
 @app.post("/predict", response_model=PredictOut)
 def predict(payload: PacienteConsultaIn):
+    # O contrato do job D-2: fora da regra de negócio é 422 (lá, quarentena);
+    # fora do domínio do treino é predito e marcado. A mensagem diz o campo e
+    # a regra, nunca o valor (`ViolacaoDoContrato`).
     try:
-        X = inference.construir_features(payload.model_dump(), app.state.mapa_especialidade)
-    except inference.EspecialidadeDesconhecidaError as exc:
+        linha = contrato_features.validar_payload(
+            payload.model_dump(), app.state.mapa_especialidade
+        )
+        X = inference.construir_features(linha.valores, app.state.mapa_especialidade)
+    except (
+        contrato_features.ViolacaoDoContrato,
+        inference.EspecialidadeDesconhecidaError,
+    ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     probabilidade = float(inference.predizer(app.state.model, X)[0])
@@ -166,4 +176,6 @@ def predict(payload: PacienteConsultaIn):
         explicacao=contribuicoes,
         explicacao_texto=explicador_llm.explicar_em_texto(contribuicoes, contexto={}),
         model_version=app.state.model_version,
+        fora_do_dominio=linha.fora_do_dominio,
+        campos_fora_do_dominio=list(linha.campos_fora_do_dominio),
     )

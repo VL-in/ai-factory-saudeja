@@ -254,11 +254,15 @@ Resposta com o modelo campeão `6430cb3315da`, resumida:
     "..."
   ],
   "explicacao_texto": null,
-  "model_version": "6430cb3315da"
+  "model_version": "6430cb3315da",
+  "fora_do_dominio": false,
+  "campos_fora_do_dominio": []
 }
 ```
 
 A probabilidade fica abaixo do threshold, então esse paciente não receberia lembrete. Cada item da explicação é a contribuição SHAP de uma feature, ordenada pelo valor absoluto: positiva puxa o risco para cima, negativa para baixo.
+
+A rota aplica o mesmo contrato de features do job D-2. Um dado fora da regra de negócio (idade acima de 120, distância acima de 500 km, antecedência acima de 180 dias, horário fora da grade da clínica) volta como 422, com o campo e a regra, sem o valor. Um dado que o modelo não viu no treino é predito e marcado em `fora_do_dominio`, com os campos em `campos_fora_do_dominio`.
 
 ### Treinar o modelo
 

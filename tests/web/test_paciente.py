@@ -149,6 +149,37 @@ async def test_cadastro_em_branco_lista_todos_os_problemas_sem_tocar_o_banco(usu
         assert problema in aviso
 
 
+def _definir_valor(usuario, marker, valor) -> None:
+    """O valor como o navegador o manda ao servidor a cada tecla, sem o
+    `blur` que faria o `ui.number` aplicar o mínimo e o máximo do campo."""
+    with usuario:
+        (elemento,) = ElementFilter(marker=marker)
+        elemento.value = valor
+
+
+@pytest.mark.parametrize(
+    "distancia, problema",
+    [(None, "Informe a distância"), (-3.0, "Distância inválida"), (900.0, "Distância inválida")],
+    ids=["vazia", "negativa", "acima-de-500"],
+)
+async def test_distancia_fora_do_contrato_nao_conclui_o_cadastro(usuario, distancia, problema):
+    """Regressão da troca do Streamlit: o limite do campo só vale no `blur`,
+    e a distância negativa chegava ao banco e virava falha, contada como erro.
+    Agora é recusa na tela, e campo vazio não vira 0 km."""
+    await usuario.open("/")
+    await _preencher_cadastro_valido(usuario)
+    _definir_valor(usuario, "paciente-distancia", distancia)
+
+    usuario.find(marker="agendar").click()
+
+    await usuario.should_see("Corrija os campos", retries=20)
+    (aviso,) = textos(usuario, marker="aviso-aviso")
+    assert problema in aviso
+    assert textos(usuario, marker="aviso-erro") == []  # não chegou à persistência
+    await usuario.should_not_see(marker="confirmacao")
+    assert _habilitado(usuario, "agendar")
+
+
 async def test_data_de_nascimento_comeca_vazia(usuario):
     """C3. Um 01/01/1990 pré-preenchido e esquecido virava idade errada no
     modelo."""

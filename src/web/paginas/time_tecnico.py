@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from nicegui import ui
 
+import agenda_clinica
 from ui import logic
 from web import dados, sessao, tema
 from web.execucao import executar_em_thread
@@ -200,10 +201,14 @@ class TimeTecnico:
                     # bloquear o formulário.
                     especialidade = ui.input("Especialidade").props("outlined dense")
                 distancia = ui.number(
-                    "Distância (km)", value=5.5, min=0.0, max=500.0, step=0.5
-                ).props("outlined dense")
+                    "Distância (km)", value=5.5, min=0.0, max=logic.DISTANCIA_MAXIMA_KM, step=0.5
+                ).props("outlined dense").mark("teste-distancia")
                 dias = ui.number(
-                    "Dias entre agendamento e consulta", value=14, min=0, max=365, step=1,
+                    "Dias entre agendamento e consulta",
+                    value=14,
+                    min=0,
+                    max=agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS,
+                    step=1,
                     format="%d",
                 ).props("outlined dense")
                 historico = ui.number(
@@ -284,6 +289,16 @@ class TimeTecnico:
                 )
             else:
                 tema.aviso("Abaixo do threshold: nenhum lembrete pago seria disparado.", "ok")
+            if resultado.fora_do_dominio:
+                campos = ", ".join(
+                    logic.ROTULOS_FEATURES.get(c, c) for c in resultado.campos_fora_do_dominio
+                )
+                tema.aviso(
+                    f"Previsão incerta: fora do que o modelo viu no treino ({campos}). A "
+                    "probabilidade é extrapolação; o job diário marcaria esta predição como "
+                    "fora do domínio.",
+                    "aviso",
+                )
             ui.label(
                 f"modelo {resultado.model_version} · threshold de params.yaml "
                 f"(decision.threshold) · predição via backend {logic.backend_ativo()}"

@@ -175,7 +175,10 @@ class TelaDoPaciente:
                 # virava idade errada no modelo sem ninguém perceber; vazio, a
                 # validação cobra o campo. Mesmo formato dos demais campos de data.
                 nascimento = tema.campo_de_data(
-                    "Data de nascimento", None, minimo=logic.DATA_NASCIMENTO_MINIMA, maximo=hoje
+                    "Data de nascimento",
+                    None,
+                    minimo=logic.data_nascimento_minima(hoje),
+                    maximo=hoje,
                 ).mark("paciente-nascimento")
                 sexo = ui.select(["F", "M"], value="F", label="Sexo").props("outlined dense")
                 especialidade: ui.select | ui.input
@@ -188,9 +191,16 @@ class TelaDoPaciente:
                     # configurada); o campo continua para o formulário não
                     # mudar de forma.
                     especialidade = ui.input("Especialidade").props("outlined dense")
+                # Os limites do campo são só ajuda de preenchimento: o NiceGUI
+                # os aplica quando o campo perde o foco, e quem recusa de fato
+                # é logic.validar_cadastro, com o máximo do contrato.
                 distancia = ui.number(
-                    "Distância (km)", value=5.5, min=0.0, max=500.0, step=0.5
-                ).props("outlined dense")
+                    "Distância (km)",
+                    value=5.5,
+                    min=0.0,
+                    max=logic.DISTANCIA_MAXIMA_KM,
+                    step=0.5,
+                ).props("outlined dense").mark("paciente-distancia")
                 # `dias_entre_agendamento_consulta` não é perguntado: é derivado
                 # da data escolhida (logic.dias_ate_consulta). Perguntar
                 # permitiria gravar um valor incoerente com a própria data, e é
@@ -236,7 +246,8 @@ class TelaDoPaciente:
                 "data_nascimento": tema.ler_data(nascimento.value),
                 "sexo": sexo.value,
                 "especialidade": especialidade.value or "",
-                "distancia_km": float(distancia.value or 0),
+                # Vazio segue vazio: a validação cobra o campo, em vez de gravar 0 km.
+                "distancia_km": distancia.value,
                 "data_consulta": tema.ler_data(data_consulta.value),
                 "hora_consulta": tema.ler_hora(horario.value),
                 "nome_completo": nome.value or "",

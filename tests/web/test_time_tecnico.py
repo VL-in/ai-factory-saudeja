@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 from apoio_web import entrar_na_equipe, esperar_ate, textos
+from nicegui import ElementFilter
 
 from ui import logic
 from web import sessao
@@ -181,3 +182,35 @@ async def test_sair_descarta_a_predicao_de_verdade(usuario):
 def _resultado(usuario):
     with usuario:
         return sessao.aba().get(sessao.CHAVE_RESULTADO)
+
+
+def _definir_valor(usuario, marker, valor) -> None:
+    with usuario:
+        (elemento,) = ElementFilter(marker=marker)
+        elemento.value = valor
+
+
+async def test_testar_predicao_recusa_o_que_o_job_mandaria_para_a_quarentena(usuario):
+    """O formulário aplica o mesmo contrato do job D-2: sem predição sobre
+    distância negativa, mesmo sem o `blur` que limitaria o campo."""
+    await entrar_na_equipe(usuario)
+    _definir_valor(usuario, "teste-distancia", -3.0)
+
+    usuario.find(marker="prever").click()
+
+    await usuario.should_see("Não foi possível prever com estes dados", retries=60)
+    assert "distancia_km" in " ".join(textos(usuario, marker="aviso-aviso"))
+    assert _resultado(usuario) is None
+
+
+async def test_testar_predicao_avisa_quando_o_modelo_nao_viu_o_dado_no_treino(usuario):
+    """Fora do domínio do treino é predito e marcado, como no job."""
+    await entrar_na_equipe(usuario)
+    _definir_valor(usuario, "teste-distancia", 120.0)
+
+    usuario.find(marker="prever").click()
+
+    await esperar_ate(lambda: _resultado(usuario) is not None, timeout=60)
+    assert _resultado(usuario).campos_fora_do_dominio == ("distancia_km",)
+    await usuario.should_see("Previsão incerta", retries=20)
+    assert any("Distância até a clínica" in t for t in textos(usuario, marker="aviso-aviso"))

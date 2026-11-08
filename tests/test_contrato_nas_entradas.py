@@ -12,9 +12,11 @@ Este arquivo liga as duas pontas: o cadastro roda de verdade (`logic`), só com
 o banco trocado, e o que ele gravaria nas duas bases passa pelo contrato do
 mesmo jeito que o job e o export o leem.
 
-**Divergências conhecidas** ficam como `xfail(strict=True)`: a suíte
-continua verde, e cada divergência está escrita aqui. Quando a correção chegar,
-o teste passa a passar, o `strict` o faz falhar, e o marcador tem de sair.
+Desde 2026-11-08 o cadastro e a API aplicam o próprio contrato, e as
+divergências que este arquivo registrava como `xfail(strict=True)` (distância
+negativa, nascimento entre 1900 e 120 anos atrás, `/predict` sem contrato)
+viraram testes comuns. Uma divergência nova que precise esperar correção
+volta a entrar como `xfail(strict=True)`, com o motivo escrito.
 """
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -190,29 +192,42 @@ def test_todo_horario_oferecido_passa_no_contrato(cadastrar, dias_a_frente):
         _aceito_pelo_contrato(cadastrar, data_consulta=dia, hora_consulta=hora)
 
 
-# --- divergências conhecidas (validação de features, a decidir) --------------------
+# --- o que o contrato recusa, o cadastro recusa antes de gravar --------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "o cadastro não confere a distância no servidor: o mínimo do campo na tela só é "
-        "aplicado no navegador, e o contrato recusa distância negativa"
-    ),
+def _recusado_sem_gravar(cadastrar, **campos) -> None:
+    """Recusado como erro de preenchimento: conta como recusa, e não como
+    falha do banco que dispara o alerta de erro."""
+    with pytest.raises(logic.ErroValidacaoCadastro):
+        cadastrar(**campos)
+
+
+@pytest.mark.parametrize(
+    "campos",
+    [
+        {"distancia_km": -3.0},
+        {"distancia_km": 500.5},
+        {"distancia_km": None},  # campo vazio: nunca vira 0 km
+        {"sexo": "X"},
+        {"data_nascimento": date(1900, 1, 2)},  # o antigo limite fixo do formulário
+        # 120 anos hoje e 121 no dia da consulta: o job mede na consulta.
+        {
+            "data_nascimento": date(HOJE.year - 121, HOJE.month, HOJE.day) + timedelta(days=3),
+            "data_consulta": HOJE + timedelta(days=7),
+        },
+    ],
+    ids=[
+        "distancia-negativa",
+        "distancia-acima-de-500",
+        "distancia-vazia",
+        "sexo-x",
+        "nascimento-1900",
+        "121-anos-na-consulta",
+    ],
 )
-def test_distancia_negativa_nao_e_aceita_no_cadastro_e_recusada_depois(cadastrar):
-    _coerente(cadastrar, distancia_km=-3.0)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "o cadastro aceita nascimento desde 1900 (`DATA_NASCIMENTO_MINIMA`), e o contrato "
-        "só aceita idade até 120 anos: o agendamento vai para a quarentena do job D-2"
-    ),
-)
-def test_nascimento_acima_de_120_anos_nao_e_aceito_no_cadastro_e_recusado_depois(cadastrar):
-    _coerente(cadastrar, data_nascimento=date(1900, 1, 2))
+def test_o_que_o_contrato_recusa_o_cadastro_recusa_antes_de_gravar(cadastrar, campos):
+    _recusado_sem_gravar(cadastrar, **campos)
+    _coerente(cadastrar, **campos)
 
 
 # --- a API de predição -------------------------------------------------------------
@@ -244,21 +259,15 @@ def test_api_prediz_o_que_o_contrato_aceita(cliente_api):
     assert cliente_api.post("/predict", json=payload).status_code == 200
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "`PacienteConsultaIn` só tem `ge=0`, e `/predict` não aplica o contrato: prediz sobre "
-        "o que o job D-2 mandaria para a quarentena"
-    ),
-)
 @pytest.mark.parametrize(
     "sobrescritos",
     [
         {"idade": 150},
         {"dias_entre_agendamento_consulta": 400},
         {"data_hora_agendada": datetime.combine(HOJE - timedelta(days=1), time(3, 0)).isoformat()},
+        {"distancia_km": 9999.0},
     ],
-    ids=["idade-150", "antecedencia-400-dias", "domingo-3h"],
+    ids=["idade-150", "antecedencia-400-dias", "domingo-3h", "distancia-9999"],
 )
 def test_api_recusa_o_que_o_contrato_recusa(cliente_api, sobrescritos):
     payload = _payload_da_api(**sobrescritos)
