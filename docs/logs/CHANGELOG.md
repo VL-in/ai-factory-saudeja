@@ -8,7 +8,7 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [Não publicado]
+## [v3.1.0] (Vanessa + Claude) - 2026-11-08
 
 ### Adicionado
 - **Tela inicial com a escolha entre paciente e funcionário.** A URL do Space abre uma tela de entrada com a frase "Feito para o seu bem-estar" sobre uma foto esmaecida e dois acessos: "Sou paciente", que leva à ciência, ao cadastro e ao agendamento, e "Sou funcionário", que leva ao login da área da equipe. A ordem das etapas de cada área não muda. A foto é servida pela própria aplicação, sem nada de terceiros no navegador ([ADR-013](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-013-interface-nicegui.md)), e o véu sobre ela segue o tema claro ou escuro.
