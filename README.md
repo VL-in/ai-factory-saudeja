@@ -52,7 +52,7 @@ Medido no fold de teste isolado, o modelo em produção tem **acurácia de 0,67,
 |---|---|---|
 | ![Formulário de cadastro e agendamento com data, nome, CPF, telefone, especialidade, horário e a autorização opcional de uso no treino](docs/screenshots/paciente-formulario.png) | ![Tela de ciência da Política de privacidade e dos Termos de uso no celular, em tema escuro](docs/screenshots/paciente-celular-escuro.png) | ![Tela de login da área da equipe, com e-mail e senha](docs/screenshots/equipe-login.png) |
 
-Antes de qualquer campo, o paciente declara ciência da Política de privacidade e dos Termos de uso; o formulário só é montado depois disso. A área da equipe (`/equipe`) tem as abas "Fila do dia", "Pedidos do titular" e "Time técnico".
+A entrada (`/`) mostra a frase "Feito para o seu bem-estar" sobre uma foto esmaecida e dois acessos: "Sou paciente" leva ao agendamento (`/paciente`, sem login) e "Sou funcionário" à área da equipe (`/equipe`). Antes de qualquer campo, o paciente declara ciência da Política de privacidade e dos Termos de uso; o formulário só é montado depois disso. A área da equipe (`/equipe`) tem as abas "Fila do dia", "Pedidos do titular" e "Time técnico".
 
 ## Arquitetura
 
@@ -83,7 +83,7 @@ flowchart LR
 
 | Componente | Onde está | Função |
 |---|---|---|
-| Interface | [`src/web/`](src/web/), [`src/ui/logic.py`](src/ui/logic.py) | NiceGUI na porta 7860: paciente em `/`, Política e Termos em `/privacidade` e `/termos`, equipe em `/equipe` (login via Supabase Auth). A regra de negócio fica em `logic.py`, testável sem framework de interface ([ADR-013](docs/adr/adr-013-interface-nicegui.md)) |
+| Interface | [`src/web/`](src/web/), [`src/ui/logic.py`](src/ui/logic.py) | NiceGUI na porta 7860: início em `/` (escolha entre paciente e equipe), paciente em `/paciente`, Política e Termos em `/privacidade` e `/termos`, equipe em `/equipe` (login via Supabase Auth). A regra de negócio fica em `logic.py`, testável sem framework de interface ([ADR-013](docs/adr/adr-013-interface-nicegui.md)) |
 | API de predição | [`src/api/`](src/api/) | FastAPI com `/health` e `/predict` (probabilidade + explicação SHAP), para integrações. Não é exposta no Space |
 | Inferência | [`src/inference.py`](src/inference.py), [`src/explain.py`](src/explain.py) | Núcleo de predição e explicabilidade, compartilhado por interface, API e job |
 | Contrato de features | [`src/contrato_features.py`](src/contrato_features.py) | Barra dado fora da regra de negócio (quarentena) e marca dado fora do domínio do treino |
@@ -209,7 +209,7 @@ python -m uvicorn web.main:criar_app --factory --app-dir src --port 7860     # i
 
 | Endereço | Serviço |
 |---|---|
-| <http://localhost:7860> | Interface (tela do paciente; a equipe entra em `/equipe`) |
+| <http://localhost:7860> | Interface (tela inicial; paciente em `/paciente`, equipe em `/equipe`) |
 | <http://localhost:7860/healthz> | Saúde da interface (`ok`) |
 | <http://localhost:8000/health> | Status da API e versão do modelo |
 | <http://localhost:8000/docs> | Documentação OpenAPI |

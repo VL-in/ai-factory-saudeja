@@ -102,7 +102,7 @@ async def test_login_bem_sucedido_libera_as_abas(usuario, monkeypatch):
 async def test_tela_do_paciente_nao_exige_login(usuario):
     """E5. O autoagendamento continua aberto: a porta é só na frente dos dados
     da clínica."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
 
     await usuario.should_see("Cadastro e agendamento")
     await usuario.should_not_see(marker="login-email")
@@ -400,7 +400,7 @@ async def test_acao_lenta_nao_trava_as_outras_abas(usuario, outra_aba, monkeypat
     await asyncio.to_thread(comecou.wait, 5)
 
     inicio = time.monotonic()
-    await outra_aba.open("/")
+    await outra_aba.open("/paciente")
     await outra_aba.should_see("Cadastro e agendamento")
     duracao = time.monotonic() - inicio
 

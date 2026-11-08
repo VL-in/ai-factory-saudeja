@@ -11,7 +11,7 @@ de redação dos demais logs, LGPD.md §8).
 Três situações, três ganchos do NiceGUI:
 
 - **endereço que não existe** (404): página própria, com o caminho de volta
-  ao agendamento;
+  ao início;
 - **exceção ao montar uma página** (`app.on_page_exception`) ou numa rota que
   não é página (`exception_handler(Exception)`): página própria, com status 500;
 - **exceção num clique, depois de a página aberta** (`app.on_exception`): a
@@ -27,7 +27,7 @@ from fastapi import Request
 from fastapi.responses import Response
 from nicegui import Client, app, ui
 
-from web import tema
+from web import rotas, tema
 
 TITULO_NAO_ENCONTRADA = "Página não encontrada"
 TEXTO_NAO_ENCONTRADA = "O endereço digitado não existe ou mudou."
@@ -60,11 +60,11 @@ def conteudo_de_erro(titulo: str, texto: str) -> None:
             ui.label("SaúdeJá").classes("text-lg font-bold tracking-tight")
         ui.label(titulo).classes("text-2xl font-semibold text-center").mark("erro-titulo")
         ui.label(texto).classes("text-sm sj-suave text-center").mark("erro-texto")
-        with ui.link(target="/").classes("flex items-center gap-1 text-primary").mark(
+        with ui.link(target=rotas.INICIO).classes("flex items-center gap-1 text-primary").mark(
             "erro-voltar"
         ):
             ui.icon("arrow_back")
-            ui.label("Ir para o agendamento")
+            ui.label("Voltar ao início")
 
 
 def _pagina_de_erro_inesperado() -> None:

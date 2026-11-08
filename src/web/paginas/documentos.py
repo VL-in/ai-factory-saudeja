@@ -13,7 +13,7 @@ A volta ao agendamento é um link na mesma aba: a ciência marcada vive em
 from nicegui import ui
 
 import documentos_legais
-from web import tema
+from web import rotas, tema
 
 ROTAS = {documentos_legais.POLITICA: "/privacidade", documentos_legais.TERMOS: "/termos"}
 
@@ -24,7 +24,8 @@ def registrar() -> None:
 
 
 def _voltar() -> None:
-    with ui.link(target="/").classes("flex items-center gap-1 text-primary").mark("voltar"):
+    link = ui.link(target=rotas.PACIENTE).classes("flex items-center gap-1 text-primary")
+    with link.mark("voltar"):
         ui.icon("arrow_back")
         ui.label("Voltar ao agendamento")
 

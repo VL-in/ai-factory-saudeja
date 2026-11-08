@@ -27,13 +27,13 @@ import os
 from nicegui import ui
 
 from ui import logic
-from web import sessao, tema
+from web import rotas, sessao, tema
 from web.execucao import executar_em_thread
 from web.paginas.fila import FilaDoDia
 from web.paginas.pedidos import PedidosDoTitular
 from web.paginas.time_tecnico import TimeTecnico
 
-ROTA = "/equipe"
+ROTA = rotas.EQUIPE
 ABA_FILA = "Fila do dia"
 ABA_PEDIDOS = "Pedidos do titular"
 ABA_TIME_TECNICO = "Time técnico"
