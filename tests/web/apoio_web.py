@@ -97,3 +97,13 @@ async def _esperar_montagem_da_pagina(rota: str, timeout: float = 10.0) -> None:
     ]
     if pendentes:
         await asyncio.wait(pendentes, timeout=timeout)
+
+
+async def esperar_ate(condicao, timeout: float = 5.0) -> None:
+    """Para o efeito de um clique: o handler assíncrono roda depois de o
+    `click()` do simulador voltar."""
+    limite = asyncio.get_running_loop().time() + timeout
+    while not condicao():
+        if asyncio.get_running_loop().time() > limite:
+            raise AssertionError("a condição não ficou verdadeira a tempo")
+        await asyncio.sleep(0.05)

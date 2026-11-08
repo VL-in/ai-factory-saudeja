@@ -411,3 +411,13 @@ def test_sessao_expirou_nao_renova(monkeypatch):
     assert sessao.sessao_expirou(agora + timedelta(seconds=1)) is True
     assert estado[sessao.CHAVE_FUNCIONARIO] is funcionario
     assert dataclasses.replace(funcionario) == funcionario
+
+
+async def test_abrir_a_area_da_equipe_le_a_fila_uma_vez(usuario, monkeypatch):
+    """O timer do NiceGUI dispara já na criação, por padrão; o da tela não
+    pode, ou cada abertura da página iria duas vezes ao banco."""
+    chamadas = _contar_buscas(monkeypatch)
+    await entrar_na_equipe(usuario)
+    await asyncio.sleep(0.2)
+
+    assert len(chamadas) == 1

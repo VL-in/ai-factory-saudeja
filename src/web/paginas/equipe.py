@@ -67,6 +67,12 @@ class AreaDaEquipe:
     async def montar(self) -> None:
         self._acoes = tema.cabecalho("Área da equipe")
         self._conteudo = ui.column().classes("w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 gap-5")
+        # O timer do NiceGUI dispara já na criação (`immediate=True`), e a
+        # página leria a fila duas vezes ao montar: o primeiro disparo é
+        # ignorado em `_tique`. Não `immediate=False`: com ele, a página fechada
+        # antes do primeiro intervalo faz o NiceGUI logar ERROR ("client
+        # deleted") ao acordar o timer.
+        self._primeiro_tique = True
         ui.timer(INTERVALO_DA_TELA_S, self._tique)
         await self.mostrar()
 
@@ -104,6 +110,9 @@ class AreaDaEquipe:
         await self.mostrar()
 
     async def _tique(self) -> None:
+        if self._primeiro_tique:
+            self._primeiro_tique = False
+            return
         if sessao.sessao_expirou():
             sessao.encerrar(sessao.mensagem_de_inatividade())
             await self.mostrar()
