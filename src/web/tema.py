@@ -100,9 +100,12 @@ def controle_de_tema() -> None:
         dica = ui.tooltip(f"Tema: {_ROTULO_DO_TEMA[modo.value]}")
 
 
-def cabecalho(subtitulo: str | None = None, email: str | None = None, ao_sair=None) -> None:
+def cabecalho(subtitulo: str | None = None) -> ui.row:
     """Título neutro, sem anunciar o risco de falta: a tela do paciente é a
-    porta pública, e quem agenda não precisa saber que vai ser classificado."""
+    porta pública, e quem agenda não precisa saber que vai ser classificado.
+
+    Devolve a área de ações (à direita, antes do botão de tema), que a área da
+    equipe preenche com o e-mail e o "Sair" enquanto houver sessão."""
     with ui.header(elevated=False).classes("sj-cabecalho px-4 sm:px-6 py-3 items-center"):
         with ui.link(target="/").classes("no-underline text-inherit"), ui.row().classes(
             "items-center gap-2 no-wrap"
@@ -113,11 +116,9 @@ def cabecalho(subtitulo: str | None = None, email: str | None = None, ao_sair=No
             ui.label(f"·  {subtitulo}").classes("text-sm sj-suave max-sm:hidden")
         ui.space()
         with ui.row().classes("items-center gap-2 no-wrap"):
-            if email:
-                ui.label(email).classes("text-sm sj-suave max-sm:hidden")
-            if ao_sair is not None:
-                ui.button("Sair", icon="logout", on_click=ao_sair).props("flat dense no-caps")
+            acoes = ui.row().classes("items-center gap-2 no-wrap")
             controle_de_tema()
+    return acoes
 
 
 def aviso(texto: str, tipo: str = "info") -> ui.row:
@@ -137,7 +138,9 @@ def cartao_metrica(rotulo: str, valor: object, icone: str, cor: str, ajuda: str 
                 ui.icon(icone).classes("text-2xl")
             with ui.column().classes("gap-0"):
                 ui.label(rotulo).classes("text-xs uppercase tracking-wide sj-suave")
-                ui.label(str(valor)).classes("text-2xl font-semibold").mark(f"metrica-{rotulo}")
+                ui.label(str(valor)).classes("text-2xl font-semibold").mark(
+                    "metrica-" + rotulo.replace(" ", "-")
+                )
         if ajuda:
             ui.tooltip(ajuda)
     return cartao

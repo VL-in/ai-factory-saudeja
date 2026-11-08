@@ -34,6 +34,17 @@ from nicegui.testing.general_fixtures import (  # noqa: F401 -- fixture do NiceG
 )
 
 
+@pytest.fixture(autouse=True)
+def caches_da_interface_limpos():
+    """Os caches de `web.dados` vivem no processo inteiro: uma fila falsa
+    guardada num teste apareceria no seguinte."""
+    from web import dados
+
+    dados.limpar_caches()
+    yield
+    dados.limpar_caches()
+
+
 @pytest.fixture
 def ambiente_da_interface(monkeypatch):
     """Mesmo isolamento dos testes da tela antiga: sem Supabase de verdade e
