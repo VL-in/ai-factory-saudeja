@@ -99,7 +99,8 @@ class ErroValidacaoCadastro(Exception):
 @dataclass(frozen=True)
 class ResultadoPredicao:
     """Mesma forma do PredictOut da API (src/api/schemas.py), para os dois
-    backends devolverem uma estrutura só e app.py não saber qual usou."""
+    backends devolverem uma estrutura só e a casca (src/web/) não saber qual
+    usou."""
 
     probabilidade: float
     classe_prevista: int
@@ -136,7 +137,7 @@ def montar_payload(
 
 def listar_especialidades() -> list[str]:
     """Especialidades que o cadastro e o formulário de teste oferecem
-    (selectbox em vez de texto livre).
+    (lista de opções em vez de texto livre).
 
     Vêm de `params.yaml` (`cadastro.especialidades`), não mais do
     mapa do modelo: o que a clínica atende é configuração, e não efeito
@@ -291,7 +292,19 @@ def backend_ativo() -> str:
 class ErroPersistencia(Exception):
     """Falha ao ler/gravar no Supabase (indisponível, mal configurado ou
     rejeitou a operação) -- mesma filosofia de ErroPredicao: a UI mostra uma
-    mensagem, não o traceback do cliente HTTP interno do supabase-py."""
+    mensagem, não o traceback do cliente HTTP interno do supabase-py.
+
+    Duas mensagens, para dois públicos:
+
+    - `str(exc)` é a da **tela**: fixa por ação, sem nome de variável de
+      ambiente, código do PostgREST nem comando. É o default de propósito:
+      quem só faz `str(exc)` na casca já mostra a versão segura à recepção.
+    - `detalhe` é o **diagnóstico** para a equipe técnica (aba "Time técnico"):
+      o que falta e o que fazer. Sem detalhe próprio, repete a mensagem."""
+
+    def __init__(self, mensagem: str, detalhe: str | None = None):
+        super().__init__(mensagem)
+        self.detalhe = detalhe if detalhe is not None else mensagem
 
 
 @dataclass(frozen=True)
@@ -345,10 +358,19 @@ class ItemFila:
 _CODIGOS_DE_SCHEMA_DESATUALIZADO = frozenset({"42703", "42P01"})
 
 
+MENSAGEM_TENTE_DE_NOVO = "Tente de novo em alguns minutos. Se continuar, avise a equipe técnica."
+MENSAGEM_AVISE_A_EQUIPE = "Avise a equipe técnica."
+
+
 def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoReturn:
     """Traduz a falha do banco na mensagem que a tela mostra -- e, antes,
     deixa rastro dela: antes da v2.2.0 a falha virava só a mensagem
     amigável, sem log nem evento, e o alerta diário não tinha como vê-la.
+
+    `acao` abre a mensagem da tela ("Não foi possível ..."). A tela recebe só
+    ela e a orientação; o texto da exceção fica em `ErroPersistencia.detalhe`.
+    Configuração ausente e banco sem migration não passam com o tempo, então
+    não mandam "tentar de novo".
 
     `rota` é o rótulo fixo da operação. Só ele e o **nome da classe** da
     exceção vão para o log e para `eventos_app`: a mensagem de um erro do
@@ -361,7 +383,10 @@ def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoRetur
         detalhe={"rota": rota, "excecao": excecao},
     )
     if isinstance(exc, ConfiguracaoSupabaseAusente):
-        raise ErroPersistencia(str(exc)) from exc
+        raise ErroPersistencia(
+            f"{acao}: o sistema está sem conexão com o banco de dados. {MENSAGEM_AVISE_A_EQUIPE}",
+            detalhe=f"{acao}: {exc}",
+        ) from exc
     if getattr(exc, "code", None) in _CODIGOS_DE_SCHEMA_DESATUALIZADO:
         # Aconteceu de verdade em 2026-09-28, ao ligar `nome_completo`: a
         # migration estava aplicada no Supabase local (onde os testes de
@@ -372,11 +397,14 @@ def _relatar_falha_persistencia(exc: Exception, acao: str, rota: str) -> NoRetur
         # mesma situação volta a cada migration nova, inclusive no deploy do
         # HF Space.
         raise ErroPersistencia(
-            f"{acao}: o banco está desatualizado em relação às migrations do "
-            f"repositório ({exc}). Aplique com `supabase db push` (projeto remoto) "
-            "ou `supabase db reset` (local) -- ver README, seção 'Banco de dados'."
+            f"{acao}: o banco de dados precisa de atualização. {MENSAGEM_AVISE_A_EQUIPE}",
+            detalhe=(
+                f"{acao}: o banco está desatualizado em relação às migrations do "
+                f"repositório ({exc}). Aplique com `supabase db push` (projeto remoto) "
+                "ou `supabase db reset` (local) -- ver README, seção 'Banco de dados'."
+            ),
         ) from exc
-    raise ErroPersistencia(f"{acao}: {exc}") from exc
+    raise ErroPersistencia(f"{acao}. {MENSAGEM_TENTE_DE_NOVO}", detalhe=f"{acao}: {exc}") from exc
 
 
 def _acao_ui(acao: str, *recusas: type[BaseException]):
@@ -397,7 +425,9 @@ def buscar_fila_do_dia(dia: date | None = None) -> list[ItemFila]:
     try:
         linhas = repositories.buscar_fila_do_dia(dia or hoje_na_clinica())
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao consultar a fila do dia", rota="fila_do_dia")
+        _relatar_falha_persistencia(
+            exc, "Não foi possível consultar a fila do dia", rota="fila_do_dia"
+        )
 
     itens = []
     for linha in linhas:
@@ -520,7 +550,7 @@ def atualizar_status_agendamento(
         ) from exc
     except Exception as exc:
         _relatar_falha_persistencia(
-            exc, "Falha ao registrar desfecho do agendamento", rota="desfecho"
+            exc, "Não foi possível registrar o desfecho", rota="desfecho"
         )
 
 
@@ -622,9 +652,10 @@ def dias_ate_consulta(data_consulta: date, hoje: date | None = None) -> int:
 
 
 def status_banco() -> dict:
-    """Indicador para a sidebar. Devolve estrutura em vez de levantar: é
-    diagnóstico exibido de forma passiva, não uma operação que o usuário
-    pediu -- quem chama quer pintar um rótulo, não tratar exceção."""
+    """Indicador do diagnóstico da aba "Dev: disparo manual". Devolve
+    estrutura em vez de levantar: é diagnóstico exibido de forma passiva, não
+    uma operação que o usuário pediu -- quem chama quer pintar um rótulo, não
+    tratar exceção."""
     try:
         repositories.verificar_conexao()
     except ConfiguracaoSupabaseAusente:
@@ -825,7 +856,7 @@ def cadastrar_paciente_e_agendamento(
             versao_documentos=versao_documentos,
         )
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao cadastrar paciente/agendamento", rota="cadastro")
+        _relatar_falha_persistencia(exc, "Não foi possível concluir o agendamento", rota="cadastro")
 
     # Daqui em diante o agendamento está confirmado.
     treino_ok = registrar_no_treino(
@@ -948,7 +979,9 @@ def registrar_pedido_da_clinica(codigo_agendamento: str, tipo: str) -> None:
     except ErroPedido:
         raise
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao registrar o pedido", rota="registrar_pedido")
+        _relatar_falha_persistencia(
+            exc, "Não foi possível registrar o pedido", rota="registrar_pedido"
+        )
 
 
 @_acao_ui("encaminhar_pedido", ErroPedido)
@@ -964,7 +997,7 @@ def encaminhar_pedido_ao_treino(cpf: str) -> None:
         repositorio_treino.registrar_pedido(pseudonimo.id_titular(cpf), "eliminacao", "clinica")
     except Exception as exc:
         _relatar_falha_persistencia(
-            exc, "Falha ao encaminhar o pedido ao SaúdeJá", rota="encaminhar_pedido"
+            exc, "Não foi possível encaminhar o pedido ao SaúdeJá", rota="encaminhar_pedido"
         )
 
 
@@ -981,7 +1014,9 @@ def listar_pedidos_da_clinica() -> list[dict]:
     try:
         return repositories.pedidos_abertos()
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao listar os pedidos", rota="listar_pedidos")
+        _relatar_falha_persistencia(
+            exc, "Não foi possível listar os pedidos", rota="listar_pedidos"
+        )
 
 
 @_acao_ui("decidir_pedido")
@@ -1000,7 +1035,9 @@ def decidir_pedido_da_clinica(id_pedido: str, decisao: str) -> bool:
     try:
         return acoes[decisao](id_pedido)
     except Exception as exc:
-        _relatar_falha_persistencia(exc, "Falha ao atualizar o pedido", rota="decidir_pedido")
+        _relatar_falha_persistencia(
+            exc, "Não foi possível atualizar o pedido", rota="decidir_pedido"
+        )
 
 
 def disparar_job_diario(dia: date | None = None) -> dict:
@@ -1012,7 +1049,7 @@ def disparar_job_diario(dia: date | None = None) -> dict:
         return job_inferencia_diaria.processar_dia(dia)
     except Exception as exc:
         _relatar_falha_persistencia(
-            exc, "Falha ao rodar o job de inferência diária", rota="job_manual"
+            exc, "Não foi possível rodar o job de inferência diária", rota="job_manual"
         )
 
 
@@ -1055,7 +1092,7 @@ def resumo_observabilidade(janela_horas: int = 24) -> dict:
         )
     except Exception as exc:
         _relatar_falha_persistencia(
-            exc, "Falha ao consultar a observabilidade", rota="observabilidade"
+            exc, "Não foi possível consultar a observabilidade", rota="observabilidade"
         )
 
     predicoes = [e for e in eventos if e["tipo"] == observabilidade.TIPO_PREDICAO]
@@ -1131,6 +1168,26 @@ def _agora() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# A tela da equipe não diz o código HTTP nem a classe da exceção: não ajudam
+# quem está no balcão. Ficam no log (`_logar_falha_de_auth`).
+MENSAGEM_AUTENTICACAO_FORA_DO_AR = (
+    "o serviço de autenticação não respondeu. Tente de novo em alguns minutos."
+)
+
+
+def _logar_falha_de_auth(exc: Exception) -> None:
+    """O diagnóstico que saiu da tela: classe, status e código do Supabase
+    Auth. Nunca o e-mail digitado nem a mensagem crua da exceção."""
+    logger.warning(
+        "login indisponível",
+        extra={
+            "excecao": type(exc).__name__,
+            "status_http": getattr(exc, "status", None),
+            "codigo": getattr(exc, "code", None),
+        },
+    )
+
+
 def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
     """Nenhuma mensagem distingue "e-mail não existe" de "senha errada": dizer
     qual dos dois falhou ensina a quem tenta adivinhar quais e-mails são da
@@ -1153,10 +1210,10 @@ def _traduzir_erro_de_auth(exc: AuthApiError) -> ErroAutenticacao:
         # dizê-lo não ajuda a adivinhar quem é da equipe -- e "senha incorreta"
         # mandaria todo mundo redefinir a senha à toa.
         return ErroAutenticacaoIndisponivel(
-            "login por e-mail desligado no Supabase. Procure o administrador do sistema."
+            "o login por e-mail está desativado. Procure o administrador do sistema."
         )
     if exc.status is not None and exc.status >= 500:
-        return ErroAutenticacaoIndisponivel(f"serviço de autenticação respondeu {exc.status}.")
+        return ErroAutenticacaoIndisponivel(MENSAGEM_AUTENTICACAO_FORA_DO_AR)
     return ErroCredenciais(MENSAGEM_CREDENCIAIS_INVALIDAS)
 
 
@@ -1182,20 +1239,26 @@ def autenticar_funcionario(
         cliente = (criar_client or db_client.criar_client_autenticacao)()
         resposta = cliente.auth.sign_in_with_password({"email": email, "password": senha})
     except ConfiguracaoSupabaseAusente as exc:
-        raise ErroAutenticacaoIndisponivel(str(exc)) from exc
-    except AuthApiError as exc:
-        raise _traduzir_erro_de_auth(exc) from exc
-    except Exception as exc:  # rede, timeout, AuthRetryableError
+        _logar_falha_de_auth(exc)
         raise ErroAutenticacaoIndisponivel(
-            f"serviço de autenticação inacessível ({exc.__class__.__name__})."
+            f"o login está sem conexão com o serviço de autenticação. {MENSAGEM_AVISE_A_EQUIPE}"
         ) from exc
+    except AuthApiError as exc:
+        erro = _traduzir_erro_de_auth(exc)
+        if isinstance(erro, ErroAutenticacaoIndisponivel):
+            _logar_falha_de_auth(exc)
+        raise erro from exc
+    except Exception as exc:  # rede, timeout, AuthRetryableError
+        _logar_falha_de_auth(exc)
+        raise ErroAutenticacaoIndisponivel(MENSAGEM_AUTENTICACAO_FORA_DO_AR) from exc
 
     usuario = resposta.user
     if usuario is None:
         # O supabase-py levanta quando a senha não confere; resposta sem
         # usuário não é "login recusado", é o serviço respondendo fora do
         # contrato -- tratado como indisponível, nunca como sucesso.
-        raise ErroAutenticacaoIndisponivel("resposta do serviço de autenticação sem usuário.")
+        logger.warning("login indisponível", extra={"excecao": "resposta_sem_usuario"})
+        raise ErroAutenticacaoIndisponivel(MENSAGEM_AUTENTICACAO_FORA_DO_AR)
     # Revoga já o refresh token desta sessão do Supabase: a UI não o usa (ver
     # SessaoFuncionario), e um token válido que ninguém guarda é só superfície.
     # `local` e não o default `global`, que derrubaria as sessões do mesmo

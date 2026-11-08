@@ -39,7 +39,7 @@ from nicegui import ui  # noqa: E402
 import telemetria  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
 from web import dados, execucao, sessao, tema  # noqa: E402
-from web.paginas import documentos, equipe, paciente  # noqa: E402
+from web.paginas import documentos, equipe, erro, paciente  # noqa: E402
 
 ROTA_SAUDE = "/healthz"
 # Alias temporário: a sonda externa e o rollback para o Streamlit batem em
@@ -62,6 +62,7 @@ def configurar_paginas() -> None:
     `criar_app` para o simulador de testes (tests/web/) registrar as mesmas
     páginas sem montar o FastAPI."""
     sessao.configurar_storage()
+    erro.registrar()
     paciente.registrar()
     documentos.registrar()
     equipe.registrar()

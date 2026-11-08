@@ -115,8 +115,10 @@ class TimeTecnico:
             self._painel.clear()
             with self._painel:
                 # Aviso, não erro: é diagnóstico exibido passivamente; sem ele,
-                # predição, fila e cadastro seguem funcionando.
-                tema.aviso(f"Observabilidade indisponível: {exc}", "aviso")
+                # predição, fila e cadastro seguem funcionando. Esta é a aba da
+                # equipe técnica: mostra o diagnóstico (`detalhe`), não a
+                # mensagem da recepção.
+                tema.aviso(f"Observabilidade indisponível: {exc.detalhe}", "aviso")
             return
         self._painel.clear()
         with self._painel:
@@ -380,7 +382,7 @@ class TimeTecnico:
             resultado = await executar_em_thread(logic.disparar_job_diario)
         except logic.ErroPersistencia as exc:
             with self._resultado_do_job:
-                tema.aviso(f"Falha ao rodar o job: {exc}", "erro")
+                tema.aviso(f"Falha ao rodar o job: {exc.detalhe}", "erro")
             return
         finally:
             # Também depois da falha: o job pode ter gravado parte das predições.

@@ -166,7 +166,8 @@ class FilaDoDia:
             self.fila = await executar_em_thread(dados.fila_do_dia, self.dia)
             self.erro = None
         except logic.ErroPersistencia as exc:
-            self.fila, self.erro = [], f"Não foi possível consultar a fila: {exc}"
+            # `str(exc)` é a mensagem da tela, sem detalhe técnico (ErroPersistencia).
+            self.fila, self.erro = [], str(exc)
         if self.id_selecionado not in {item.id_agendamento for item in self.fila}:
             self.id_selecionado = None
         self._desenhar()
@@ -205,7 +206,7 @@ class FilaDoDia:
                 data_hora_agendada=item.data_hora_agendada,
             )
         except (logic.ErroPersistencia, logic.ErroDesfechoForaDePrazo) as exc:
-            ui.notify(f"Não foi possível registrar o desfecho: {exc}", type="negative")
+            ui.notify(str(exc), type="negative")
         else:
             ui.notify(
                 f"Desfecho registrado: {rotulo.lower()}.", type="positive", icon="check_circle"

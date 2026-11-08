@@ -531,11 +531,15 @@ def test_banco_sem_a_migration_diz_o_que_fazer(monkeypatch):
     with pytest.raises(logic.ErroPersistencia) as capturado:
         logic.buscar_fila_do_dia(date(2026, 9, 28))
 
-    mensagem = str(capturado.value)
-    assert "supabase db push" in mensagem
+    detalhe = capturado.value.detalhe
+    assert "supabase db push" in detalhe
     # A mensagem original continua junto: sem ela não dá para saber QUAL
     # migration falta.
-    assert "nome_completo" in mensagem
+    assert "nome_completo" in detalhe
+    # O conselho é da equipe técnica: a recepção vê só o que fazer.
+    tela = str(capturado.value)
+    assert "supabase" not in tela and "nome_completo" not in tela
+    assert logic.MENSAGEM_AVISE_A_EQUIPE in tela
 
 
 def test_falha_de_banco_comum_nao_vira_conselho_sobre_migration(monkeypatch):
@@ -550,7 +554,41 @@ def test_falha_de_banco_comum_nao_vira_conselho_sobre_migration(monkeypatch):
     with pytest.raises(logic.ErroPersistencia) as capturado:
         logic.buscar_fila_do_dia(date(2026, 9, 28))
 
-    assert "supabase db push" not in str(capturado.value)
+    assert "supabase db push" not in capturado.value.detalhe
+    assert "connection failure" in capturado.value.detalhe
+    assert str(capturado.value) == (
+        f"Não foi possível consultar a fila do dia. {logic.MENSAGEM_TENTE_DE_NOVO}"
+    )
+
+
+@pytest.mark.parametrize(
+    "erro",
+    [
+        logic.ConfiguracaoSupabaseAusente("SUPABASE_URL não definida -- configure no .env"),
+        _ErroDeSchema("42P01", 'relation "public.pedidos" does not exist'),
+        _ErroDeSchema("PGRST301", "JWT expired"),
+        RuntimeError("{'code': '23514', 'message': 'violates check constraint'}"),
+    ],
+    ids=["sem-configuracao", "schema-desatualizado", "postgrest", "check-do-banco"],
+)
+def test_mensagem_da_tela_nunca_leva_o_detalhe_tecnico(monkeypatch, erro):
+    """A "Fila do dia" e os "Pedidos do titular" são da recepção, e a casca
+    mostra `str(exc)`: variável de ambiente, código do PostgREST e comando de
+    migration ficam no `detalhe`, que só a aba "Time técnico" exibe."""
+
+    def _falha(_dia):
+        raise erro
+
+    monkeypatch.setattr(logic.repositories, "buscar_fila_do_dia", _falha)
+
+    with pytest.raises(logic.ErroPersistencia) as capturado:
+        logic.buscar_fila_do_dia(date(2026, 9, 28))
+
+    tela = str(capturado.value)
+    assert tela.startswith("Não foi possível consultar a fila do dia")
+    for termo_tecnico in ("SUPABASE", ".env", "{", "code", "supabase", "JWT", "relation"):
+        assert termo_tecnico not in tela
+    assert str(erro).split(" ")[0] in capturado.value.detalhe
 
 
 def _predicao(criado_em, probabilidade, model_version, **extra):
@@ -933,8 +971,12 @@ def test_conta_banida_explica_que_o_acesso_foi_desativado():
     ids=["limite-de-tentativas", "erro-500", "gateway", "sem-rede", "provedor-email-desligado"],
 )
 def test_falha_do_servico_de_auth_nao_culpa_quem_digitou(erro):
-    with pytest.raises(logic.ErroAutenticacaoIndisponivel):
+    with pytest.raises(logic.ErroAutenticacaoIndisponivel) as capturado:
         _autenticar_com_erro(erro)
+
+    # Nem detalhe técnico: o código HTTP e a classe da exceção vão para o log.
+    for termo_tecnico in ("500", "503", "Error", "Supabase", "gateway", "sem rede"):
+        assert termo_tecnico not in str(capturado.value)
 
 
 def test_autenticar_sem_supabase_configurado_e_indisponibilidade(monkeypatch):
@@ -942,8 +984,12 @@ def test_autenticar_sem_supabase_configurado_e_indisponibilidade(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "")
 
-    with pytest.raises(logic.ErroAutenticacaoIndisponivel, match="SUPABASE_URL"):
+    with pytest.raises(logic.ErroAutenticacaoIndisponivel) as capturado:
         logic.autenticar_funcionario("a@clinica.test", "senha")
+
+    # A tela de login é da recepção: o nome da variável fica no log.
+    assert "SUPABASE" not in str(capturado.value)
+    assert logic.MENSAGEM_AVISE_A_EQUIPE in str(capturado.value)
 
 
 def test_login_usa_client_descartavel_nunca_o_singleton_do_backend(monkeypatch):

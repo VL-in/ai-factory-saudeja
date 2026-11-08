@@ -245,7 +245,10 @@ async def test_falha_do_banco_no_desfecho_avisa_e_ainda_invalida_a_fila(usuario,
     chamadas = _contar_buscas(monkeypatch)
 
     def _falhar(*_args, **_kwargs):
-        raise logic.ErroPersistencia("timeout depois do commit")
+        raise logic.ErroPersistencia(
+            f"Não foi possível registrar o desfecho. {logic.MENSAGEM_TENTE_DE_NOVO}",
+            detalhe="timeout depois do commit",
+        )
 
     monkeypatch.setattr(logic, "atualizar_status_agendamento", _falhar)
     await entrar_na_equipe(usuario)
@@ -256,13 +259,20 @@ async def test_falha_do_banco_no_desfecho_avisa_e_ainda_invalida_a_fila(usuario,
     usuario.find("Cancelada").click()
 
     await usuario.should_see("Não foi possível registrar o desfecho", retries=20)
+    await usuario.should_not_see("timeout depois do commit")
     assert len(chamadas) == 2
 
 
 async def test_falha_do_banco_na_fila_nao_fica_guardada(usuario, monkeypatch):
     """E12. Banco fora do ar não prende o erro na tela por um prazo inteiro: o
     "Atualizar" tenta de novo."""
-    respostas = [logic.ErroPersistencia("fora do ar"), [_item_fila(0, 0.81, 1)]]
+    respostas = [
+        logic.ErroPersistencia(
+            f"Não foi possível consultar a fila do dia. {logic.MENSAGEM_TENTE_DE_NOVO}",
+            detalhe="fora do ar",
+        ),
+        [_item_fila(0, 0.81, 1)],
+    ]
 
     def _buscar(dia):
         resposta = respostas.pop(0)
