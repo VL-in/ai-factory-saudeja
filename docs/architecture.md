@@ -374,7 +374,7 @@ Key Security Tools/Practices: minimização de PII por design no schema (4.1), p
 
 ## 8. Development & Testing Environment
 
-Local Setup Instructions: ver [`README.md`](../README.md), seção "Como usar o repositório" (Docker + DVC + MLflow local via `docker compose up -d mlflow-server` e `dvc exp run`/`dvc repro`).
+Local Setup Instructions: ver [`README.md`](../README.md), seção "Como rodar" (Docker + DVC + MLflow local via `docker compose up -d mlflow-server` e `dvc exp run`/`dvc repro`).
 
 Testing Frameworks: Pytest (`pytest.ini` define o marcador `integracao` para testes que sobem serviços reais efêmeros — MLflow com sqlite temporário e Supabase CLI local — em vez de mocks pesados).
 
