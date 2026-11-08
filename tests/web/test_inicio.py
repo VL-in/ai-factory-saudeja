@@ -50,3 +50,9 @@ async def test_acesso_do_funcionario_leva_ao_login(usuario):
     await usuario.open(_destino(usuario, "acesso-equipe"))
 
     await usuario.should_see(marker="login-email", retries=20)
+
+
+def test_css_do_inicio_aponta_para_a_imagem_servida():
+    """O CSS é literal (guarda de HTML cru): se a URL da imagem mudar, este
+    teste pega o fundo que sumiria em silêncio."""
+    assert f'url("{inicio.URL_IMAGEM_DE_FUNDO}")' in inicio.CSS_INICIO

@@ -38,13 +38,15 @@ SUBTITULO = "Agende sua consulta pela internet, em poucos passos e sem precisar 
 
 # Véu sobre a foto: opaco à esquerda, onde fica o texto, e esmaecendo para a
 # direita, onde está a foto. Usa as variáveis do tema, então troca sozinho no
-# modo escuro. CSS constante (regra D7): nenhum dado entra aqui.
+# modo escuro. CSS constante (regra D7): nenhum dado entra aqui. Sem f-string,
+# nem para a URL da imagem: a guarda de HTML cru (test_coerencia_repo) só
+# aceita literal; test_inicio confere que a URL do CSS é URL_IMAGEM_DE_FUNDO.
 CSS_INICIO = (
     "<style>"
     ".sj-inicio{position:relative;isolation:isolate;overflow:hidden;display:flex;"
     "align-items:center;min-height:calc(100svh - 64px)}"
-    f'.sj-inicio::before{{content:"";position:absolute;inset:0;z-index:-2;'
-    f'background:url("{URL_IMAGEM_DE_FUNDO}") 70% center/cover no-repeat}}'
+    '.sj-inicio::before{content:"";position:absolute;inset:0;z-index:-2;'
+    'background:url("/estatico/inicio-fundo.webp") 70% center/cover no-repeat}'
     '.sj-inicio::after{content:"";position:absolute;inset:0;z-index:-1;'
     "background:linear-gradient(90deg,var(--sj-fundo) 0%,"
     "color-mix(in srgb,var(--sj-fundo) 92%,transparent) 38%,"
