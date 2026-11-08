@@ -1,7 +1,8 @@
 """
-SaúdeJá — tela do paciente (`/`): ciência, cadastro e agendamento.
+SaúdeJá — tela do paciente (`/paciente`): ciência, cadastro e agendamento.
 
-É a porta pública: quem chega pela URL do Space agenda sem login. Três etapas,
+Aberta, sem login: quem chega pela URL do Space escolhe "Sou paciente" na
+tela inicial (`/`, `inicio.py`) e agenda aqui. Três etapas,
 na mesma página:
 
 1. **Ciência da Política de privacidade e dos Termos de uso** (ADR-010), antes
@@ -28,11 +29,11 @@ from nicegui import ui
 import consentimento
 import documentos_legais
 from ui import logic
-from web import dados, sessao, tema
+from web import dados, rotas, sessao, tema
 from web.execucao import executar_em_thread
 from web.paginas.documentos import ROTAS as ROTAS_DOS_DOCUMENTOS
 
-ROTA = "/"
+ROTA = rotas.PACIENTE
 
 MENSAGEM_FALHA_NO_CADASTRO = (
     "Não foi possível cadastrar agora. Tente de novo em alguns minutos ou fale com a clínica."

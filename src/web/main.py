@@ -18,7 +18,8 @@ seria montado em todo teste que importasse este arquivo.
 Variáveis: APP_ENV=dev|prod (aba de dev; sem ela vale prod), PREDICT_BACKEND=
 processo|api, API_BASE_URL (só no backend 'api').
 
-Rotas: `/` paciente, `/privacidade` e `/termos`, `/equipe` (login e abas),
+Rotas: `/` início (escolha entre paciente e equipe), `/paciente` cadastro e
+agendamento, `/privacidade` e `/termos`, `/equipe` (login e abas),
 `/healthz` (saúde). Toda a regra de negócio continua em `src/ui/logic.py`; os
 módulos de `src/web/` só apresentam.
 """
@@ -39,7 +40,7 @@ from nicegui import ui  # noqa: E402
 import telemetria  # noqa: E402
 from logging_config import configurar_logging  # noqa: E402
 from web import dados, execucao, sessao, tema  # noqa: E402
-from web.paginas import documentos, equipe, erro, paciente  # noqa: E402
+from web.paginas import documentos, equipe, erro, inicio, paciente  # noqa: E402
 
 ROTA_SAUDE = "/healthz"
 # Alias temporário: a sonda externa e o rollback para o Streamlit batem em
@@ -63,6 +64,7 @@ def configurar_paginas() -> None:
     páginas sem montar o FastAPI."""
     sessao.configurar_storage()
     erro.registrar()
+    inicio.registrar()
     paciente.registrar()
     documentos.registrar()
     equipe.registrar()

@@ -22,7 +22,7 @@ from ui import logic
 from web import execucao, sessao
 from web import main as web_main
 
-ROTAS_DE_PAGINA = ["/", "/equipe", "/privacidade", "/termos"]
+ROTAS_DE_PAGINA = ["/", "/paciente", "/equipe", "/privacidade", "/termos"]
 
 
 @pytest.fixture
@@ -53,6 +53,18 @@ _ORIGEM_EXTERNA = re.compile(
     r"""|url\(\s*["']?(?:https?:)?//""",
     re.IGNORECASE,
 )
+
+
+def test_imagem_do_inicio_e_servida_pela_propria_aplicacao(cliente_da_casca):
+    """A foto do fundo da tela inicial vem de `src/web/estatico/`, como o
+    favicon: nada de terceiros no navegador (ADR-013)."""
+    from web.paginas import inicio
+
+    resposta = cliente_da_casca.get(inicio.URL_IMAGEM_DE_FUNDO)
+
+    assert resposta.status_code == 200
+    assert resposta.headers["content-type"] == "image/webp"
+    assert resposta.content == inicio.CAMINHO_IMAGEM_DE_FUNDO.read_bytes()
 
 
 @pytest.mark.parametrize("rota", ROTAS_DE_PAGINA)
