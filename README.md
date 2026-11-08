@@ -158,7 +158,7 @@ Só o modelo campeão vai para produção: deploy e job D-2 conferem o hash do `
 
 A SaúdeJá é fictícia e a semente do dataset é sintética, mas o sistema é desenhado e documentado como se todo dado fosse real: especialidade, status do agendamento e histórico de faltas revelam informação de saúde e são tratados como **dados sensíveis**.
 
-Documentos publicados na versão 1.0, vigentes a partir de 18/10/2026: [Política de privacidade](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) e [Termos de uso](docs/LGPD/TERMOS-DE-USO.md).
+Documentos publicados: [Política de privacidade](docs/LGPD/POLITICA-DE-PRIVACIDADE.md) na versão 1.1, vigente a partir de 07/11/2026, e [Termos de uso](docs/LGPD/TERMOS-DE-USO.md) na versão 1.0, vigentes a partir de 18/10/2026.
 
 ### Papéis
 

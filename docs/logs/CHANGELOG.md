@@ -15,6 +15,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
 ### Modificado
 - **A interface vai trocar o Streamlit pelo NiceGUI** ([ADR-013](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-013-interface-nicegui.md)), num processo próprio na porta 7860, com a API como está. O ADR registra a prova de conceito feita em NiceGUI e em Reflex sobre o mesmo `logic.py`, e o porquê de a interface não ser montada no app da API: isso publicaria `/predict` sem autenticação na URL do Space. Nada muda na interface publicada até a migração chegar a produção.
+- **Política de privacidade na versão 1.1, vigente a partir de 07/11/2026** ([política](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/LGPD/POLITICA-DE-PRIVACIDADE.md)). Na tabela de prazos (seção 7), a exclusão do cadastro e do histórico de consultas passa a seguir o contrato com a clínica, em vez de ser feita a pedido dela. Os Termos de uso continuam na versão 1.0. A tela de agendamento mostra a versão nova, e os agendamentos novos gravam `politica 1.1; termos 1.0` em `versao_documentos`. Os agendamentos anteriores continuam com `politica 1.0; termos 1.0`, que identifica o texto que viram.
 
 ## [v2.6.0] (Vanessa + Claude) - 2026-10-19
 

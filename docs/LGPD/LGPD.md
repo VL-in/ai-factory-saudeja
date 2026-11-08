@@ -3,7 +3,7 @@
 # Declaração estruturada no formato lgpd.md (spec 1.0). O corpo abaixo é a análise
 # completa; estes campos a resumem e precisam ser mantidos em sincronia com ela.
 spec: "1.0"
-atualizado: "2026-10-19"
+atualizado: "2026-11-07"
 expira: "2027-04-09"
 status: "em-adequação"
 controlador:
@@ -18,7 +18,7 @@ direitos:
 politica:
   url: "https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/LGPD/POLITICA-DE-PRIVACIDADE.md"
   idioma: "pt-br"
-  atualizada: "2026-10-18"
+  atualizada: "2026-11-07"
 bases_legais:
   - finalidade: "Identificação do paciente e execução do agendamento (em nome da clínica-cliente, controladora)"
     base: "execução de contrato"
