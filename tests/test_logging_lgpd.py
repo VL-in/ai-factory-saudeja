@@ -282,6 +282,94 @@ def test_filtro_alcanca_handler_de_terceiro_instalado_antes(monkeypatch):
     assert MARCADOR in buffer.getvalue()
 
 
+def _logger_de_acesso_do_uvicorn(monkeypatch):
+    """O logger `uvicorn.access` de verdade, com o `AccessFormatter` de verdade
+    -- o formatador é a peça que quebrava, então imitá-lo não provaria nada."""
+    from uvicorn.logging import AccessFormatter
+
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(
+        AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False)
+    )
+    handler.addFilter(FiltroRedacaoPII())
+    # `handleError` imprime no stderr e engole a exceção: sem isto, um
+    # formatador quebrado passaria no teste com o buffer simplesmente vazio.
+    monkeypatch.setattr(logging, "raiseExceptions", True)
+    monkeypatch.setattr(handler, "handleError", lambda _record: (_ for _ in ()).throw(
+        AssertionError("o formatador de acesso do uvicorn quebrou")
+    ))
+
+    logger = logging.getLogger("uvicorn.access")
+    monkeypatch.setattr(logger, "handlers", [handler])
+    monkeypatch.setattr(logger, "propagate", False)
+    monkeypatch.setattr(logger, "level", logging.INFO)
+    return logger, buffer
+
+
+# IPv4 com menos de 10 dígitos: a regra numérica sozinha não o pegaria.
+IP_CURTO = "189.45.12.7"
+
+
+def test_linha_de_acesso_do_uvicorn_sai_inteira_e_sem_ip(monkeypatch):
+    """Zerar `record.args` derrubava o `AccessFormatter` (ele desempacota
+    cinco campos): a linha de acesso sumia e o "--- Logging error ---" ia ao
+    stderr com a mensagem -- IP do cliente incluído. A linha agora sai, com o
+    status e o caminho, e o cliente vira marcador sempre."""
+    logger, buffer = _logger_de_acesso_do_uvicorn(monkeypatch)
+
+    logger.info(
+        '%s - "%s %s HTTP/%s" %d', f"{IP_CURTO}:51234", "POST", "/predict", "1.1", 200
+    )
+
+    saida = buffer.getvalue()
+    assert IP_CURTO not in saida
+    assert saida.strip() == f'{MARCADOR} - "POST /predict HTTP/1.1" 200 OK'
+
+
+def test_query_string_da_linha_de_acesso_e_redigida(monkeypatch):
+    logger, buffer = _logger_de_acesso_do_uvicorn(monkeypatch)
+
+    logger.info(
+        '%s - "%s %s HTTP/%s" %d', "10.0.0.1:1", "GET", f"/health?contato={EMAIL}", "1.1", 404
+    )
+
+    saida = buffer.getvalue()
+    assert EMAIL not in saida
+    assert "404 Not Found" in saida
+
+
+def test_falha_na_redacao_da_linha_de_acesso_nao_quebra_o_formatador(monkeypatch):
+    """Fail-closed também aqui: a linha sai só com marcadores, e o formatador
+    do uvicorn (que exige os cinco campos e um status inteiro) não quebra."""
+
+    def _explodir(_texto):
+        raise RuntimeError("regex quebrada")
+
+    monkeypatch.setattr(logging_config, "redigir", _explodir)
+    logger, buffer = _logger_de_acesso_do_uvicorn(monkeypatch)
+
+    logger.info(
+        '%s - "%s %s HTTP/%s" %d', f"{IP_CURTO}:51234", "GET", f"/x?e={EMAIL}", "1.1", 200
+    )
+
+    saida = buffer.getvalue()
+    assert IP_CURTO not in saida
+    assert EMAIL not in saida
+    assert MARCADOR in saida
+
+
+def test_outros_loggers_com_cinco_args_seguem_a_regra_geral():
+    """O tratamento campo a campo vale só para `uvicorn.access`: num logger
+    qualquer, cinco argumentos não dizem nada sobre o formato, e a regra geral
+    (mensagem resolvida e redigida) é a que protege `nome=%s`."""
+    logger, buffer = _logger_com_captura("teste.cinco_args", formato="texto")
+
+    logger.info("nome=%s %s %s %s %s", "Ana Souza", "b", "c", "d", "e")
+
+    assert "Ana Souza" not in buffer.getvalue()
+
+
 def test_configurar_logging_e_idempotente():
     """A UI reexecuta o script a cada interação e a API importa os mesmos
     módulos -- chamada repetida não pode duplicar handler (linha dobrada no log)

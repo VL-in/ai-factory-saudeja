@@ -8,6 +8,14 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado]
+
+### Corrigido
+- **O log de acesso da API volta a aparecer, e sem o IP de quem acessa.** O filtro de redação de PII reescrevia toda linha de log como texto pronto, e o formatador do log de acesso do `uvicorn` precisa dos campos separados. Cada requisição gerava um "--- Logging error ---" no lugar da linha de acesso, e esse aviso saía no stderr com a mensagem já redigida, mas o IP do cliente passava sempre que tinha menos de 10 dígitos, como `189.45.12.7`. Agora a linha de acesso sai com método, caminho, versão e status. O endereço do cliente é sempre trocado por `<REDIGIDO>`, e a query string passa pela redação ([LGPD.md §8](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/LGPD/LGPD.md#8-ausência-de-dado-pessoal-em-logs)).
+
+### Modificado
+- **A interface vai trocar o Streamlit pelo NiceGUI** ([ADR-013](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-013-interface-nicegui.md)), num processo próprio na porta 7860, com a API como está. O ADR registra a prova de conceito feita em NiceGUI e em Reflex sobre o mesmo `logic.py`, e o porquê de a interface não ser montada no app da API: isso publicaria `/predict` sem autenticação na URL do Space. Nada muda na interface publicada até a migração chegar a produção.
+
 ## [v2.6.0] (Vanessa + Claude) - 2026-10-19
 
 ### Adicionado

@@ -112,6 +112,7 @@ _ATRIBUTOS_PADRAO_DO_RECORD = frozenset(
 )
 
 _MENSAGEM_DE_FALHA = f"{MARCADOR} falha ao redigir este registro de log -- linha descartada"
+_ARGS_DE_ACESSO_DESCARTADO = (MARCADOR, MARCADOR, MARCADOR, MARCADOR, 0)
 
 _trava = threading.Lock()
 _configurado = False
@@ -250,20 +251,57 @@ class FiltroRedacaoPII(logging.Filter):
             # Fail-closed: substitui a linha por um marcador em vez de deixar
             # passar conteúdo não verificado. A falha fica visível no próprio
             # log, e não silenciosa.
-            record.msg = _MENSAGEM_DE_FALHA
-            record.args = ()
+            if _linha_de_acesso_do_uvicorn(record):
+                # A linha de acesso precisa dos cinco `args` (o formatador do
+                # uvicorn os desempacota) e do `msg` original, que é o modelo
+                # de cinco campos que `getMessage()` interpola. Os campos viram
+                # marcadores; status 0, que o formatador aceita.
+                record.args = _ARGS_DE_ACESSO_DESCARTADO
+            else:
+                record.msg = _MENSAGEM_DE_FALHA
+                record.args = ()
             record.exc_info = None
             record.exc_text = None
             record.stack_info = None
         return True
 
 
+def _linha_de_acesso_do_uvicorn(record: logging.LogRecord) -> bool:
+    """O `AccessFormatter` do uvicorn desempacota `record.args` em exatamente
+    cinco campos (cliente, método, caminho, versão HTTP, status) -- com
+    `args=()` ele levanta `ValueError`, a linha de acesso some e o `logging`
+    despeja no stderr um "--- Logging error ---" com a mensagem inteira."""
+    return (
+        record.name == "uvicorn.access"
+        and isinstance(record.args, tuple)
+        and len(record.args) == 5
+    )
+
+
+def _redigir_args_de_acesso(args: tuple) -> tuple:
+    """Mantém o formato que o `AccessFormatter` exige e redige campo a campo.
+
+    O endereço do cliente sai **sempre**, sem passar pela regra numérica: um
+    IPv4 tem de 4 a 12 dígitos, e só os de 10 a 13 seriam pegos por
+    `_redigir_sequencia_numerica` -- `189.45.12.7:51234` passaria inteiro. O
+    diagnóstico não precisa dele (o `/health` e o SLO não olham cliente). O
+    caminho passa por `redigir` porque a query string pode carregar valor
+    digitado. Método, versão e status não têm como conter PII e o status
+    precisa continuar inteiro (`int(status_code)` no formatador).
+    """
+    _cliente, metodo, caminho, versao_http, status = args
+    return (MARCADOR, str(metodo), redigir(str(caminho)), str(versao_http), status)
+
+
 def _redigir_record(record: logging.LogRecord) -> None:
-    # `getMessage()` resolve msg % args; guardar o resultado e zerar args é o
-    # jeito padrão de reescrever a mensagem sem deixar o argumento cru para o
-    # formatador reinterpolar depois.
-    record.msg = redigir(record.getMessage())
-    record.args = ()
+    if _linha_de_acesso_do_uvicorn(record):
+        record.args = _redigir_args_de_acesso(record.args)
+    else:
+        # `getMessage()` resolve msg % args; guardar o resultado e zerar args é
+        # o jeito padrão de reescrever a mensagem sem deixar o argumento cru
+        # para o formatador reinterpolar depois.
+        record.msg = redigir(record.getMessage())
+        record.args = ()
 
     if record.exc_info:
         excecao = record.exc_info[0]

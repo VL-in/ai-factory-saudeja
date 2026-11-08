@@ -502,7 +502,7 @@ c) **varredura de log** (`scripts/auditoria_lgpd.py`), usada no smoke test do de
 
 d) **detecção no Loki**, depois do envio: a regra P1 "Dado pessoal em log exportado ao Loki" varre o Loki com as mesmas `REGRAS_DE_PII` e aciona o plantão. Foi testada de ponta a ponta em dev, com uma linha sintética enviada sem passar pelo filtro. Detecta, mas não impede: a linha fica no Loki até vencer (subseção 9.6, item 36).
 
-Quando a redação falha, a linha é substituída por um marcador, em vez de sair sem redação. A regra numérica erra para o lado de redigir a mais: o IP de cliente também é dado pessoal. Os scripts do pipeline de treino (`preprocess`, `train`, `validate`) ficam fora do escopo, porque processam só o dataset pseudonimizado e a saída deles é lida no terminal e no MLflow.
+Quando a redação falha, a linha é substituída por um marcador, em vez de sair sem redação. A regra numérica erra para o lado de redigir a mais, mas só pega sequências de 10 a 13 dígitos, e um IPv4 tem de 4 a 12. Por isso, no log de acesso do `uvicorn`, o endereço do cliente é sempre trocado pelo marcador, sem passar pela contagem de dígitos. Os scripts do pipeline de treino (`preprocess`, `train`, `validate`) ficam fora do escopo, porque processam só o dataset pseudonimizado e a saída deles é lida no terminal e no MLflow.
 
 ### 8.1 Logs dos provedores
 

@@ -568,36 +568,6 @@ gh pr create --base main
 
 Cada registro termina com uma tabela de ações. As ações em aberto também aparecem no [Roadmap](#roadmap).
 
-## Roadmap
-
-- [x] Etapa 1: adoção do protótipo
-- [x] Etapa 2: escolha da stack (ADR-001)
-- [x] Etapa 3: arquitetura C4 + ADR-002 + repositório
-- [x] Etapa 4: produto deployável — inferência, SHAP, API, interface, banco, job D-2, mensageria e blindagem LGPD
-- [x] Etapa 5: CI/CD, re-treino mensal com gate, canário do modelo e observabilidade com alertas
-- [x] Etapa 6: deploy no Hugging Face Space, com ambientes `dev` e `production` e releases SemVer (v2.0.0 a v2.6.0)
-- [ ] Etapa 7: operação e ensaios
-  - [x] Ensaio de rollback de código
-  - [x] Telemetria no Grafana Cloud, sonda de disponibilidade, alertas por criticidade e painéis como código
-  - [x] Gatilho do job D-2 no horário, pelo Supabase
-  - [x] Teste de ponta a ponta da regra de dado pessoal no Loki (P1), em dev
-  - [ ] Alerta real de ponta a ponta para cada nível de criticidade (P1, P2 e P3) em produção
-  - [x] ADR da observabilidade com Grafana Cloud e OpenTelemetry, que revê o ADR-006 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
-  - [x] Saída do alerta diário (`alerta_observabilidade.yml`) depois da paridade com o Grafana, não antes de 01/11/2026 ([ADR-012](docs/adr/adr-012-observabilidade-grafana-cloud-opentelemetry.md))
-- [ ] Adequação à LGPD ([pendências](#pendências))
-  - [x] Análise de dados pessoais, bases legais e retenção ([LGPD.md](docs/LGPD/LGPD.md))
-  - [x] Procedimento de revisão da decisão automatizada
-  - [x] Agendamento sem consentimento, base de treino separada, eliminação e purga do DVC ([ADR-009](docs/adr/adr-009-tratamentos-lgpd-centralizados.md), [ADR-010](docs/adr/adr-010-base-de-treino-separada.md))
-  - [x] Identificador do paciente com HMAC e chave própria, com as linhas antigas migradas ([ADR-011](docs/adr/adr-011-identificador-do-paciente-com-chave.md))
-  - [x] Levantamento dos DPAs e do mecanismo de transferência internacional
-  - [x] Publicação da política de privacidade e dos Termos de uso, versão 1.0, vigentes a partir de 18/10/2026 ([política](docs/LGPD/POLITICA-DE-PRIVACIDADE.md), [termos](docs/LGPD/TERMOS-DE-USO.md))
-  - [x] Grafana Labs como operadora no [LGPD.md](docs/LGPD/LGPD.md), com o Grafana Cloud em `sa-east-1`
-
-## Suporte
-
-- **Dúvidas técnicas sobre o repositório:** fale com a mantenedora pelo perfil [@VL-in](https://github.com/VL-in) no GitHub. As issues estão desativadas neste repositório.
-- **Pacientes e titulares de dados:** os pedidos vão à clínica onde a consulta foi agendada. Pedidos sobre o uso dos dados no treino do modelo e sobre contas de funcionário vão ao encarregado do SaúdeJá ([Política de privacidade, seção 9](docs/LGPD/POLITICA-DE-PRIVACIDADE.md#9-encarregado-de-dados-dpo)).
-- **Incidentes e prazos de atendimento:** [`docs/SLA.md`](docs/SLA.md).
 
 ## Autoria e agradecimentos
 
