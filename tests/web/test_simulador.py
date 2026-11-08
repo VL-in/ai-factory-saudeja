@@ -13,7 +13,7 @@ import pytest
 from apoio_web import UsuarioDaAba
 from nicegui import app, core, ui
 from nicegui.storage import Storage
-from nicegui.testing.general_fixtures import prepare_simulation
+from nicegui.testing.general import prepare_simulation
 from nicegui.testing.user import User
 
 
@@ -64,11 +64,12 @@ async def test_storage_da_aba_funciona_sem_storage_secret(cliente_http):
     await usuario.should_see("lido: da aba")
 
 
-async def test_user_do_nicegui_troca_de_aba_a_cada_pagina(cliente_http):
-    """O motivo de `UsuarioDaAba` existir: com o `User` original, o mesmo
-    fluxo parece perder o `app.storage.tab` na navegação, o que no navegador
-    não acontece."""
+async def test_user_do_nicegui_mantem_a_aba_entre_paginas(cliente_http):
+    """Até o NiceGUI 3.2.0, o `User` original sorteava um `tab_id` a cada
+    `open()` e parecia perder o `app.storage.tab` na navegação, o que no
+    navegador não acontece; `UsuarioDaAba` corrigia isso. Se o `User` voltar
+    a trocar de aba, `UsuarioDaAba` precisa fixar o `tab_id` de novo."""
     usuario = User(cliente_http)
     await usuario.open("/spike/grava")
     await usuario.open("/spike/le")
-    await usuario.should_see("lido: nada")
+    await usuario.should_see("lido: da aba")

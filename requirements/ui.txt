@@ -8,7 +8,7 @@
 # requisicoes externas, e rodar tests/web/test_simulador.py (o que os testes
 # de tela pressupoem do simulador) e tests/web/test_infra_web.py (poda da aba,
 # que usa um atributo interno do NiceGUI).
-nicegui==3.2.0
+nicegui==3.19.0
 
 # Backend REST de src/ui/logic.py (PREDICT_BACKEND=api) -- em processo
 # (default, ADR-005) a UI não abre rede nenhuma.

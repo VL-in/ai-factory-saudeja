@@ -8,7 +8,9 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [Não publicado]
+## [v3.0.0] (Vanessa + Claude) - 2026-11-08
+
+A interface passa a ser a de NiceGUI, e a API e o cadastro aplicam o contrato de features. É uma versão MAJOR porque muda o contrato público do `/predict`: entradas que antes voltavam 200 (idade acima de 120 anos, consulta fora da grade de atendimento da clínica, antecedência acima de 180 dias, distância acima de 500 km) passam a voltar 422. Quem chama a API e mandava esses valores precisa tratar a recusa.
 
 ### Corrigido
 - **O cadastro do paciente recusa na tela o que o job diário recusaria depois.** Com a troca para o NiceGUI, o limite do campo de distância passou a valer só quando o campo perde o foco, e uma distância negativa chegava ao banco. O banco a recusava, o paciente lia "tente de novo em alguns minutos", o que não resolvia nada, e a falha contava como erro de banco no alerta da interface. Agora o cadastro confere a distância (de 0 a 500 km) e o sexo no servidor, e termina passando o agendamento pelo mesmo contrato de features do job D-2. O que ele recusa aparece em "Corrija os campos" e conta como recusa, não como erro.

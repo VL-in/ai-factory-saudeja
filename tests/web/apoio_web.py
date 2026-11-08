@@ -1,18 +1,16 @@
 """
 SaúdeJá — apoio aos testes da interface em NiceGUI: a aba simulada.
 
-`UsuarioDaAba` mantém o mesmo `tab_id` entre páginas. O `User` do NiceGUI
-sorteia um `tab_id` a cada `open()`; o navegador não faz isso: o id fica no
-`sessionStorage` da aba e acompanha a navegação, e é por ele que a sessão da
-equipe e a ciência do paciente (`app.storage.tab`) sobrevivem à troca de
-página. Sem esta classe, o teste afirmaria o contrário do que acontece no
-navegador (tests/web/test_simulador.py prova a diferença).
+`UsuarioDaAba` é o `User` do NiceGUI com duas diferenças que o aproximam do
+navegador: descarta a página anterior ao navegar (os timers dela param) e só
+devolve `open()` depois de a página terminar de montar. O mesmo `tab_id` entre
+páginas, que esta classe garantia até o NiceGUI 3.2.0, o `User` passou a
+manter sozinho (tests/web/test_simulador.py confere).
 """
 import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
-import httpx
 from nicegui import Client, ElementFilter
 from nicegui.nicegui import _on_handshake
 from nicegui.testing.user import User
@@ -22,11 +20,7 @@ from web import sessao
 
 
 class UsuarioDaAba(User):
-    """`User` do NiceGUI com um `tab_id` só, como uma aba de navegador."""
-
-    def __init__(self, cliente_http: httpx.AsyncClient) -> None:
-        super().__init__(cliente_http)
-        self.tab_id = str(uuid4())
+    """`User` do NiceGUI que descarta a página anterior e espera a montagem."""
 
     async def open(
         self, path: str, *, clear_forward_history: bool = True, esperar: bool = True
@@ -46,14 +40,16 @@ class UsuarioDaAba(User):
         if self.client is not None and self.client.id != client_id:
             self.client.delete()
         self.client = Client.instances[client_id]
+        self.back_history.append(path)
+        if clear_forward_history:
+            self.forward_history.clear()
+        # Mesma ordem do `User.open` do NiceGUI: o outbox é trocado antes do
+        # handshake, para o simulador ver as mensagens da montagem.
+        self._patch_outbox()
         await _on_handshake(
             f"test-{uuid4()}",
             {"client_id": self.client.id, "tab_id": self.tab_id, "document_id": str(uuid4())},
         )
-        self.back_history.append(path)
-        if clear_forward_history:
-            self.forward_history.clear()
-        self._patch_outbox_emit_function()
         if esperar:
             await _esperar_montagem_da_pagina(path)
         return self.client

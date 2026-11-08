@@ -28,9 +28,9 @@ from nicegui import core, ui
 from nicegui.functions.download import download
 from nicegui.functions.navigate import Navigate
 from nicegui.functions.notify import notify
+from nicegui.testing.general import prepare_simulation
 from nicegui.testing.general_fixtures import (  # noqa: F401 -- fixture do NiceGUI
     nicegui_reset_globals,
-    prepare_simulation,
 )
 
 

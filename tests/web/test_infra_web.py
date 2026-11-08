@@ -14,7 +14,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 from nicegui import app as app_nicegui
-from nicegui.nicegui import prune_tab_storage
+from nicegui.app.app import prune_tab_storage
 from nicegui.storage import Storage
 
 import telemetria
