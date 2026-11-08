@@ -13,6 +13,3 @@ pyyaml==6.0.3
 # Windows não traz a do sistema. Vem junto do pandas, mas é declarada aqui
 # porque src/ a usa diretamente, não por acidente de dependência transitiva.
 tzdata==2025.2
-
-# Testes -- roda em cima de qualquer camada (train/API/coerência do repo)
-pytest==8.3.3

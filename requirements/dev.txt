@@ -11,6 +11,11 @@
 # Lint/format -- configuração em ruff.toml (docs/architecture.md §8)
 ruff==0.16.7
 
+# Testes -- cobrem todas as camadas (train/API/UI/coerência do repo), mas só
+# rodam local e no CI: fora de base.txt para não entrar nas imagens de
+# treino, da API e do Space.
+pytest==8.3.3
+
 # Fixtures assincronas do simulador do NiceGUI (tests/web/, ADR-013).
 pytest-asyncio==1.2.0
 

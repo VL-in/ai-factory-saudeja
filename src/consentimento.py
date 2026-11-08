@@ -38,10 +38,8 @@ ACAO_CONCEDIDO = "concedido"
 ACAO_REVOGADO = "revogado"
 
 CANAL_AUTOAGENDAMENTO = "autoagendamento"
-CANAIS = (CANAL_AUTOAGENDAMENTO, "clinica", "pedido_titular")
 CONSENTIDO_POR_TITULAR = "titular"
 CONSENTIDO_POR_RESPONSAVEL = "responsavel_legal"
-CONSENTIDO_POR = (CONSENTIDO_POR_TITULAR, CONSENTIDO_POR_RESPONSAVEL)
 
 # Criança, para o ECA (art. 2º), é quem tem até 12 anos incompletos, e o
 # art. 14, § 1º, da LGPD exige o consentimento de um dos pais ou do responsável
