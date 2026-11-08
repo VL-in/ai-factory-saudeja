@@ -64,7 +64,7 @@ def _textos_da_tela(usuario) -> str:
 async def test_entrada_e_a_tela_do_paciente_com_ciencia_desmarcada(usuario):
     """A URL pública é a porta do autoagendamento: quem chega vê a ciência, não
     o login da equipe, e o título não anuncia a classificação de risco."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
 
     assert _valor(usuario, "ciencia") is False
     assert not _habilitado(usuario, "continuar")
@@ -75,7 +75,7 @@ async def test_entrada_e_a_tela_do_paciente_com_ciencia_desmarcada(usuario):
 async def test_sem_ciencia_nenhum_campo_existe_e_continuar_fica_bloqueado(usuario):
     """C6. A tela roda fora do Brasil: nenhum campo é montado antes da
     ciência, nem a data da consulta."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
 
     with usuario:
         assert list(ElementFilter(kind=ui.input)) == []
@@ -100,7 +100,7 @@ async def test_sem_ciencia_nenhum_campo_existe_e_continuar_fica_bloqueado(usuari
 async def test_link_abre_o_documento_e_a_ciencia_sobrevive_a_volta(usuario, documento):
     """C7. A caixa marcada vive em `app.storage.tab`, que acompanha a
     navegação da aba."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
     usuario.find(marker="ciencia").click()
 
     usuario.find(marker=f"abrir-{documento}").click()
@@ -124,7 +124,7 @@ async def test_visao_paciente_carrega_o_formulario_e_falha_do_banco_e_generica(u
     """C1. Sem Supabase, um cadastro válido falha com mensagem amigável; o
     motivo técnico (variável de ambiente ausente) fica no log e em
     `eventos_app`, não na tela pública."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _preencher_cadastro_valido(usuario)
 
     usuario.find(marker="agendar").click()
@@ -137,7 +137,7 @@ async def test_visao_paciente_carrega_o_formulario_e_falha_do_banco_e_generica(u
 
 async def test_cadastro_em_branco_lista_todos_os_problemas_sem_tocar_o_banco(usuario):
     """C2."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _dar_ciencia(usuario)
 
     usuario.find(marker="agendar").click()
@@ -166,7 +166,7 @@ async def test_distancia_fora_do_contrato_nao_conclui_o_cadastro(usuario, distan
     """Regressão da troca do Streamlit: o limite do campo só vale no `blur`,
     e a distância negativa chegava ao banco e virava falha, contada como erro.
     Agora é recusa na tela, e campo vazio não vira 0 km."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _preencher_cadastro_valido(usuario)
     _definir_valor(usuario, "paciente-distancia", distancia)
 
@@ -183,7 +183,7 @@ async def test_distancia_fora_do_contrato_nao_conclui_o_cadastro(usuario, distan
 async def test_data_de_nascimento_comeca_vazia(usuario):
     """C3. Um 01/01/1990 pré-preenchido e esquecido virava idade errada no
     modelo."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _dar_ciencia(usuario)
 
     assert _valor(usuario, "paciente-nascimento") == ""
@@ -191,7 +191,7 @@ async def test_data_de_nascimento_comeca_vazia(usuario):
 
 async def test_campos_de_data_mantem_o_formato_da_tela_antiga(usuario):
     """Formato de data é entrada do modelo: não muda com a troca de interface."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _dar_ciencia(usuario)
 
     proxima = logic.proxima_data_disponivel()
@@ -203,7 +203,7 @@ async def test_agendamento_confirmado_troca_o_formulario_pela_confirmacao(usuari
     """C4. A confirmação é neutra (nem todo agendamento recebe lembrete), e a
     ciência volta desmarcada no agendamento seguinte."""
     chamadas = _espiar_cadastro(monkeypatch)
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _preencher_cadastro_valido(usuario)
 
     usuario.find(marker="agendar").click()
@@ -230,7 +230,7 @@ async def test_agendamento_confirmado_troca_o_formulario_pela_confirmacao(usuari
 
 async def test_aviso_de_privacidade_do_paciente_sem_jargao_tecnico(usuario):
     """C5. Nas duas etapas: a da ciência e a do formulário."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
     na_ciencia = _textos_da_tela(usuario)
     await _dar_ciencia(usuario)
     no_formulario = _textos_da_tela(usuario)
@@ -245,7 +245,7 @@ async def test_aviso_de_privacidade_do_paciente_sem_jargao_tecnico(usuario):
 async def test_caixa_do_treino_comeca_desmarcada_e_e_a_unica_do_formulario(usuario):
     """C8. O agendamento e o lembrete são parte do atendimento da clínica (art.
     7º, V; LGPD.md §3): a única autorização opcional é a do treino."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _dar_ciencia(usuario)
 
     assert _valor(usuario, "paciente-treino") is False
@@ -263,7 +263,7 @@ async def test_caixa_do_treino_comeca_desmarcada_e_e_a_unica_do_formulario(usuar
 async def test_agendar_repassa_a_caixa_do_treino_e_a_versao_dos_documentos(usuario, monkeypatch):
     """C9."""
     chamadas = _espiar_cadastro(monkeypatch)
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _preencher_cadastro_valido(usuario)
     usuario.find(marker="paciente-treino").click()
 
@@ -284,7 +284,7 @@ async def test_falha_no_treino_confirma_o_agendamento_e_avisa(
 ):
     """C10."""
     _espiar_cadastro(monkeypatch, {"falha_no_treino": True})
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _preencher_cadastro_valido(usuario)
     if marcada:
         usuario.find(marker="paciente-treino").click()
@@ -305,7 +305,7 @@ async def test_ciencia_perdida_na_poda_da_aba_volta_a_ser_cobrada(usuario, monke
     monkeypatch.setattr(
         logic.repositories, "inserir_paciente", lambda **kw: chamadas.append(kw) or {"id": "x"}
     )
-    await usuario.open("/")
+    await usuario.open("/paciente")
     await _preencher_cadastro_valido(usuario)
     with usuario:
         sessao.aba().pop(sessao.CHAVE_CIENCIA_CONFIRMADA)
@@ -314,3 +314,11 @@ async def test_ciencia_perdida_na_poda_da_aba_volta_a_ser_cobrada(usuario, monke
 
     await usuario.should_see("Política de privacidade e dos Termos de uso", retries=20)
     assert chamadas == []
+
+
+def test_css_do_topo_aponta_para_a_imagem_do_inicio():
+    """O CSS é literal (guarda de HTML cru): se a URL da imagem mudar no
+    início, este teste pega o topo que ficaria sem foto em silêncio."""
+    from web.paginas import inicio, paciente
+
+    assert f'url("{inicio.URL_IMAGEM_DE_FUNDO}")' in paciente.CSS_PACIENTE

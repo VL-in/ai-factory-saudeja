@@ -8,6 +8,21 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [v3.2.0] (Vanessa + Claude) - 2026-11-08
+
+### Modificado
+- **Área da equipe redesenhada, na mesma linha da tela inicial e do agendamento.** O login fica sobre uma foto da recepção da clínica, esmaecida como a da tela inicial e servida pela própria aplicação, com um resumo do que a área oferece, ícones nos campos de e-mail e senha, Enter no e-mail levando à senha e a orientação para falar com o administrador do sistema quando esquecer a senha. Depois do login, uma faixa de topo mostra a data da clínica por extenso, e as abas "Fila do dia", "Pedidos do titular" e "Time técnico" passam a um trilho de pílulas. O conteúdo das abas, a regra de nenhuma aba montada sem login e o controle de inatividade não mudam.
+- **Ajuste de largura no agendamento.** O cartão de ciência dos documentos passa a ocupar a mesma largura dos demais cartões da tela, e as linhas do resumo vão de uma borda à outra do cartão.
+
+## [v3.1.0] (Vanessa + Claude) - 2026-11-08
+
+### Adicionado
+- **Tela inicial com a escolha entre paciente e funcionário.** A URL do Space abre uma tela de entrada com a frase "Feito para o seu bem-estar" sobre uma foto esmaecida e dois acessos: "Sou paciente", que leva à ciência, ao cadastro e ao agendamento, e "Sou funcionário", que leva ao login da área da equipe. A ordem das etapas de cada área não muda. A foto é servida pela própria aplicação, sem nada de terceiros no navegador ([ADR-013](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-013-interface-nicegui.md)), e o véu sobre ela segue o tema claro ou escuro.
+
+### Modificado
+- **A tela do paciente passa de `/` para `/paciente`.** Quem tinha a URL do Space salva cai na tela inicial e escolhe "Sou paciente". Os links "Voltar ao agendamento" da Política e dos Termos levam a `/paciente`; a página de erro passa a levar ao início.
+- **Tela de agendamento redesenhada, na mesma linha da tela inicial.** O topo traz a mesma foto esmaecida (servida pela própria aplicação, com o véu do tema claro ou escuro), um link de volta ao início e um indicador das três etapas (privacidade, cadastro e horário, confirmação). O formulário fica dividido em "Sua consulta" e "Seus dados", com um resumo ao lado que acompanha a data, o horário, a especialidade e a antecedência escolhidos. O botão "Confirmar agendamento" mostra que está processando e não aceita um segundo clique, os campos de nome e telefone ajudam o preenchimento automático do navegador, e o sexo aparece por extenso. A confirmação ganha destaque e um link de volta ao início. Os campos, os formatos, a validação e a ordem das etapas não mudam: a ciência continua antes de qualquer campo ([ADR-010](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-010-base-de-treino-separada.md)).
+
 ## [v3.0.0] (Vanessa + Claude) - 2026-11-08
 
 A interface passa a ser a de NiceGUI, e a API e o cadastro aplicam o contrato de features. É uma versão MAJOR porque muda o contrato público do `/predict`: entradas que antes voltavam 200 (idade acima de 120 anos, consulta fora da grade de atendimento da clínica, antecedência acima de 180 dias, distância acima de 500 km) passam a voltar 422. Quem chama a API e mandava esses valores precisa tratar a recusa.

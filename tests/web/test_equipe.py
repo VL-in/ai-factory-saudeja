@@ -102,7 +102,7 @@ async def test_login_bem_sucedido_libera_as_abas(usuario, monkeypatch):
 async def test_tela_do_paciente_nao_exige_login(usuario):
     """E5. O autoagendamento continua aberto: a porta é só na frente dos dados
     da clínica."""
-    await usuario.open("/")
+    await usuario.open("/paciente")
 
     await usuario.should_see("Cadastro e agendamento")
     await usuario.should_not_see(marker="login-email")
@@ -400,7 +400,7 @@ async def test_acao_lenta_nao_trava_as_outras_abas(usuario, outra_aba, monkeypat
     await asyncio.to_thread(comecou.wait, 5)
 
     inicio = time.monotonic()
-    await outra_aba.open("/")
+    await outra_aba.open("/paciente")
     await outra_aba.should_see("Cadastro e agendamento")
     duracao = time.monotonic() - inicio
 
@@ -431,3 +431,15 @@ async def test_abrir_a_area_da_equipe_le_a_fila_uma_vez(usuario, monkeypatch):
     await asyncio.sleep(0.2)
 
     assert len(chamadas) == 1
+
+
+def test_css_da_equipe_aponta_para_a_imagem_dela():
+    """O CSS é literal (guarda de HTML cru): se a URL da imagem mudar, este
+    teste pega o login e a faixa do topo que ficariam sem foto em silêncio."""
+    assert f'url("{equipe.URL_IMAGEM_DE_FUNDO}")' in equipe.CSS_EQUIPE
+
+
+def test_data_por_extenso_nao_depende_do_locale():
+    from datetime import date
+
+    assert equipe.data_por_extenso(date(2026, 11, 8)) == "domingo, 8 de novembro de 2026"
