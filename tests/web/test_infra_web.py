@@ -67,6 +67,17 @@ def test_imagem_do_inicio_e_servida_pela_propria_aplicacao(cliente_da_casca):
     assert resposta.content == inicio.CAMINHO_IMAGEM_DE_FUNDO.read_bytes()
 
 
+def test_imagem_da_equipe_e_servida_pela_propria_aplicacao(cliente_da_casca):
+    """A foto da área da equipe segue a mesma regra da do início (ADR-013)."""
+    from web.paginas import equipe
+
+    resposta = cliente_da_casca.get(equipe.URL_IMAGEM_DE_FUNDO)
+
+    assert resposta.status_code == 200
+    assert resposta.headers["content-type"] == "image/webp"
+    assert resposta.content == equipe.CAMINHO_IMAGEM_DE_FUNDO.read_bytes()
+
+
 @pytest.mark.parametrize("rota", ROTAS_DE_PAGINA)
 def test_pagina_nao_carrega_nada_de_outra_origem(cliente_da_casca, rota):
     """Fonte, ícones e scripts vêm da própria aplicação: uma fonte do Google

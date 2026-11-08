@@ -431,3 +431,15 @@ async def test_abrir_a_area_da_equipe_le_a_fila_uma_vez(usuario, monkeypatch):
     await asyncio.sleep(0.2)
 
     assert len(chamadas) == 1
+
+
+def test_css_da_equipe_aponta_para_a_imagem_dela():
+    """O CSS é literal (guarda de HTML cru): se a URL da imagem mudar, este
+    teste pega o login e a faixa do topo que ficariam sem foto em silêncio."""
+    assert f'url("{equipe.URL_IMAGEM_DE_FUNDO}")' in equipe.CSS_EQUIPE
+
+
+def test_data_por_extenso_nao_depende_do_locale():
+    from datetime import date
+
+    assert equipe.data_por_extenso(date(2026, 11, 8)) == "domingo, 8 de novembro de 2026"
