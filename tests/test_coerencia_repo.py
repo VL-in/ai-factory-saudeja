@@ -1099,3 +1099,239 @@ def test_so_o_workflow_de_purga_apaga_e_sem_input_que_identifique_o_titular():
     assert lgpd["permissions"] == {"contents": "read"}
     passos = " ".join(p.get("run", "") for p in job["steps"])
     assert "dvc gc" not in passos
+
+
+# --- interface em NiceGUI (ADR-013) ---------------------------------------------
+# Guardas sobre a AST de src/web/, cada uma com um controle negativo: uma
+# varredura estática que passa sem achar nada é indistinguível de uma que não
+# olha nada, e só o controle prova que ela enxerga o que procura.
+
+DIRETORIO_WEB = REPO_ROOT / "src" / "web"
+
+# Chamadas que mandam HTML/CSS/JS cru ao navegador. Um valor do banco ou do
+# usuário passado a elas viraria marcação executável (regra D7 da migração).
+_CHAMADAS_DE_HTML_CRU = frozenset(
+    {"html", "markdown", "add_head_html", "add_body_html", "add_css", "add_slot"}
+)
+
+
+def _constantes_de_modulo(arvore: ast.Module) -> set[str]:
+    """Nomes atribuídos no topo do módulo a uma string literal."""
+    nomes = set()
+    for no in arvore.body:
+        if (
+            isinstance(no, ast.Assign)
+            and isinstance(no.value, ast.Constant)
+            and isinstance(no.value.value, str)
+        ):
+            nomes.update(alvo.id for alvo in no.targets if isinstance(alvo, ast.Name))
+    return nomes
+
+
+def _argumento_permitido(arg: ast.expr, constantes: set[str]) -> bool:
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str | int):
+        return True
+    if isinstance(arg, ast.Name) and arg.id in constantes:
+        return True
+    # A única fonte de markdown permitida: os documentos legais versionados.
+    return (
+        isinstance(arg, ast.Call)
+        and isinstance(arg.func, ast.Attribute)
+        and isinstance(arg.func.value, ast.Name)
+        and arg.func.value.id == "documentos_legais"
+        and arg.func.attr == "texto_para_tela"
+    )
+
+
+def _html_com_dado(codigo: str, origem: str = "<teste>") -> list[str]:
+    arvore = ast.parse(codigo)
+    constantes = _constantes_de_modulo(arvore)
+    achados = []
+    for no in ast.walk(arvore):
+        if not (
+            isinstance(no, ast.Call)
+            and isinstance(no.func, ast.Attribute)
+            and no.func.attr in _CHAMADAS_DE_HTML_CRU
+        ):
+            continue
+        argumentos = [*no.args, *(k.value for k in no.keywords)]
+        if no.func.attr == "add_slot":
+            argumentos = argumentos[1:]  # o primeiro é o nome do slot
+        if not all(_argumento_permitido(a, constantes) for a in argumentos):
+            achados.append(f"{origem}:{no.lineno} {no.func.attr}")
+    return achados
+
+
+def _arquivos_web() -> list[Path]:
+    arquivos = sorted(DIRETORIO_WEB.rglob("*.py"))
+    assert arquivos, "src/web/ sem arquivos: a guarda não olharia nada"
+    return arquivos
+
+
+def test_interface_nao_monta_html_com_dado():
+    """Textos vindos do banco ou do usuário vão por `ui.label`/`ui.table`, que
+    escapam o conteúdo (os slots da tabela usam `{{ }}`). HTML e markdown só
+    com texto fixo do código ou com os documentos legais versionados."""
+    achados = []
+    for arquivo in _arquivos_web():
+        achados += _html_com_dado(arquivo.read_text(encoding="utf-8"), arquivo.name)
+    assert achados == []
+
+
+def test_a_guarda_de_html_realmente_detecta_dado():
+    codigo = (
+        "CSS = '<style></style>'\n"
+        "ui.add_head_html(CSS)\n"
+        "ui.markdown(documentos_legais.texto_para_tela(doc))\n"
+        "tabela.add_slot('body-cell-risco', CSS)\n"
+        "ui.html(f'<b>{item.nome_completo}</b>')\n"
+        "ui.markdown(texto_digitado)\n"
+        "tabela.add_slot('body', montar_slot(item))\n"
+    )
+    assert _html_com_dado(codigo) == [
+        "<teste>:5 html",
+        "<teste>:6 markdown",
+        "<teste>:7 add_slot",
+    ]
+
+
+_ARMAZENAMENTOS_PROIBIDOS = frozenset({"user", "browser", "general"})
+
+
+def _armazenamento_proibido(codigo: str, origem: str = "<teste>") -> list[str]:
+    """`app.storage.user/browser/general` gravam em disco ou mandam o estado ao
+    navegador; `storage_secret` liga o cookie de sessão que os habilita."""
+    achados = []
+    for no in ast.walk(ast.parse(codigo)):
+        if (
+            isinstance(no, ast.Attribute)
+            and no.attr in _ARMAZENAMENTOS_PROIBIDOS
+            and isinstance(no.value, ast.Attribute)
+            and no.value.attr == "storage"
+        ):
+            achados.append(f"{origem}:{no.lineno} storage.{no.attr}")
+        if isinstance(no, ast.keyword) and no.arg == "storage_secret":
+            achados.append(f"{origem}:{no.value.lineno} storage_secret")
+    return sorted(achados)
+
+
+def test_interface_guarda_estado_so_na_memoria_da_aba():
+    achados = []
+    for arquivo in _arquivos_web():
+        achados += _armazenamento_proibido(arquivo.read_text(encoding="utf-8"), arquivo.name)
+    assert achados == []
+
+
+def test_a_guarda_de_armazenamento_realmente_detecta():
+    codigo = (
+        "app.storage.tab['x'] = 1\n"
+        "app.storage.user['x'] = 1\n"
+        "app.storage.browser.get('x')\n"
+        "app.storage.general.clear()\n"
+        "ui.run_with(app, storage_secret='s')\n"
+    )
+    assert _armazenamento_proibido(codigo) == [
+        "<teste>:2 storage.user",
+        "<teste>:3 storage.browser",
+        "<teste>:4 storage.general",
+        "<teste>:5 storage_secret",
+    ]
+
+
+def _execucao_fora_da_regra(codigo: str, origem: str = "<teste>") -> list[str]:
+    """`run.io_bound`/`run.cpu_bound` do NiceGUI não levam os contextvars para
+    a thread (o span e o `session.id` se perderiam); `execucao.executar_em_thread`
+    leva. E nada de Streamlit na casca nova."""
+    achados = []
+    for no in ast.walk(ast.parse(codigo)):
+        if (
+            isinstance(no, ast.Attribute)
+            and no.attr in {"io_bound", "cpu_bound"}
+            and isinstance(no.value, ast.Name)
+            and no.value.id == "run"
+        ):
+            achados.append(f"{origem}:{no.lineno} run.{no.attr}")
+        modulos = []
+        if isinstance(no, ast.Import):
+            modulos = [a.name for a in no.names]
+        elif isinstance(no, ast.ImportFrom):
+            modulos = [no.module or ""]
+        if any(m.split(".")[0] == "streamlit" for m in modulos):
+            achados.append(f"{origem}:{no.lineno} import streamlit")
+    return sorted(achados)
+
+
+def test_interface_executa_chamada_bloqueante_so_por_executar_em_thread():
+    achados = []
+    for arquivo in _arquivos_web():
+        achados += _execucao_fora_da_regra(arquivo.read_text(encoding="utf-8"), arquivo.name)
+    assert achados == []
+
+
+def test_a_guarda_de_execucao_realmente_detecta():
+    codigo = (
+        "await executar_em_thread(logic.buscar_fila_do_dia, dia)\n"
+        "await run.io_bound(logic.buscar_fila_do_dia, dia)\n"
+        "await run.cpu_bound(calcular)\n"
+        "import streamlit as st\n"
+        "from streamlit.testing.v1 import AppTest\n"
+    )
+    assert _execucao_fora_da_regra(codigo) == [
+        "<teste>:2 run.io_bound",
+        "<teste>:3 run.cpu_bound",
+        "<teste>:4 import streamlit",
+        "<teste>:5 import streamlit",
+    ]
+
+
+# Funções de `logic` que vão ao banco, ao Supabase Auth ou ao job: chamadas
+# direto num handler, travariam o event loop de todas as abas.
+_FUNCOES_BLOQUEANTES_DE_LOGIC = frozenset(
+    {
+        "autenticar_funcionario",
+        "buscar_fila_do_dia",
+        "atualizar_status_agendamento",
+        "cadastrar_paciente_e_agendamento",
+        "registrar_pedido_da_clinica",
+        "encaminhar_pedido_ao_treino",
+        "listar_pedidos_da_clinica",
+        "decidir_pedido_da_clinica",
+        "disparar_job_diario",
+        "resumo_observabilidade",
+        "status_banco",
+    }
+)
+
+
+def _chamadas_diretas_a_logic(codigo: str, origem: str = "<teste>") -> list[str]:
+    achados = []
+    for no in ast.walk(ast.parse(codigo)):
+        if (
+            isinstance(no, ast.Call)
+            and isinstance(no.func, ast.Attribute)
+            and no.func.attr in _FUNCOES_BLOQUEANTES_DE_LOGIC
+            and isinstance(no.func.value, ast.Name)
+            and no.func.value.id == "logic"
+        ):
+            achados.append(f"{origem}:{no.lineno} logic.{no.func.attr}()")
+    return achados
+
+
+def test_handlers_nao_chamam_o_banco_direto_no_event_loop():
+    """`src/web/dados.py` é a exceção: as funções dele são síncronas e só são
+    chamadas por `executar_em_thread`."""
+    achados = []
+    for arquivo in _arquivos_web():
+        if arquivo.name == "dados.py":
+            continue
+        achados += _chamadas_diretas_a_logic(arquivo.read_text(encoding="utf-8"), arquivo.name)
+    assert achados == []
+
+
+def test_a_guarda_de_chamada_direta_realmente_detecta():
+    codigo = (
+        "await executar_em_thread(logic.autenticar_funcionario, email, senha)\n"
+        "logic.autenticar_funcionario(email, senha)\n"
+        "logic.rotulo_status(item.status)\n"
+    )
+    assert _chamadas_diretas_a_logic(codigo) == ["<teste>:2 logic.autenticar_funcionario()"]
