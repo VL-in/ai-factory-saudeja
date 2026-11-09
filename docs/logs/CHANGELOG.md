@@ -8,6 +8,12 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [v3.2.0] (Vanessa + Claude) - 2026-11-08
+
+### Modificado
+- **Área da equipe redesenhada, na mesma linha da tela inicial e do agendamento.** O login fica sobre uma foto da recepção da clínica, esmaecida como a da tela inicial e servida pela própria aplicação, com um resumo do que a área oferece, ícones nos campos de e-mail e senha, Enter no e-mail levando à senha e a orientação para falar com o administrador do sistema quando esquecer a senha. Depois do login, uma faixa de topo mostra a data da clínica por extenso, e as abas "Fila do dia", "Pedidos do titular" e "Time técnico" passam a um trilho de pílulas. O conteúdo das abas, a regra de nenhuma aba montada sem login e o controle de inatividade não mudam.
+- **Ajuste de largura no agendamento.** O cartão de ciência dos documentos passa a ocupar a mesma largura dos demais cartões da tela, e as linhas do resumo vão de uma borda à outra do cartão.
+
 ## [v3.1.0] (Vanessa + Claude) - 2026-11-08
 
 ### Adicionado

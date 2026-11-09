@@ -8,20 +8,23 @@ usa um TestClient do próprio app FastAPI como transporte -- a API de verdade,
 sem subir servidor nem forjar a resposta. Só os caminhos de FALHA de rede são
 simulados, porque não dá para desligar um servidor que não existe.
 """
+import dataclasses
 import hashlib
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
+from typing import get_args
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from supabase_auth.errors import AuthApiError, AuthRetryableError
 
+import contrato_features
 import db.repositories as repositories
 import inference
 import observabilidade
 from api.main import app
-from api.schemas import PacienteConsultaIn
+from api.schemas import PacienteConsultaIn, PredictOut
 from ui import logic
 
 MODEL_PATH = "data/model.pkl"
@@ -72,6 +75,30 @@ def test_payload_da_ui_satisfaz_o_schema_da_api(payload):
     validado = PacienteConsultaIn(**payload)
 
     assert validado.data_hora_agendada == payload["data_hora_agendada"]
+
+
+def test_payload_da_ui_tem_exatamente_os_campos_do_schema(payload):
+    """O Pydantic ignora chave a mais em silêncio: sem este teste, um campo
+    renomeado só na tela chegaria à API e seria descartado sem erro."""
+    assert set(payload) == set(PacienteConsultaIn.model_fields)
+
+
+def test_resultado_da_ui_tem_a_forma_do_predict_out():
+    """ResultadoPredicao diz ter "a mesma forma do PredictOut": um campo novo
+    na resposta da API que a tela não conhece (ou o contrário) quebra aqui, e
+    não só no backend REST. `fora_do_dominio` é property na UI."""
+    campos_ui = {campo.name for campo in dataclasses.fields(logic.ResultadoPredicao)}
+    campos_ui.add("fora_do_dominio")
+
+    assert campos_ui == set(PredictOut.model_fields)
+
+
+def test_sexos_da_ui_sao_os_que_a_api_aceita():
+    """A tela valida com o contrato de features; a API, com o Literal do
+    schema. Os dois domínios precisam ser o mesmo."""
+    literal_da_api = get_args(PacienteConsultaIn.model_fields["sexo"].annotation)
+
+    assert set(contrato_features.SEXOS_VALIDOS) == set(literal_da_api)
 
 
 def test_listar_especialidades_vem_da_configuracao_do_cadastro():

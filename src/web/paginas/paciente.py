@@ -105,7 +105,7 @@ CSS_PACIENTE = (
     "transition:border-color .15s,box-shadow .15s}"
     ".sj-ag-doc:hover{border-color:var(--q-primary);box-shadow:0 6px 18px rgba(15,23,42,.10)}"
     ".sj-ag-doc:focus-visible{outline:3px solid var(--q-primary);outline-offset:3px}"
-    ".sj-ag-resumo-linha{display:flex;align-items:center;gap:.6rem;padding:.55rem 0;"
+    ".sj-ag-resumo-linha{display:flex;align-items:center;gap:.6rem;width:100%;padding:.55rem 0;"
     "border-bottom:1px solid var(--sj-borda)}"
     ".sj-ag-resumo-linha:last-child{border-bottom:0}"
     ".sj-ag-ok-icone{display:grid;place-items:center;width:4rem;height:4rem;"
@@ -243,7 +243,7 @@ class TelaDoPaciente:
 
     def _etapa_ciencia(self) -> None:
         estado = sessao.aba()
-        with ui.card().classes("w-full max-w-3xl p-5 sm:p-7 gap-5 rounded-2xl"):
+        with ui.card().classes("w-full p-5 sm:p-7 gap-5 rounded-2xl"):
             _titulo_de_secao(
                 "verified_user",
                 "Antes de começar",
