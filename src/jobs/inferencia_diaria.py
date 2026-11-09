@@ -445,8 +445,10 @@ def _mensagem_de_lembrete(agendamento: dict[str, Any]) -> str:
     try:
         quando = para_horario_da_clinica(agendamento["data_hora_agendada"])
         return (
-            f"Olá! Confirmamos sua consulta em {quando:%d/%m/%Y às %H:%M}. "
-            "Poderá comparecer?"
+            f"Olá! Confirmamos sua consulta em {quando:%d/%m/%Y às %H:%M}. " \
+            "Favor comparecer com 15 minutos de antecedencia. " 
+            "Caso precise cancelar ou reagendar, favor entrar em contato com a clinica."
+
         )
     except Exception:
         return "Olá! Lembramos da sua consulta agendada nos próximos dias. Poderá comparecer?"
