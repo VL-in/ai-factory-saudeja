@@ -210,6 +210,42 @@ class _Braco:
         self.threshold = threshold
 
 
+def _canal_do_provedor() -> str:
+    """Canal do cliente que `obter_cliente_mensageria` criaria, sem criá-lo: o
+    `InfobipClient` exige credencial no construtor, e a fila vazia não precisa
+    de cliente nenhum."""
+    if provedor_de_mensageria() == "infobip":
+        return InfobipClient.canal
+    return StubMessagingClient.canal
+
+
+def _iniciar_series_do_job(bracos: tuple[str, ...], canal: str) -> None:
+    """Soma 0 a cada série que o job pode produzir, antes da fila.
+
+    Contador OTel só vira série no Mimir na primeira soma. Sem isto, um dia
+    sem agendamento (ou sem quarentena, ou sem falha de envio) não deixa série
+    nenhuma, e o painel mostra "No data" em vez de 0. O zero também dá ao
+    `increase()` das regras de alerta o ponto de partida: numa série que nasce
+    já valendo 1, o primeiro incremento não é contado.
+
+    Combinações fechadas, as mesmas que o laço da fila usa (cardinalidade da
+    allowlist de `telemetria`). Custo só com preço preenchido e canal cobrado,
+    a mesma condição de `_enviar_lembrete`: sem preço, o custo continua fora
+    do Grafana, e não aparece como um 0 enganoso."""
+    for braco in bracos:
+        for resultado in ("predito", "fora_do_dominio", "quarentena"):
+            telemetria.contar(
+                "saudeja_job_d2_agendamentos_total",
+                {"resultado": resultado, "braco": braco},
+                valor=0,
+            )
+    for status in ("enviado", STATUS_ENVIADO_SEM_PREDICAO, "nao_enviado", "falha_envio"):
+        telemetria.contar("saudeja_sms_total", {"status_envio": status}, valor=0)
+    if preco_do_segmento_usd(canal):
+        for status in ("enviado", STATUS_ENVIADO_SEM_PREDICAO):
+            telemetria.contar("saudeja_sms_custo_usd_total", {"status_envio": status}, valor=0)
+
+
 def _unidade_do_canario(agendamento: dict[str, Any]) -> str | None:
     """O paciente (`id_paciente_externo`, já pseudonimizado) é a unidade de
     divisão: estável entre as consultas dele durante o canário. Agendamento
@@ -246,6 +282,14 @@ def _processar_fila(
         "erros": [],
     }
     observado["detalhe"]["agendamentos_encontrados"] = len(pendentes)
+    _iniciar_series_do_job(
+        bracos=("campeao", "canario") if contexto_canario is not None else ("campeao",),
+        canal=(
+            cliente_mensageria.canal
+            if cliente_mensageria is not None
+            else _canal_do_provedor()
+        ),
+    )
     if not pendentes:
         return resultado
 

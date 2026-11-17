@@ -462,7 +462,53 @@ def test_job_mede_resultado_probabilidade_e_envio_por_braco(repositorio, telemet
     ((atributos, medicoes),) = telemetria_em_memoria.pontos("saudeja_predicao_probabilidade")
     assert atributos["braco"] == "campeao" and medicoes == 2
     envios = {a["status_envio"]: v for a, v in telemetria_em_memoria.pontos("saudeja_sms_total")}
-    assert envios == {"enviado": 2, job.STATUS_ENVIADO_SEM_PREDICAO: 1}
+    # Os status que não ocorreram existem valendo 0 (`_iniciar_series_do_job`).
+    assert envios == {
+        "enviado": 2,
+        job.STATUS_ENVIADO_SEM_PREDICAO: 1,
+        "nao_enviado": 0,
+        "falha_envio": 0,
+    }
+
+
+def test_fila_vazia_deixa_as_series_do_job_valendo_zero(
+    repositorio, telemetria_em_memoria, monkeypatch
+):
+    """Dia sem agendamento: sem as séries em 0, os painéis de job, mensageria
+    e custo mostram "No data" em vez de 0, e o `increase()` dos alertas perde
+    o primeiro incremento da série."""
+    monkeypatch.setitem(job.inference.PARAMS, "custo", {"sms_unitario_usd": 0.05})
+    monkeypatch.setenv("MESSAGING_PROVIDER", "infobip")
+    repositorio([])
+    resultado = job.processar_dia()
+
+    assert resultado["agendamentos_encontrados"] == 0
+    agendamentos = {
+        (a["resultado"], a["braco"]): v
+        for a, v in telemetria_em_memoria.pontos("saudeja_job_d2_agendamentos_total")
+    }
+    assert agendamentos == {
+        ("predito", "campeao"): 0,
+        ("fora_do_dominio", "campeao"): 0,
+        ("quarentena", "campeao"): 0,
+    }
+    envios = {a["status_envio"]: v for a, v in telemetria_em_memoria.pontos("saudeja_sms_total")}
+    assert envios == dict.fromkeys(
+        ["enviado", job.STATUS_ENVIADO_SEM_PREDICAO, "nao_enviado", "falha_envio"], 0
+    )
+    custo = {
+        a["status_envio"]: v
+        for a, v in telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total")
+    }
+    assert custo == {"enviado": 0, job.STATUS_ENVIADO_SEM_PREDICAO: 0}
+
+
+def test_fila_vazia_com_stub_nao_cria_serie_de_custo(repositorio, telemetria_em_memoria):
+    """O stub não custa: um 0 de custo ali sugeriria SMS de verdade sem gasto."""
+    repositorio([])
+    job.processar_dia()
+    assert telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total") == []
+    assert telemetria_em_memoria.pontos("saudeja_sms_total")
 
 
 # --- custo da mensageria -------------------------------------------------------
@@ -515,12 +561,16 @@ def test_lembrete_nao_enviado_e_canal_sem_custo_nao_somam_custo(
     falso = repositorio([_agendamento("a01")], threshold=1.01)
     job.processar_dia(cliente_mensageria=_Sms())
     assert falso.segmentos == [None]
+    # Com SMS de verdade e preço, as séries de custo existem, mas valendo 0.
+    assert {v for _, v in telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total")} == {0}
 
     # O stub (aqui, o espião) grava os segmentos, mas não custa.
     falso = repositorio([_agendamento("a02")], threshold=0.0)
     job.processar_dia(cliente_mensageria=_Espiao())
     assert falso.segmentos == [segmentos_sms(job._mensagem_de_lembrete(_agendamento("a02")))]
-    assert telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total") == []
+    # O leitor em memória é cumulativo: as séries em 0 da primeira execução
+    # continuam lá, e nenhuma ganhou valor com o espião.
+    assert {v for _, v in telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total")} == {0}
 
 
 def test_sem_preco_o_lembrete_sai_e_o_custo_nao_e_medido(

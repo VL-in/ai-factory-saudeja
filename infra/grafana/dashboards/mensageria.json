@@ -52,7 +52,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "0"
         },
         "overrides": [
           {
@@ -111,7 +112,8 @@
             "stacking": {
               "mode": "normal"
             }
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -153,7 +155,8 @@
             "stacking": {
               "mode": "normal"
             }
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -190,7 +193,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "noValue": "Nenhuma chamada à Infobip no período"
         },
         "overrides": []
       },
