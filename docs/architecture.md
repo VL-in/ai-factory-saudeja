@@ -48,6 +48,7 @@ ai-factory-saudeja/
 │   ├── montar_staging_space.py        # lista fechada do que sobe para o Space (CI e deploy)
 │   ├── pedido_titular_treino.py       # registra pedido do titular recebido direto pelo encarregado (base de treino)
 │   ├── purgar_dvc_local.py            # purga das cópias locais do DVC (LGPD.md §5.1)
+│   ├── simular_dados.py               # estudo de simulação do ADR-014: curva de aprendizado, sinal conhecido e mistura semente + real (exploratório, fora do dvc.yaml)
 │   ├── smoke_deploy.py                # smoke da imagem local e do Space publicado
 │   └── versao_release.py              # versão SemVer a partir do CHANGELOG (conferir, subir-patch, notas da Release)
 ├── supabase/

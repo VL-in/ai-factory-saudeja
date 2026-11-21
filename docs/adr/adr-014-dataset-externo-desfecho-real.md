@@ -125,6 +125,32 @@ Três estudos:
 - recuperação de um sinal conhecido, para provar que o pipeline não perde sinal;
 - mistura da semente com dado real em pesos diferentes, para testar os limiares da regra de peso da semente.
 
+**Resultado (2026-11-21, `scripts/simular_dados.py`, 10 sorteios por ponto, sempre avaliado no teste reservado de 10.000 consultas):**
+
+*Curva de aprendizado, features reais.* `roc_auc` médio [faixa de 95% dos sorteios]:
+
+| Linhas de treino | Logística | LightGBM |
+|---|---|---|
+| 100 | 0,522 [0,463; 0,570] | 0,528 [0,467; 0,576] |
+| 200 | 0,544 | 0,538 |
+| 400 | 0,557 | 0,544 |
+| **900** (~90 dias de uma clínica) | **0,566** [0,550; 0,574] | **0,553** [0,547; 0,561] |
+| 1.500 | 0,569 | 0,564 |
+| **3.600** (~12 meses) | **0,572** [0,568; 0,576] | **0,578** [0,574; 0,583] |
+| 6.000 | 0,572 | 0,583 |
+| pool inteiro (60.985) | 0,574 | 0,599 |
+
+- Nenhum tamanho de treino passa de 0,60 em nenhum sorteio. A logística satura perto de 900 linhas; o LightGBM ainda sobe, mas devagar.
+- **De 90 dias para 12 meses**, o ganho é de +0,006 (logística) a +0,025 (LightGBM) em `roc_auc`, e de 1,18 para 1,17-1,23 em lift. Com estas features, guardar 12 meses em vez de 90 dias **não** muda a classe de desempenho do modelo. É o número que faltava para a decisão de LGPD da janela de treino: o argumento técnico para ampliar a janela é fraco enquanto as features forem estas.
+
+*Recuperação de sinal conhecido.* O rótulo foi sorteado de uma logística com AUC verdadeira conhecida, sobre linhas reais do pool (inclusive especialidade e dia da semana, para exercitar o encoding). O pipeline recupera 93% a 99% da AUC do oráculo com a logística e 84% a 96% com o LightGBM, crescendo com o volume. **O pipeline não perde sinal** (não há erro de encoding nem de contrato). E dá a curva de poder: com AUC verdadeira de 0,65, a logística passa de 0,60 em 100% dos sorteios a partir de 900 linhas, e o LightGBM só a partir de 3.600. Com AUC verdadeira de 0,60, nenhum modelo passa do piso. O problema medido na Fase 4 é o sinal do dado, não o pipeline. (O modelo verdadeiro é linear, o que favorece a logística nesta comparação.)
+
+*Mistura semente + real.* Treino com a semente (peso 1, 0,3 ou 0) mais n linhas reais, com todas as features do pipeline:
+
+- A semente sozinha, avaliada no dado real, fica em 0,519 (logística) e 0,508 (LightGBM): o que ela ensina **não se transfere** para o dado real.
+- Em todos os tamanhos (100 a 1.500 linhas reais), as faixas dos três pesos se sobrepõem. A maior diferença é de +0,013 a favor de manter a semente com 200 linhas reais na logística, dentro da variação entre sorteios. **Não há evidência de que a semente atrapalhe**, nem de que ajude.
+- **Os limiares da regra de peso da semente (200, 600 e 0,3) ficam como estão.** O dado não pede limiares menores, e retirar a semente a partir de 600 linhas reais não custa nada mensurável. Limitação: no teste reservado, as features imputadas são ruído, então um padrão fabricado de horário que a semente ensine não tem como aparecer como prejuízo aqui.
+
 ## Consequências
 
 Positivas:
@@ -164,3 +190,4 @@ Negativas e riscos aceitos:
 - 2026-11-21: aberto como Proposto, com a auditoria do bruto e o contrato do dataset externo já implementado.
 - 2026-11-21: bloco `dados.externa` no `params.yaml` (desligado, 1.500 linhas, `random_state` 42) e pré-registro completo do teste de sinal (conjunto, modelo, features, validação, permutação e regra de robustez), antes de qualquer rodada.
 - 2026-11-21: resultado do teste de sinal (Passo 5): não passa. Sinal real e significativo, mas fraco; o teto no pool inteiro fica em `roc_auc` 0,58-0,60, e a prioridade passa a ser features novas, não só volume.
+- 2026-11-21: resultado da simulação (Passo 6): curva de aprendizado satura abaixo de 0,60, de 90 dias para 12 meses o ganho é de 0,006 a 0,025; o pipeline recupera 93-99% de um sinal conhecido; a semente não atrapalha nem ajuda, e os limiares 200/600/0,3 ficam.
