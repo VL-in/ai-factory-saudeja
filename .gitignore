@@ -50,3 +50,11 @@ docs/playbook/
 guia
 docs/Planos/
 docs/controle/
+
+
+# Stratification
+subgrupos.csv
+
+# Dataset externo (Kaggle noshowappointments, CC BY-NC-SA 4.0): bruto e
+# derivados ficam fora do git -- versionados por DVC (plano do dataset externo)
+data/externo/raw/

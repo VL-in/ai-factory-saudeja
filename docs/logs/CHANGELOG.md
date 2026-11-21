@@ -16,6 +16,9 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 ### Modificado
 - **[ADR-003](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-003-SMOTE-NC.md) emendado.** Refeita em validação cruzada repetida, a comparação de 2026-09-08 não se sustenta: o SMOTE-NC não supera o `class_weight`, as três condições ordenam os pacientes igualmente mal, e nenhuma tem Brier melhor que o modelo que responde sempre a taxa base. O SMOTE-NC continua em produção até um desafiante o substituir pelo fluxo normal, e as comparações entre configurações passam a usar o `scripts/avaliar_cv.py`.
 
+### Removido
+- **`subgrupos.csv` sai do repositório.** Era uma tabela exploratória de taxa de falta por faixa de feature, entrou por engano junto com a avaliação em validação cruzada, e nada a lê. Ela e o bruto do dataset externo (`data/externo/raw/`) passam a ser ignorados pelo git.
+
 ## [v3.2.0] (Vanessa + Claude) - 2026-11-08
 
 ### Modificado
