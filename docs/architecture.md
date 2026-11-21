@@ -37,6 +37,7 @@ ai-factory-saudeja/
 │   └── grafana/                        # alertas/*.yaml (17 regras P1-P3), notificacoes.yaml (rotas por criticidade), dashboards/*.json (6 painéis)
 ├── scripts/
 │   ├── auditoria_lgpd.py              # varredura de PII em log (ferramenta local)
+│   ├── avaliar_cv.py                  # compara configurações do modelo em CV repetida 5x5 com IC 95% (exploratório, fora do dvc.yaml)
 │   ├── criar_funcionario.py           # cria a conta de funcionário no Supabase Auth (cadastro aberto desligado)
 │   ├── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 │   ├── grafana_provisionar.py         # aplica/confere/remove alertas, rotas e painéis do Grafana (grafana.yml)
