@@ -40,7 +40,7 @@ ai-factory-saudeja/
 │   ├── auditar_noshow_externo.py      # auditoria do bruto do dataset externo (ADR-014): só agregados, filtros na ordem do manifesto
 │   ├── adaptar_noshow_externo.py      # bruto do Kaggle -> pool no formato do export (origem `externa`): histórico point-in-time, imputação da semente, contrato, teste reservado por paciente e amostra de treino (ADR-014)
 │   ├── auditoria_lgpd.py              # varredura de PII em log (ferramenta local)
-│   ├── avaliar_cv.py                  # compara configurações do modelo em CV repetida 5x5 com IC 95% (exploratório, fora do dvc.yaml)
+│   ├── avaliar_cv.py                  # compara configurações do modelo em CV repetida 5x5 com IC 95% (exploratório, fora do dvc.yaml; CV por paciente, permutação e AUC univariada para o teste de sinal do ADR-014)
 │   ├── criar_funcionario.py           # cria a conta de funcionário no Supabase Auth (cadastro aberto desligado)
 │   ├── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 │   ├── grafana_provisionar.py         # aplica/confere/remove alertas, rotas e painéis do Grafana (grafana.yml)

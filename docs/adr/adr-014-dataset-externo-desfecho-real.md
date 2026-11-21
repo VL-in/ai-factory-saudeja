@@ -99,6 +99,25 @@ Como os critérios são medidos, fixado junto com eles (2026-11-21, antes de qua
 
 O resultado entra neste ADR, passe ou não.
 
+**Resultado (2026-11-21): não passa.** Pela regra pré-registrada, nenhuma das três amostras de 1.500 passou nos três critérios:
+
+| Amostra (logística, features reais, CV por paciente 5×5) | `roc_auc` [IC 95%] | lift@30% [IC 95%] | permutação (200) |
+|---|---|---|---|
+| oficial (`consultas-externas.csv`) | 0,570 [0,536; 0,604] | 1,22 [1,09; 1,35] | p = 0,010 (não < 0,01) |
+| semente de amostra 1 | 0,614 [0,576; 0,652] | 1,34 [1,18; 1,51] | p = 0,005 |
+| semente de amostra 2 | 0,575 [0,543; 0,606] | 1,17 [1,05; 1,29] | p = 0,005 |
+
+Leitura:
+
+- **Existe sinal, e ele não é sorte**: as três AUCs ficam acima de 99% das permutações. Mas ele é **fraco demais** para o critério: nenhum limite inferior passa de 0,60 em `roc_auc` nem de 1,3 em lift.
+- **O volume não é o gargalo.** No pool de simulação inteiro (60.985 linhas, sem nenhum paciente do reservado), o teto fica em `roc_auc` 0,580 [0,575; 0,585] com a logística e 0,595 [0,589; 0,601] com o LightGBM (lift 1,31 [1,28; 1,33]). Nem com 40 vezes mais linhas as cinco features reais chegam ao piso de 0,60.
+- **A variação entre amostras é grande** (0,570 a 0,614 só trocando a semente do sorteio), o que confirma o risco R11. Na amostra oficial, as mulheres faltam 30% e os homens 25%; no pool, a diferença não existe.
+- **Sensibilidade:** na amostra oficial, o LightGBM com `class_weight` fica abaixo da logística (0,529 [0,496; 0,563]). Com 1.500 linhas, o modelo simples ganha.
+- **AUC univariada no pool** (0,5 é sorteio): idade 0,433 (ordena ao contrário: idosos faltam menos), antecedência 0,558, dia da semana 0,516, sexo 0,503, `historico_noshow` 0,503 (truncado, R5).
+- **Comparação com a semente** (mesma configuração, sem grupo, porque o id da semente não é uma pessoa): `roc_auc` 0,617 [0,545; 0,689]. Parece mais alto, mas o intervalo é quatro vezes mais largo, e a AUC univariada do dia da semana na semente (0,599) vem do padrão "sexta 17h" injetado, que no dado real não existe (a sexta falta 29,5% contra 28,4% nos outros dias).
+
+Consequência, como previsto na leitura do plano: **a prioridade passa a ser coletar features novas** (por paciente, item 5.5 da melhoria do modelo, e outras que o produto ainda não pede), e não só acumular linhas. Mais linhas do mesmo tipo levam o modelo de ~0,57 para ~0,58-0,60, não além disso.
+
 Passo 6 — Simulação
 Três estudos:
 
@@ -144,3 +163,4 @@ Negativas e riscos aceitos:
 ## Changelog
 - 2026-11-21: aberto como Proposto, com a auditoria do bruto e o contrato do dataset externo já implementado.
 - 2026-11-21: bloco `dados.externa` no `params.yaml` (desligado, 1.500 linhas, `random_state` 42) e pré-registro completo do teste de sinal (conjunto, modelo, features, validação, permutação e regra de robustez), antes de qualquer rodada.
+- 2026-11-21: resultado do teste de sinal (Passo 5): não passa. Sinal real e significativo, mas fraco; o teto no pool inteiro fica em `roc_auc` 0,58-0,60, e a prioridade passa a ser features novas, não só volume.

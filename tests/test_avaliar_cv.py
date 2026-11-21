@@ -208,3 +208,146 @@ def test_main_sem_mlflow_nao_abre_run(df_consultas_smote, tmp_path, monkeypatch)
         ["--dados", str(csv), "--n-splits", "3", "--n-repeats", "1", "--sem-mlflow"]
     )
     assert "roc_auc" in resultado["resumo"]
+
+
+# --------------------------------------------------------------------------
+# Extensões do teste de sinal do dataset externo (ADR-014)
+# --------------------------------------------------------------------------
+@pytest.fixture
+def X_y_grupos():
+    """120 linhas de 30 pacientes (4 consultas cada), sinal forte em
+    `historico_noshow`."""
+    rng = np.random.default_rng(0)
+    n = 120
+    grupos = np.repeat([f"P{i}" for i in range(30)], 4)
+    y = pd.Series(rng.integers(0, 2, n))
+    X = pd.DataFrame(
+        {
+            "idade": rng.integers(18, 80, n),
+            "sexo": rng.integers(0, 2, n),
+            "historico_noshow": y * 3 + rng.integers(0, 2, n),
+            "dia_de_semana": rng.integers(0, 6, n),
+        }
+    )
+    return X, y, grupos
+
+
+def test_cv_por_grupo_nunca_poe_o_mesmo_paciente_nos_dois_lados(X_y_grupos):
+    X, y, grupos = X_y_grupos
+    folds = list(avaliar_cv.divisoes(X, y, grupos, n_splits=5, n_repeats=3, random_state=1))
+    assert len(folds) == 15
+    vistos = np.zeros(len(X), dtype=int)
+    for idx_treino, idx_validacao in folds:
+        assert not set(grupos[idx_treino]) & set(grupos[idx_validacao])
+        vistos[idx_validacao] += 1
+    assert (vistos == 3).all()  # cada linha valida uma vez por repetição
+
+
+def test_cv_por_grupo_muda_os_folds_entre_repeticoes(X_y_grupos):
+    X, y, grupos = X_y_grupos
+    folds = list(avaliar_cv.divisoes(X, y, grupos, n_splits=5, n_repeats=2, random_state=1))
+    primeira = {tuple(sorted(v)) for _, v in folds[:5]}
+    segunda = {tuple(sorted(v)) for _, v in folds[5:]}
+    assert primeira != segunda
+
+
+def test_avaliar_com_grupos_e_subconjunto_de_features(X_y_grupos):
+    X, y, grupos = X_y_grupos
+    X_sub = avaliar_cv.selecionar_features(X, ["idade", "historico_noshow"])
+    assert list(X_sub.columns) == ["idade", "historico_noshow"]
+    resultado = avaliar_cv.avaliar(
+        X_sub, y, "logistica", "class_weight", n_splits=3, n_repeats=2, grupos=grupos
+    )
+    assert resultado["resumo"]["roc_auc"]["media"] > 0.8
+
+
+def test_selecionar_features_recusa_feature_que_o_pipeline_nao_tem(X_y_grupos):
+    with pytest.raises(ValueError, match="fora do pipeline"):
+        avaliar_cv.selecionar_features(X_y_grupos[0], ["distancia_km"])
+
+
+def test_permutacao_acusa_sinal_real_com_o_menor_p_possivel(X_y_grupos):
+    X, y, grupos = X_y_grupos
+    perm = avaliar_cv.teste_de_permutacao(X, y, 19, grupos=grupos, n_splits=3)
+    assert perm["p_valor"] == pytest.approx(1 / 20)
+    assert perm["roc_auc_real"] > perm["nula_p99"]
+
+
+def test_permutacao_sem_sinal_nao_acusa(X_y_grupos):
+    X, _, grupos = X_y_grupos
+    y_ruido = pd.Series(np.random.default_rng(5).integers(0, 2, len(X)))
+    perm = avaliar_cv.teste_de_permutacao(
+        X[["idade", "sexo"]], y_ruido, 19, grupos=grupos, n_splits=3
+    )
+    assert perm["p_valor"] > 0.05
+
+
+def test_auc_univariada_com_ic_que_contem_o_ponto(X_y_grupos):
+    X, y, _ = X_y_grupos
+    uni = avaliar_cv.auc_univariada(X, y, n_bootstrap=200)
+    assert uni["historico_noshow"]["auc"] > 0.95
+    for r in uni.values():
+        assert r["ic95_inf"] <= r["auc"] <= r["ic95_sup"]
+    # categórica: taxa por categoria, nunca abaixo de 0,5
+    assert uni["dia_de_semana"]["auc"] >= 0.5
+
+
+def test_preparar_dados_exclui_pacientes_e_amostra_estratificado(tmp_path):
+    df = pd.DataFrame(
+        {
+            "id_paciente": [f"K{i % 50:016x}" for i in range(400)],
+            "no_show": [1 if i % 4 == 0 else 0 for i in range(400)],
+        }
+    )
+    reservado = tmp_path / "reservado.csv"
+    df[df["id_paciente"].isin({"K0000000000000000", "K0000000000000001"})].to_csv(reservado)
+    recorte = avaliar_cv.preparar_dados(df, reservado, amostra=100, semente_amostra=1)
+    assert len(recorte) == 100
+    assert recorte["no_show"].sum() == 25
+    assert not {"K0000000000000000", "K0000000000000001"} & set(recorte["id_paciente"])
+
+
+def test_main_com_dado_externo_marca_a_run_com_dados_externos(
+    df_consultas_smote, tmp_path, monkeypatch, logging_da_raiz_preservado
+):
+    import mlflow
+
+    csv = tmp_path / "externas.csv"
+    df_consultas_smote.assign(origem="externa").to_csv(csv, index=False)
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow-ext.db'}"
+    monkeypatch.setattr(avaliar_cv, "MLFLOW_TRACKING_URI", tracking_uri)
+    monkeypatch.setattr(avaliar_cv, "MLFLOW_EXPERIMENT_NAME", "teste-externo")
+
+    avaliar_cv.main(
+        [
+            "--dados",
+            str(csv),
+            "--n-splits",
+            "3",
+            "--n-repeats",
+            "1",
+            "--modelo",
+            "logistica",
+            "--balanceamento",
+            "class_weight",
+            "--grupo",
+            "id_paciente",
+            "--features",
+            "idade",
+            "sexo",
+            "historico_noshow",
+        ]
+    )
+
+    mlflow.set_tracking_uri(tracking_uri)
+    experimento = mlflow.get_experiment_by_name("teste-externo")
+    run = mlflow.search_runs(experiment_ids=[experimento.experiment_id]).iloc[0]
+    assert run["tags.dados_externos"] == "true"
+    assert run["params.cv_grupo"] == "id_paciente"
+    assert run["params.features"] == "idade,sexo,historico_noshow"
+
+
+def test_tem_dado_externo_so_com_a_origem_externa():
+    assert not avaliar_cv.tem_dado_externo(pd.DataFrame({"x": [1]}))
+    assert not avaliar_cv.tem_dado_externo(pd.DataFrame({"origem": ["semente"]}))
+    assert avaliar_cv.tem_dado_externo(pd.DataFrame({"origem": ["semente", "externa"]}))
