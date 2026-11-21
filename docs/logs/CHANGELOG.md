@@ -22,6 +22,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
   - os critérios do teste de sinal fixados antes de rodar: limite inferior do intervalo do `roc_auc` acima de 0,60, do lift com 30% da fila acima de 1,3 e permutação com p < 0,01, medidos na amostra de 1.500 linhas, com regressão logística, só as features reais e validação por paciente.
 
   O `params.yaml` ganha o bloco `dados.externa` (`habilitada: false`, `n_amostra: 1500`, `random_state: 42`), sem efeito no treino enquanto estiver desligado.
+- **Auditoria do bruto do dataset externo** (`scripts/auditar_noshow_externo.py`). Confere o schema e os domínios do arquivo do Kaggle e imprime só agregados, nunca uma linha: linhas, pacientes, faixa de datas, quantas consultas cada filtro de população remove (na mesma ordem e com a mesma função do manifesto da adaptação), taxa de falta e de SMS por faixa de antecedência e pacientes com mais de uma consulta no mesmo dia. O bruto passa a ser versionado no DVC (`data/externo/raw.dvc`), e a atribuição e a licença ficam em `data/externo/LICENCA-E-ORIGEM.md`.
 
   Registra também os riscos aceitos: domínio diferente, features sorteadas como ruído, histórico truncado e SMS confundido com a antecedência. Nada muda no modelo em produção.
 

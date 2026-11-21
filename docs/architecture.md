@@ -14,6 +14,7 @@ ai-factory-saudeja/
 │   ├── champion_metrics.json          # métricas do modelo em produção (versionado em git)
 │   ├── canario.json / canario/        # canário em observação, só enquanto ativo (ADR-008)
 │   ├── canario_historico.json         # canários encerrados: promovidos e revertidos
+│   ├── externo/                       # dataset externo de desfecho real (Kaggle, CC BY-NC-SA 4.0, ADR-014): raw/ via DVC (raw.dvc) e LICENCA-E-ORIGEM.md no git
 │   ├── AVISO-DADOS-SINTETICOS.md
 │   └── AVISO-MODELO.md
 ├── docs/
@@ -36,6 +37,7 @@ ai-factory-saudeja/
 │   ├── deploy/                         # dockerfile + entrypoint.sh combinados NiceGUI+FastAPI (imagem do HF Space)
 │   └── grafana/                        # alertas/*.yaml (17 regras P1-P3), notificacoes.yaml (rotas por criticidade), dashboards/*.json (6 painéis)
 ├── scripts/
+│   ├── auditar_noshow_externo.py      # auditoria do bruto do dataset externo (ADR-014): só agregados, filtros na ordem do manifesto
 │   ├── auditoria_lgpd.py              # varredura de PII em log (ferramenta local)
 │   ├── avaliar_cv.py                  # compara configurações do modelo em CV repetida 5x5 com IC 95% (exploratório, fora do dvc.yaml)
 │   ├── criar_funcionario.py           # cria a conta de funcionário no Supabase Auth (cadastro aberto desligado)

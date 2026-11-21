@@ -224,6 +224,27 @@ def test_mascara_da_populacao_segue_o_dominio_do_contrato(dias, idade, entra):
     assert cde.mascara_populacao(bruto).tolist() == [entra]
 
 
+def test_remocoes_por_filtro_somam_o_que_a_mascara_deixa_de_fora(cenario):
+    bruto = cenario["bruto"]
+    remocoes = cde.remocoes_por_filtro(bruto)
+    assert sum(remocoes.values()) == int((~cde.mascara_populacao(bruto)).sum())
+    assert remocoes["mesmo_dia"] > 0 and remocoes["antecedencia_acima_de_90"] > 0
+
+
+def test_remocoes_por_filtro_contam_cada_linha_uma_vez_so():
+    # mesmo dia E idade invalida: conta so no primeiro filtro (mesmo_dia)
+    bruto = pd.DataFrame(
+        {
+            "ScheduledDay": ["2016-05-20T10:00:00Z"],
+            "AppointmentDay": ["2016-05-20T00:00:00Z"],
+            "Age": [-1],
+        }
+    )
+    remocoes = cde.remocoes_por_filtro(bruto)
+    assert remocoes["mesmo_dia"] == 1
+    assert remocoes["idade_invalida"] == 0
+
+
 # --------------------------------------------------------------------------
 # bruto
 # --------------------------------------------------------------------------

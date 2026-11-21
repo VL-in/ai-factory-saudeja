@@ -160,6 +160,31 @@ def mascara_populacao(bruto: pd.DataFrame) -> pd.Series:
     ) & idade.between(FAIXA_IDADE_POPULACAO.minimo, FAIXA_IDADE_POPULACAO.maximo)
 
 
+def remocoes_por_filtro(bruto: pd.DataFrame) -> dict[str, int]:
+    """Quantas linhas do bruto cada filtro de população remove, em ORDEM:
+    cada linha conta só no primeiro filtro que a pega, então a soma é
+    exatamente o que `mascara_populacao` deixa de fora. A auditoria e o
+    manifesto da adaptação usam esta mesma função -- os números batem por
+    construção, não por coincidência."""
+    dias = antecedencia_em_dias(bruto)
+    idade = bruto["Age"]
+    ant, faixa_idade = FAIXA_ANTECEDENCIA_POPULACAO, FAIXA_IDADE_POPULACAO
+    filtros = (
+        ("antecedencia_negativa", dias < 0),
+        ("mesmo_dia", dias == 0),
+        (f"antecedencia_acima_de_{ant.maximo}", dias > ant.maximo),
+        ("idade_invalida", idade < faixa_idade.minimo),
+        (f"idade_acima_de_{faixa_idade.maximo}", idade > faixa_idade.maximo),
+    )
+    restante = pd.Series(True, index=bruto.index)
+    contagens = {}
+    for nome, mascara in filtros:
+        removidas = restante & mascara
+        contagens[nome] = int(removidas.sum())
+        restante &= ~removidas
+    return contagens
+
+
 def sha256_do_arquivo(caminho: Path) -> str:
     h = hashlib.sha256()
     with open(caminho, "rb") as arquivo:
