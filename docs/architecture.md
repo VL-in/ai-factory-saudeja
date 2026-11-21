@@ -66,6 +66,7 @@ ai-factory-saudeja/
 │   ├── lgpd_purga.py                  # workflow de purga LGPD: pedidos do titular e retenção do DVC e da base de treino
 │   ├── export_treino.py               # base de treino (schema treino) -> consultas-treino.csv
 │   ├── contrato_features.py           # contrato de features: regra de negócio x domínio do treino
+│   ├── contrato_dataset_externo.py    # schema e regras do dataset externo de desfecho real (data/externo/, origem `externa`)
 │   ├── validate_data.py               # gate de dados do re-treino (stage 0)
 │   ├── retrain_gate.py                # gate de promoção do re-treino mensal (regressão relativa, piso e sanidade)
 │   ├── sanidade_modelo.py             # suíte de sanidade e casos limítrofes do modelo
