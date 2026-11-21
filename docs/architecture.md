@@ -22,6 +22,7 @@ ai-factory-saudeja/
 │   ├── LGPD/                          # LGPD.md (base legal, retenção, direitos, riscos), política de privacidade, termos de uso e procedimentos de revisão e eliminação
 │   ├── SLA.md
 │   ├── SLO.md
+│   ├── analises/                      # análises exploratórias (eda-dataset-externo.md e gráficos em img/)
 │   ├── adr/                           # Architecture Decision Records (ADR-001 a ADR-012)
 │   ├── diagrams/
 │   │   ├── SaudeJa-C1.drawio.png      # diagrama C4 nível 1 (contexto), seção 2; PNG com o XML do draw.io embutido
@@ -42,6 +43,7 @@ ai-factory-saudeja/
 │   ├── auditoria_lgpd.py              # varredura de PII em log (ferramenta local)
 │   ├── avaliar_cv.py                  # compara configurações do modelo em CV repetida 5x5 com IC 95% (exploratório, fora do dvc.yaml; CV por paciente, permutação e AUC univariada para o teste de sinal do ADR-014)
 │   ├── criar_funcionario.py           # cria a conta de funcionário no Supabase Auth (cadastro aberto desligado)
+│   ├── eda_dataset_externo.py         # análise exploratória: dataset externo x semente herdada (só agregados; relatório em docs/analises/)
 │   ├── gerar_timestamp_sintetico.py   # geração de timestamp sintético (exploratório)
 │   ├── grafana_provisionar.py         # aplica/confere/remove alertas, rotas e painéis do Grafana (grafana.yml)
 │   ├── migrar_id_paciente.py          # migração única do id_paciente_externo para HMAC (ADR-011), dry-run por padrão
