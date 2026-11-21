@@ -71,6 +71,19 @@ dados:
   # PSI por feature (producao x semente) acima disto vira ALERTA no resumo do
   # re-treino, sem bloquear. 0.2 e' o corte usual de "mudanca relevante".
   psi_alerta: 0.2
+  # Dataset externo de desfecho real (ADR-014): Kaggle noshowappointments,
+  # CC BY-NC-SA 4.0, origem `externa`, arquivos em data/externo/ (DVC).
+  # DESLIGADO ate' a emenda do ADR-014 que libera o uso no treino oficial:
+  # com `habilitada: false`, nenhuma linha externa entra em
+  # data/consultas-treino.csv (tests/test_dataset_externo_dados.py trava).
+  # n_amostra: linhas da amostra de treino (consultas-externas.csv) -- passa
+  # dos limiares de 200 e 600 linhas reais da regra de peso da semente e da'
+  # ~85 positivos no fold de teste. random_state: sorteio das features
+  # imputadas, do teste reservado e da amostra (gravado no manifesto).
+  externa:
+    habilitada: false
+    n_amostra: 1500
+    random_state: 42
 
 # Canario do modelo (ADR-008, src/canario.py). O desafiante que
 # passa no gate nao substitui o campeao de uma vez: decide `fracao` da fila do

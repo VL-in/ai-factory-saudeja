@@ -18,7 +18,10 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
   - amostra de treino de 1.500 linhas e teste reservado separado por paciente;
   - `dados.externa.habilitada` desligado até uma emenda;
   - tag `dados_externos` no MLflow;
-  - a tabela de quais origens contam em cada regra do pipeline.
+  - a tabela de quais origens contam em cada regra do pipeline;
+  - os critérios do teste de sinal fixados antes de rodar: limite inferior do intervalo do `roc_auc` acima de 0,60, do lift com 30% da fila acima de 1,3 e permutação com p < 0,01, medidos na amostra de 1.500 linhas, com regressão logística, só as features reais e validação por paciente.
+
+  O `params.yaml` ganha o bloco `dados.externa` (`habilitada: false`, `n_amostra: 1500`, `random_state: 42`), sem efeito no treino enquanto estiver desligado.
 
   Registra também os riscos aceitos: domínio diferente, features sorteadas como ruído, histórico truncado e SMS confundido com a antecedência. Nada muda no modelo em produção.
 

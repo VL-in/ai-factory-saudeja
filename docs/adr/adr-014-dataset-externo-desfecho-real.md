@@ -88,6 +88,15 @@ Passo 5 — Sinal
 - limite inferior do lift com 30% da fila acima de 1,3;
 - permutação com p < 0,01.
 
+Como os critérios são medidos, fixado junto com eles (2026-11-21, antes de qualquer rodada):
+
+- **Conjunto:** a amostra de treino (`consultas-externas.csv`, 1.500 linhas), que é o volume do produto. O pool inteiro dá o teto do sinal e é reportado, mas não decide.
+- **Modelo:** regressão logística regularizada (`C` 0,3) com `class_weight="balanced"`, a configuração simples que o diagnóstico do modelo indicou para poucas linhas. O LightGBM com `class_weight` é reportado como análise de sensibilidade, sem decidir.
+- **Features:** só as reais (`idade`, `sexo`, `dias_entre_agendamento_consulta`, `historico_noshow`, `dia_de_semana`). As sorteadas ficam de fora.
+- **Validação:** `StratifiedGroupKFold` por `id_paciente`, 5 folds × 5 repetições, intervalo com a correção de Nadeau-Bengio.
+- **Permutação:** 200 embaralhamentos de `no_show`, cada um em 5 folds × 1 repetição, comparando a média de `roc_auc`. O p-valor é (1 + nº de permutações com AUC ≥ a real) / 201.
+- **Robustez:** mais duas amostras de 1.500 com sementes diferentes. O resultado é "passa" se as três passarem nos três critérios, "não passa" se nenhuma passar, e "inconclusivo" nos outros casos.
+
 O resultado entra neste ADR, passe ou não.
 
 Passo 6 — Simulação
@@ -134,3 +143,4 @@ Negativas e riscos aceitos:
 
 ## Changelog
 - 2026-11-21: aberto como Proposto, com a auditoria do bruto e o contrato do dataset externo já implementado.
+- 2026-11-21: bloco `dados.externa` no `params.yaml` (desligado, 1.500 linhas, `random_state` 42) e pré-registro completo do teste de sinal (conjunto, modelo, features, validação, permutação e regra de robustez), antes de qualquer rodada.
