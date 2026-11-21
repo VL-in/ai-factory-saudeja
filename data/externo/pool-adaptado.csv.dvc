@@ -1,0 +1,5 @@
+outs:
+- md5: 6adf6cc5e5b259368b8277eded855d56
+  size: 8696739
+  hash: md5
+  path: pool-adaptado.csv

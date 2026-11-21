@@ -1,0 +1,5 @@
+outs:
+- md5: c6b5221c84df59d84682cb60cbe1ce74
+  size: 814
+  hash: md5
+  path: manifesto.json

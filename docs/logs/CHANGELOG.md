@@ -23,6 +23,14 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
   O `params.yaml` ganha o bloco `dados.externa` (`habilitada: false`, `n_amostra: 1500`, `random_state: 42`), sem efeito no treino enquanto estiver desligado.
 - **Auditoria do bruto do dataset externo** (`scripts/auditar_noshow_externo.py`). Confere o schema e os domínios do arquivo do Kaggle e imprime só agregados, nunca uma linha: linhas, pacientes, faixa de datas, quantas consultas cada filtro de população remove (na mesma ordem e com a mesma função do manifesto da adaptação), taxa de falta e de SMS por faixa de antecedência e pacientes com mais de uma consulta no mesmo dia. O bruto passa a ser versionado no DVC (`data/externo/raw.dvc`), e a atribuição e a licença ficam em `data/externo/LICENCA-E-ORIGEM.md`.
+- **Adaptação do dataset externo para o formato do export de treino** (`scripts/adaptar_noshow_externo.py`). Gera `data/externo/pool-adaptado.csv` (70.985 consultas, 45.209 pacientes, 28,6% de falta) e `data/externo/manifesto.json`, os dois no DVC:
+  - só a população que o job D-2 prediz (antecedência de 1 a 90 dias, idade de 0 a 85);
+  - `historico_noshow` *point-in-time*: só conta a falta de uma consulta anterior à data do agendamento;
+  - paciente com pseudônimo de sal local (variável `EXTERNO_SAL_PSEUDONIMO`, documentada no `.env.example`), sem as colunas de saúde e sem o bairro;
+  - especialidade, distância e horário sorteados da semente, sem olhar o desfecho;
+  - a mesma quarentena do contrato de features do export.
+
+  Antes de gravar, o resultado passa pelas regras do contrato do dataset externo (schema, imputação independente do desfecho e fidelidade ao bruto); com qualquer violação, nada é gravado.
 
   Registra também os riscos aceitos: domínio diferente, features sorteadas como ruído, histórico truncado e SMS confundido com a antecedência. Nada muda no modelo em produção.
 
