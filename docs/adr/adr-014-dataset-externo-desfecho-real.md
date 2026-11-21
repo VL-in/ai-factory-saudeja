@@ -1,7 +1,7 @@
 # ADR-014: Dataset externo de desfecho real como terceira origem de dado
 
 ## Status
-Proposto - 2026-11-21. Passa a Aceito quando o pool adaptado, o teste reservado e a amostra de treino forem gerados e passarem nos testes de dados (`pytest -m dados_externos`), e o teste de sinal tiver resultado registrado aqui. O uso no treino oficial (`dados.externa.habilitada: true`) depende de emenda a este ADR.
+Aceito - 2026-11-21. Os critérios de aceite deste ADR foram cumpridos: o pool adaptado, o teste reservado e a amostra de treino foram gerados e passam nos testes de dados (`pytest -m dados_externos`), e o resultado do teste de sinal está registrado no Passo 5 (não passa). O uso no treino oficial (`dados.externa.habilitada: true`) continua dependendo de emenda a este ADR, e os resultados dos Passos 5 e 6 não o recomendam por ora (ver "Uso no treino oficial", em Consequências). A análise exploratória está em [`docs/analises/eda-dataset-externo.md`](../analises/eda-dataset-externo.md).
 
 As palavras-chave **DEVE**, **NÃO DEVE** e **PODE** seguem o sentido da [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119) (MUST, MUST NOT, MAY).
 
@@ -169,6 +169,7 @@ Negativas e riscos aceitos:
 - **A regra de split cronológico (mais de 60 dias de produção) não é testável com este dado.** As consultas cobrem cerca de 6 semanas, e reescrever as datas para esticar o período seria falsificar o dado. Essa regra é testada com fixture.
 - **Campeão e desafiante deixam de ser comparáveis** se um for medido com dado externo e o outro não. Antes do primeiro gate com `habilitada: true`, o campeão **DEVE** ser medido de novo no dataset novo.
 - **O pipeline ganha uma coluna de origem.** `export_treino.py` e `validate_data.py` passam a contar por origem, em vez de por "não está na semente".
+- **Uso no treino oficial: não recomendado por ora** (2026-11-21). Ligar `dados.externa.habilitada` trocaria o dataset do re-treino sem ganho medido: o sinal das features reais não passou no critério, e a mistura da semente com dado real não mudou o desempenho no teste reservado. Se a emenda vier, o campeão **DEVE** ser medido de novo no dataset novo antes do gate, os runs levam a tag `dados_externos=true`, e o `retrain.yml` precisa baixar `data/externo/consultas-externas.csv` antes do export.
 
 ## Alternativas consideradas
 
@@ -192,3 +193,4 @@ Negativas e riscos aceitos:
 - 2026-11-21: resultado do teste de sinal (Passo 5): não passa. Sinal real e significativo, mas fraco; o teto no pool inteiro fica em `roc_auc` 0,58-0,60, e a prioridade passa a ser features novas, não só volume.
 - 2026-11-21: resultado da simulação (Passo 6): curva de aprendizado satura abaixo de 0,60, de 90 dias para 12 meses o ganho é de 0,006 a 0,025; o pipeline recupera 93-99% de um sinal conhecido; a semente não atrapalha nem ajuda, e os limiares 200/600/0,3 ficam.
 - 2026-11-21: coluna `origem` no export e contagem por origem no `validate_data`, com as regras da tabela acima em `src/regras_dado_real.py` (só reportadas, não aplicadas no treino). O split cronológico é testado com dado fictício: as datas do Kaggle cobrem 6 semanas e não são reescritas.
+- 2026-11-21: status passa a Aceito (critérios de aceite cumpridos); uso no treino oficial não recomendado por ora; link para a análise exploratória.

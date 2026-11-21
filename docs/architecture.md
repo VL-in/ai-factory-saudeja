@@ -23,7 +23,7 @@ ai-factory-saudeja/
 │   ├── SLA.md
 │   ├── SLO.md
 │   ├── analises/                      # análises exploratórias (eda-dataset-externo.md e gráficos em img/)
-│   ├── adr/                           # Architecture Decision Records (ADR-001 a ADR-012)
+│   ├── adr/                           # Architecture Decision Records (ADR-001 a ADR-014)
 │   ├── diagrams/
 │   │   ├── SaudeJa-C1.drawio.png      # diagrama C4 nível 1 (contexto), seção 2; PNG com o XML do draw.io embutido
 │   │   └── SaudeJa-C2.drawio.png      # diagrama C4 nível 2 (containers), seção 2; idem
