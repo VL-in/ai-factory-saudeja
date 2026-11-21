@@ -45,6 +45,13 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
   Registra também os riscos aceitos: domínio diferente, features sorteadas como ruído, histórico truncado e SMS confundido com a antecedência. Nada muda no modelo em produção.
 
 ### Modificado
+- **O dataset de re-treino ganha a coluna `origem`** (`semente`, `producao` ou `externa`). O export (`src/export_treino.py`) marca cada linha, e o `validate_data` passa a contar a produção por ela, não mais como "tudo que não está na semente". Uma linha do dataset externo nunca é contada como produção da clínica. A origem externa só entra no dataset com `dados.externa.habilitada`, que continua desligado. Um dataset exportado antes da coluna ainda é aceito, com a regra antiga e um alerta no relatório.
+- **O relatório do `validate_data` separa as origens.** Ele traz as linhas de produção, as externas e as com desfecho real; o PSI de cada origem contra a semente (`psi` para a produção e `psi_externa` para a externa); e o que as regras para o dado real recomendariam para aquele dataset, sem aplicá-las no treino:
+  - o peso da semente: 1 abaixo de 200 linhas reais, 0,3 a partir de 200 e 0 a partir de 600 (`dados.peso_semente`);
+  - o modo de split: aleatório só com a semente, por paciente com id estável, e cronológico com mais de 60 dias de produção (`dados.split`);
+  - os positivos de produção no fold de teste.
+
+  O dado externo conta como desfecho real para o peso da semente, mas não conta para o split cronológico nem para os positivos de produção. O resumo do re-treino mostra as três recomendações.
 - **[ADR-003](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-003-SMOTE-NC.md) emendado.** Refeita em validação cruzada repetida, a comparação de 2026-09-08 não se sustenta: o SMOTE-NC não supera o `class_weight`, as três condições ordenam os pacientes igualmente mal, e nenhuma tem Brier melhor que o modelo que responde sempre a taxa base. O SMOTE-NC continua em produção até um desafiante o substituir pelo fluxo normal, e as comparações entre configurações passam a usar o `scripts/avaliar_cv.py`.
 
 ## [v3.2.0] (Vanessa + Claude) - 2026-11-08

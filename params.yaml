@@ -84,6 +84,21 @@ dados:
     habilitada: false
     n_amostra: 1500
     random_state: 42
+  # Regras para quando o desfecho real chega (src/regras_dado_real.py). Hoje o
+  # validate_data so' REPORTA o que elas recomendariam; aplica-las no treino e'
+  # decisao com ADR proprio. Desfecho real = producao + externa (a externa conta,
+  # porque o objetivo e' tirar peso do sintetico).
+  # - peso_semente: abaixo de limiar_reduzir linhas reais, a semente pesa 1; a
+  #   partir dele, peso_reduzido; a partir de limiar_retirar, 0 (sai do treino).
+  # - split.dias_producao_cronologico: com mais dias que isto entre a primeira e
+  #   a ultima consulta de PRODUCAO (externa nao conta), o fold de teste passa a
+  #   ser cronologico.
+  peso_semente:
+    limiar_reduzir: 200
+    limiar_retirar: 600
+    peso_reduzido: 0.3
+  split:
+    dias_producao_cronologico: 60
 
 # Canario do modelo (ADR-008, src/canario.py). O desafiante que
 # passa no gate nao substitui o campeao de uma vez: decide `fracao` da fila do

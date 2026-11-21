@@ -21,9 +21,17 @@ Três camadas, todas **bloqueantes**:
   (1/tolerância, a regra do SLO §3.1): com menos que isso, o gate compara
   métricas cujo menor passo é maior que a própria tolerância.
 
-E dois registros **não bloqueantes**: linhas fora do domínio do treino (o
-contrato manda marcar, nunca rejeitar) e PSI por feature entre a produção e a
-semente, que vira alerta no resumo do re-treino.
+E três registros **não bloqueantes**: linhas fora do domínio do treino (o
+contrato manda marcar, nunca rejeitar); PSI por feature de cada origem com
+desfecho real (produção e externa, separadas) contra a semente, que vira
+alerta no resumo do re-treino; e o que as regras da Etapa 5 recomendariam
+para este dataset (`src/regras_dado_real.py`: peso da semente, modo de split,
+positivos de produção no fold), sem aplicá-las no treino.
+
+**Contagem por origem** (ADR-014): com a coluna `origem` do export, produção
+é `origem == producao` -- a linha `externa` nunca conta como produção da
+clínica. Dataset sem a coluna (exportado antes dela) usa a regra antiga: tudo
+que não está na semente é produção.
 
 **Completude de rótulo não mora aqui**, embora seja uma checagem de dados:
 este stage lê o CSV, que por construção só contém consultas com desfecho --
@@ -55,6 +63,7 @@ import numpy as np
 import pandas as pd
 
 import contrato_features
+import regras_dado_real
 from config_projeto import caminho_de_env, carregar_params, para_horario_da_clinica
 
 PARAMS = carregar_params()
@@ -105,14 +114,19 @@ def minimo_de_positivos_no_fold(params: dict[str, Any]) -> int:
     return math.ceil(round(1 / menor, 9))
 
 
-def positivos_no_fold_de_teste(y: pd.Series) -> int:
-    """Positivos que o split do `preprocess` vai deixar no fold de teste. O
-    split estratificado só depende de `y`, então rodá-lo aqui dá exatamente
-    o fold que o treino vai usar -- sem estimar."""
+def fold_de_teste(y: pd.Series) -> pd.Series:
+    """O `y` do fold de teste que o split do `preprocess` vai gerar, com o
+    índice do dataset. O split estratificado só depende de `y`, então rodá-lo
+    aqui dá exatamente o fold que o treino vai usar -- sem estimar."""
     import preprocess
 
     _, _, _, y_teste = preprocess.dividir_treino_teste(y.to_frame(), y)
-    return int(y_teste.sum())
+    return y_teste
+
+
+def positivos_no_fold_de_teste(y: pd.Series) -> int:
+    """Positivos que o split do `preprocess` vai deixar no fold de teste."""
+    return int(fold_de_teste(y).sum())
 
 
 def _checar_schema(df: pd.DataFrame, relatorio: Relatorio) -> bool:
@@ -229,6 +243,20 @@ def _com_features_temporais(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def origem_das_linhas(df: pd.DataFrame, semente: pd.DataFrame | None) -> pd.Series:
+    ids_semente = set(semente["id_consulta"].astype(str)) if semente is not None else set()
+    return regras_dado_real.origem_por_linha(df, ids_semente)
+
+
+def _psi_por_feature(referencia: pd.DataFrame, atual: pd.DataFrame) -> dict[str, float]:
+    ref = _com_features_temporais(referencia)
+    cur = _com_features_temporais(atual)
+    return {
+        feature: round(psi(ref[feature], cur[feature], feature in FEATURES_CATEGORICAS_PSI), 6)
+        for feature in (*FEATURES_NUMERICAS_PSI, *FEATURES_CATEGORICAS_PSI)
+    }
+
+
 def _registrar_psi(
     df: pd.DataFrame,
     semente: pd.DataFrame | None,
@@ -236,38 +264,69 @@ def _registrar_psi(
     limite: float,
     recusadas: Collection[str] = (),
 ) -> None:
-    """PSI só sobre as linhas que passaram na regra de negócio (`recusadas`
-    fica de fora). Com uma data ilegível ou um número em texto no dataset, o
-    cálculo levantava exceção: o stage morria sem escrever o relatório -- que
-    é justamente o que diz por que o dataset foi barrado --, e a mensagem da
-    exceção levava o valor cru ao log público do re-treino."""
+    """PSI de cada origem com desfecho real contra a semente, separado:
+    `psi` para a produção, `psi_externa` para o dataset externo. Só sobre as
+    linhas que passaram na regra de negócio (`recusadas` fica de fora). Com
+    uma data ilegível ou um número em texto no dataset, o cálculo levantava
+    exceção: o stage morria sem escrever o relatório -- que é justamente o que
+    diz por que o dataset foi barrado --, e a mensagem da exceção levava o
+    valor cru ao log público do re-treino."""
+    origem = origem_das_linhas(df, semente)
+    contagem = regras_dado_real.contar_por_origem(origem)
+    relatorio.resumo["linhas_de_producao"] = contagem[regras_dado_real.ORIGEM_PRODUCAO]
+    relatorio.resumo["linhas_externas"] = contagem[regras_dado_real.ORIGEM_EXTERNA]
+    relatorio.resumo["linhas_com_desfecho_real"] = contagem["desfecho_real"]
+    if regras_dado_real.COLUNA_ORIGEM not in df.columns:
+        relatorio.alertas.append(
+            "dataset sem a coluna origem (export anterior a ela): produção contada como "
+            "toda linha fora da semente"
+        )
     if semente is None:
         relatorio.resumo["psi"] = None
+        relatorio.resumo["psi_externa"] = None
         relatorio.alertas.append("PSI não calculado: semente indisponível")
         return
-    ids_semente = set(semente["id_consulta"].astype(str))
-    producao = df[~df["id_consulta"].astype(str).isin(ids_semente)]
-    relatorio.resumo["linhas_de_producao"] = len(producao)
-    producao = producao[~producao["id_consulta"].astype(str).isin(recusadas)]
-    referencia = semente[~semente["id_consulta"].astype(str).isin(recusadas)]
-    if producao.empty or referencia.empty:
-        relatorio.resumo["psi"] = None
-        return
 
-    ref = _com_features_temporais(referencia)
-    cur = _com_features_temporais(producao)
-    valores = {}
-    for feature in (*FEATURES_NUMERICAS_PSI, *FEATURES_CATEGORICAS_PSI):
-        valores[feature] = round(
-            psi(ref[feature], cur[feature], feature in FEATURES_CATEGORICAS_PSI), 6
+    aceitas = ~df["id_consulta"].astype(str).isin(recusadas)
+    referencia = semente[~semente["id_consulta"].astype(str).isin(recusadas)]
+    for chave, nome_origem, rotulo in (
+        ("psi", regras_dado_real.ORIGEM_PRODUCAO, "produção"),
+        ("psi_externa", regras_dado_real.ORIGEM_EXTERNA, "externa"),
+    ):
+        atual = df[aceitas & (origem == nome_origem)]
+        if atual.empty or referencia.empty:
+            relatorio.resumo[chave] = None
+            continue
+        valores = _psi_por_feature(referencia, atual)
+        relatorio.resumo[chave] = valores
+        altos = {f: v for f, v in valores.items() if v > limite}
+        if altos:
+            relatorio.alertas.append(
+                f"PSI acima de {limite} ({rotulo} x semente, {len(atual)} linha(s)): {altos}"
+            )
+
+
+def _registrar_regras_dado_real(
+    df: pd.DataFrame, semente: pd.DataFrame | None, relatorio: Relatorio, params: dict[str, Any]
+) -> None:
+    """O que as regras da Etapa 5 recomendariam para este dataset. Só
+    registra: aplicá-las no treino é decisão com ADR próprio."""
+    origem = origem_das_linhas(df, semente)
+    n_real = regras_dado_real.contar_por_origem(origem)["desfecho_real"]
+    regras: dict[str, Any] = {
+        "peso_da_semente": regras_dado_real.peso_da_semente(n_real, params),
+        "modo_de_split": regras_dado_real.modo_de_split(df, origem, params),
+        "dias_de_producao": regras_dado_real.dias_de_producao(df, origem),
+    }
+    try:
+        y_teste: pd.Series | None = fold_de_teste(df["no_show"].astype(int))
+    except ValueError:  # o bloqueio de distribuição já registrou o motivo
+        y_teste = None
+    if y_teste is not None:
+        regras["positivos_de_producao_no_fold"] = regras_dado_real.positivos_de_producao_no_fold(
+            y_teste, origem
         )
-    relatorio.resumo["psi"] = valores
-    altos = {f: v for f, v in valores.items() if v > limite}
-    if altos:
-        relatorio.alertas.append(
-            f"PSI acima de {limite} (produção x semente, {len(producao)} linha(s) de produção): "
-            f"{altos}"
-        )
+    relatorio.resumo["regras_dado_real"] = regras
 
 
 # --------------------------------------------------------------------------
@@ -284,6 +343,7 @@ def validar(
     recusadas = _checar_dominio(df, relatorio, list(params["cadastro"]["especialidades"]))
     _checar_distribuicao(df, relatorio, params)
     _registrar_psi(df, semente, relatorio, float(params["dados"]["psi_alerta"]), recusadas)
+    _registrar_regras_dado_real(df, semente, relatorio, params)
     return relatorio
 
 
@@ -304,6 +364,18 @@ def formatar_resumo(relatorio: Relatorio) -> str:
             f"({resumo['taxa_positivos']:.1%}); "
             f"{resumo.get('positivos_no_fold_de_teste', '?')} no fold de teste "
             f"(mínimo {resumo.get('minimo_de_positivos_no_fold', '?')})"
+        )
+    if "linhas_com_desfecho_real" in resumo:
+        linhas.append(
+            f"- desfecho real: {resumo['linhas_de_producao']} de produção, "
+            f"{resumo['linhas_externas']} externa(s)"
+        )
+    regras = resumo.get("regras_dado_real")
+    if regras:
+        linhas.append(
+            "- regras do dado real (recomendação, não aplicada no treino): peso da semente "
+            f"{regras['peso_da_semente']:g}, split {regras['modo_de_split']}, "
+            f"{regras.get('positivos_de_producao_no_fold', '?')} positivo(s) de produção no fold"
         )
     if resumo.get("fora_do_dominio_do_treino"):
         linhas.append(

@@ -20,6 +20,7 @@ stages:
       - requirements/base.txt
       - requirements/train.txt
       - src/validate_data.py
+      - src/regras_dado_real.py
       - src/contrato_features.py
       - src/agenda_clinica.py
       - src/preprocess.py

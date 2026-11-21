@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
@@ -215,7 +216,7 @@ def test_montar_dataset_treino_sem_producao_reproduz_so_a_semente(tmp_path):
         caminho_semente=str(caminho_semente), consultas=[]
     )
 
-    pd.testing.assert_frame_equal(dataset.reset_index(drop=True), semente)
+    pd.testing.assert_frame_equal(dataset.reset_index(drop=True), semente.assign(origem="semente"))
 
 
 # --- smoke do ponto de entrada do retrain.yml ------------------------------------
@@ -275,3 +276,101 @@ def test_main_do_retrain_grava_o_csv_e_publica_quarentena_e_completude(
 
     esperado = datetime.now(timezone.utc) - timedelta(days=90)
     assert abs(janelas[0] - esperado) < timedelta(minutes=5)
+
+
+# --- origem externa (ADR-014) ---------------------------------------------------
+
+
+def _semente_minima(tmp_path):
+    semente = pd.DataFrame(
+        {
+            "id_consulta": [1],
+            "id_paciente": ["P1057"],
+            "idade": [52],
+            "sexo": ["F"],
+            "especialidade": ["cardiologia"],
+            "distancia_km": [7.4],
+            "dias_entre_agendamento_consulta": [14],
+            "historico_noshow": [2],
+            "no_show": [0],
+            "data_hora_agendada": ["2026-01-09 14:00:00"],
+        }
+    )
+    caminho = tmp_path / "consultas-historicas.csv"
+    semente.to_csv(caminho, index=False)
+    return str(caminho)
+
+
+def _externa(n=3):
+    return pd.DataFrame(
+        {
+            "id_consulta": [f"K-{i}" for i in range(n)],
+            "id_paciente": [f"K{i:016x}" for i in range(n)],
+            "idade": [30] * n,
+            "sexo": ["M"] * n,
+            "especialidade": ["pediatria"] * n,
+            "distancia_km": [3.0] * n,
+            "dias_entre_agendamento_consulta": [5] * n,
+            "historico_noshow": [0] * n,
+            "no_show": [1, 0, 0][:n],
+            "data_hora_agendada": ["2016-05-03 09:00:00"] * n,
+            "lembrete_enviado": [1] * n,
+            "origem": ["externa"] * n,
+        }
+    )
+
+
+def _params(habilitada):
+    return {"dados": {"externa": {"habilitada": habilitada}}}
+
+
+def test_externa_desligada_nao_entra_no_dataset(tmp_path):
+    dataset = export_treino.montar_dataset_treino(
+        caminho_semente=_semente_minima(tmp_path),
+        consultas=[],
+        externa=_externa(),
+        params=_params(False),
+    )
+    assert (dataset["origem"] == "semente").all()
+    assert not dataset["id_consulta"].astype(str).str.startswith("K-").any()
+
+
+def test_externa_ligada_entra_com_a_origem_ao_lado_da_semente_e_da_producao(tmp_path):
+    dataset = export_treino.montar_dataset_treino(
+        caminho_semente=_semente_minima(tmp_path),
+        consultas=[_consulta("A1", "P1", 36, "2026-02-02 10:00:00", "no_show")],
+        externa=_externa(),
+        params=_params(True),
+    )
+    assert dataset["origem"].value_counts().to_dict() == {
+        "externa": 3,
+        "semente": 1,
+        "producao": 1,
+    }
+    assert set(export_treino.COLUNAS_SAIDA) <= set(dataset.columns)
+
+
+def test_externa_ligada_sem_o_arquivo_falha_dizendo_o_que_fazer(tmp_path, monkeypatch):
+    monkeypatch.setattr(export_treino, "CONSULTAS_EXTERNAS_PATH", str(tmp_path / "nao-existe.csv"))
+    with pytest.raises(FileNotFoundError, match="dvc pull"):
+        export_treino.montar_dataset_treino(
+            caminho_semente=_semente_minima(tmp_path), consultas=[], params=_params(True)
+        )
+
+
+def test_carregar_externa_descarta_o_metadado_e_recusa_outra_origem(tmp_path):
+    caminho = tmp_path / "externas.csv"
+    _externa().assign(colunas_imputadas="especialidade;distancia_km;horario").to_csv(
+        caminho, index=False
+    )
+    assert list(export_treino.carregar_externa(str(caminho)).columns) == export_treino.COLUNAS_SAIDA
+    _externa().assign(origem="producao").to_csv(caminho, index=False)
+    with pytest.raises(ValueError, match="origem"):
+        export_treino.carregar_externa(str(caminho))
+
+
+def test_producao_sai_com_origem_producao():
+    df = export_treino.montar_dataset_producao(
+        [_consulta("A1", "P1", 36, "2026-02-02 10:00:00", "no_show")]
+    )
+    assert df["origem"].tolist() == ["producao"]

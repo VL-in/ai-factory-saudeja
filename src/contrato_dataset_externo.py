@@ -82,9 +82,10 @@ HANDCAP_MAXIMO = 4
 PERIODO_CONSULTAS = (date(2016, 4, 29), date(2016, 6, 8))
 
 # --- adaptado -------------------------------------------------------------
-# As colunas do export de produção (`export_treino.COLUNAS_SAIDA`, conferido
-# por teste) mais as duas da origem. Repetidas aqui, e não importadas, porque o
-# export puxa o cliente do banco -- e quem confere um CSV não precisa dele.
+# As colunas do export de treino (`export_treino.COLUNAS_SAIDA`, conferido por
+# teste, já com `origem`) mais o metadado `colunas_imputadas`. Repetidas aqui,
+# e não importadas, porque o export puxa o cliente do banco -- e quem confere
+# um CSV não precisa dele.
 COLUNAS_DO_EXPORT = (
     "id_consulta",
     "id_paciente",
@@ -97,10 +98,11 @@ COLUNAS_DO_EXPORT = (
     "no_show",
     "data_hora_agendada",
     "lembrete_enviado",
+    "origem",
 )
 COLUNA_ORIGEM = "origem"
 COLUNA_IMPUTADAS = "colunas_imputadas"
-COLUNAS_ADAPTADO = (*COLUNAS_DO_EXPORT, COLUNA_ORIGEM, COLUNA_IMPUTADAS)
+COLUNAS_ADAPTADO = (*COLUNAS_DO_EXPORT, COLUNA_IMPUTADAS)
 ORIGEM_EXTERNA = "externa"
 COLUNAS_IMPUTADAS = ("especialidade", "distancia_km", "horario")
 VALOR_COLUNAS_IMPUTADAS = ";".join(COLUNAS_IMPUTADAS)

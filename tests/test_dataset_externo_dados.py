@@ -16,6 +16,11 @@ são pulados; as regras em si são provadas sempre por
 | 3    | teste-reservado.csv, consultas- | schema/negócio, imputação, partição,     |
 |      | externas.csv                    | manifesto completo                       |
 
+| 6    | semente + amostra (export com   | peso da semente nos limiares 200/600,    |
+|      | a origem externa ligada)        | split por grupo, positivos de produção,  |
+|      |                                 | revisão de tolerância (50 positivos),    |
+|      |                                 | features por paciente no pool            |
+
 As Fases 4 e 5 não geram dataset novo: leem o pool, o teste reservado e a
 amostra, que já estão cobertos aqui. As garantias delas (validação por
 paciente, permutação, curva de aprendizado) são testes de código, escritos
@@ -146,3 +151,60 @@ def test_particao_por_paciente_e_amostra_do_tamanho_do_params(
 def test_manifesto_bate_com_todos_os_arquivos(manifesto, pool, reservado, amostra):
     sha = cde.sha256_do_arquivo(cde.CAMINHO_BRUTO)
     assert cde.verificar_manifesto(manifesto, sha, pool, reservado, amostra) == []
+
+
+# --- Fase 6: regras da Etapa 5 com a amostra real ------------------------------
+def _dataset_com_externa(semente, amostra, n_externa):
+    import export_treino
+
+    return export_treino.montar_dataset_treino(
+        caminho_semente=str(RAIZ / "data" / "consultas-historicas.csv"),
+        consultas=[],
+        externa=amostra.head(n_externa)[export_treino.COLUNAS_SAIDA],
+        params={"dados": {"externa": {"habilitada": True}}},
+    )
+
+
+@pytest.mark.parametrize(
+    ("n_externa", "peso"), [(199, 1.0), (200, 0.3), (599, 0.3), (600, 0.0), (1500, 0.0)]
+)
+def test_peso_da_semente_com_linhas_externas_reais(semente, amostra, n_externa, peso):
+    import validate_data
+
+    df = _dataset_com_externa(semente, amostra, n_externa)
+    relatorio = validate_data.validar(df, semente=semente)
+    assert relatorio.resumo["linhas_externas"] == n_externa
+    assert relatorio.resumo["linhas_de_producao"] == 0
+    assert relatorio.resumo["regras_dado_real"]["peso_da_semente"] == peso
+
+
+def test_semente_mais_amostra_passa_no_gate_de_dados_e_aciona_a_revisao_de_tolerancia(
+    semente, amostra
+):
+    import retrain_gate
+    import validate_data
+
+    df = _dataset_com_externa(semente, amostra, len(amostra))
+    relatorio = validate_data.validar(df, semente=semente)
+    assert relatorio.aprovado, relatorio.bloqueios
+    regras = relatorio.resumo["regras_dado_real"]
+    assert regras["modo_de_split"] == "por_grupo"  # id de paciente estável
+    assert regras["positivos_de_producao_no_fold"] == 0  # externa não é a clínica
+    positivos = relatorio.resumo["positivos_no_fold_de_teste"]
+    assert positivos >= retrain_gate.POSITIVOS_PARA_REVISAR_TOLERANCIA
+    avisos = retrain_gate._avisos_de_tolerancia(PARAMS["gate"]["tolerancia"], positivos)
+    assert avisos and "revisar SLO" in avisos[0]
+
+
+def test_features_por_paciente_point_in_time_no_pool(pool):
+    import regras_dado_real
+
+    f = regras_dado_real.features_por_paciente(pool)
+    assert len(f) == len(pool)
+    assert (f["taxa_faltas_anteriores"].between(0, 1)).all()
+    com_anteriores = f["consultas_anteriores"] > 0
+    assert (f.loc[com_anteriores, "dias_desde_ultima_consulta"] > 0).all()
+    # nunca mais faltas anteriores que consultas anteriores
+    assert (
+        f["taxa_faltas_anteriores"] * f["consultas_anteriores"] <= f["consultas_anteriores"]
+    ).all()
