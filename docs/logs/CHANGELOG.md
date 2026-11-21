@@ -30,7 +30,9 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
   - especialidade, distância e horário sorteados da semente, sem olhar o desfecho;
   - a mesma quarentena do contrato de features do export.
 
-  Antes de gravar, o resultado passa pelas regras do contrato do dataset externo (schema, imputação independente do desfecho e fidelidade ao bruto); com qualquer violação, nada é gravado.
+  O mesmo script separa o **teste reservado** (`data/externo/teste-reservado.csv`, 10.000 consultas de 6.319 pacientes sorteados, todas as consultas de um paciente do mesmo lado, só para a avaliação final) e a **amostra de treino** (`data/externo/consultas-externas.csv`, 1.500 consultas de pacientes fora do reservado, estratificada pelo desfecho), também no DVC.
+
+  Antes de gravar, o resultado passa pelas regras do contrato do dataset externo (schema, imputação independente do desfecho, fidelidade ao bruto e partição por paciente); com qualquer violação, nada é gravado.
 
   Registra também os riscos aceitos: domínio diferente, features sorteadas como ruído, histórico truncado e SMS confundido com a antecedência. Nada muda no modelo em produção.
 

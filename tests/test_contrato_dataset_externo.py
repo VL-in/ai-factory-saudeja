@@ -556,3 +556,21 @@ def test_treino_oficial_com_origem_externa_e_acusado():
     treino = pd.DataFrame({"id_consulta": ["1", "2"], "origem": ["semente", "externa"]})
     violacoes = cde.verificar_treino_sem_externa(treino, habilitada=False)
     assert any("origem externa" in v for v in violacoes), violacoes
+
+
+# --------------------------------------------------------------------------
+# primitivas da partição
+# --------------------------------------------------------------------------
+def test_amostra_estratificada_preserva_a_taxa_de_falta(cenario):
+    pool = cenario["pool"]
+    amostra = cde.amostra_estratificada(pool, 150, random_state=3)
+    assert len(amostra) == 150
+    assert int(amostra["no_show"].sum()) == round(150 * pool["no_show"].mean())
+    assert amostra["id_consulta"].is_unique
+
+
+def test_pool_de_simulacao_tira_todos_os_pacientes_do_reservado(cenario):
+    pool, reservado = cenario["pool"], cenario["reservado"]
+    simulacao = cde.pool_de_simulacao(pool, reservado)
+    assert not set(simulacao["id_paciente"]) & set(reservado["id_paciente"])
+    assert len(simulacao) == len(pool) - len(reservado)

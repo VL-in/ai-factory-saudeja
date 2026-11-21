@@ -14,7 +14,7 @@ ai-factory-saudeja/
 │   ├── champion_metrics.json          # métricas do modelo em produção (versionado em git)
 │   ├── canario.json / canario/        # canário em observação, só enquanto ativo (ADR-008)
 │   ├── canario_historico.json         # canários encerrados: promovidos e revertidos
-│   ├── externo/                       # dataset externo de desfecho real (Kaggle, CC BY-NC-SA 4.0, ADR-014): raw/, pool-adaptado.csv e manifesto.json via DVC; LICENCA-E-ORIGEM.md no git
+│   ├── externo/                       # dataset externo de desfecho real (Kaggle, CC BY-NC-SA 4.0, ADR-014): raw/, pool-adaptado.csv, teste-reservado.csv, consultas-externas.csv e manifesto.json via DVC; LICENCA-E-ORIGEM.md no git
 │   ├── AVISO-DADOS-SINTETICOS.md
 │   └── AVISO-MODELO.md
 ├── docs/
@@ -38,7 +38,7 @@ ai-factory-saudeja/
 │   └── grafana/                        # alertas/*.yaml (17 regras P1-P3), notificacoes.yaml (rotas por criticidade), dashboards/*.json (6 painéis)
 ├── scripts/
 │   ├── auditar_noshow_externo.py      # auditoria do bruto do dataset externo (ADR-014): só agregados, filtros na ordem do manifesto
-│   ├── adaptar_noshow_externo.py      # bruto do Kaggle -> pool no formato do export (origem `externa`): histórico point-in-time, imputação da semente, contrato (ADR-014)
+│   ├── adaptar_noshow_externo.py      # bruto do Kaggle -> pool no formato do export (origem `externa`): histórico point-in-time, imputação da semente, contrato, teste reservado por paciente e amostra de treino (ADR-014)
 │   ├── auditoria_lgpd.py              # varredura de PII em log (ferramenta local)
 │   ├── avaliar_cv.py                  # compara configurações do modelo em CV repetida 5x5 com IC 95% (exploratório, fora do dvc.yaml)
 │   ├── criar_funcionario.py           # cria a conta de funcionário no Supabase Auth (cadastro aberto desligado)

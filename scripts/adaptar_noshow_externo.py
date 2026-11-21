@@ -8,6 +8,10 @@ Lê `data/externo/raw/medical-appoint-no-shows2016.csv` e grava, em
 
 - `pool-adaptado.csv`: a população do SaúdeJá (antecedência de 1 a 90 dias,
   idade de 0 a 85) no formato do export, mais `origem` e `colunas_imputadas`;
+- `teste-reservado.csv`: ~10 mil consultas de pacientes sorteados (todas as
+  consultas de um paciente ficam do mesmo lado), só para a avaliação final;
+- `consultas-externas.csv`: a amostra de treino (`dados.externa.n_amostra`),
+  estratificada pelo desfecho, só de pacientes fora do reservado;
 - `manifesto.json`: sha256 do bruto, remoções por filtro (em ordem: bruto -
   soma dos filtros = pool), contagens e `random_state`.
 
@@ -66,6 +70,7 @@ VERSAO_SCRIPT = "1.0"
 VARIAVEL_SAL = "EXTERNO_SAL_PSEUDONIMO"
 CAMINHO_SEMENTE = REPO_ROOT / "data" / "consultas-historicas.csv"
 DIA_SABADO = 5
+ALVO_RESERVADO = 10_000
 
 
 # --------------------------------------------------------------------------
@@ -181,6 +186,25 @@ def adaptar(
     return pool.reset_index(drop=True), filtros
 
 
+def particionar(
+    pool: pd.DataFrame, n_amostra: int, random_state: int, alvo_reservado: int = ALVO_RESERVADO
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(teste reservado, amostra de treino). O reservado é cortado por
+    PACIENTE: sorteia a ordem dos pacientes e acumula as consultas deles até
+    `alvo_reservado`. A amostra sai do pool de simulação (o resto), com a
+    proporção de falta dele. Gerador próprio, separado do da imputação:
+    mudar a partição não re-sorteia nenhum valor imputado."""
+    rng = np.random.default_rng([random_state, 1])
+    contagem = pool["id_paciente"].value_counts().sort_index()
+    ordem = contagem.index.to_numpy()[rng.permutation(len(contagem))]
+    acumulado = contagem.reindex(ordem).cumsum()
+    do_reservado = set(acumulado[acumulado <= alvo_reservado].index)
+    reservado = pool[pool["id_paciente"].isin(do_reservado)].reset_index(drop=True)
+    resto = cde.pool_de_simulacao(pool, reservado)
+    amostra = cde.amostra_estratificada(resto, n_amostra, random_state)
+    return reservado, amostra
+
+
 def montar_manifesto(
     pool: pd.DataFrame,
     filtros: dict[str, int],
@@ -286,9 +310,29 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
             print(f"  [VIOLACAO] {v}")
         raise SystemExit("[erro] pool fora do contrato -- nada foi gravado")
 
-    manifesto = montar_manifesto(pool, filtros, cde.sha256_do_arquivo(args.bruto), random_state)
+    n_amostra = int(externa["n_amostra"])
+    reservado, amostra = particionar(pool, n_amostra, random_state)
+    violacoes = cde.verificar_particao(pool, reservado, amostra, n_amostra)
+    for nome, parte in (("reservado", reservado), ("amostra", amostra)):
+        violacoes += [
+            f"{nome}: {v}"
+            for v in (
+                *cde.verificar_adaptado(parte, semente, especialidades),
+                *cde.verificar_imputadas(parte, semente),
+            )
+        ]
+    if violacoes:
+        for v in violacoes:
+            print(f"  [VIOLACAO] {v}")
+        raise SystemExit("[erro] particao fora do contrato -- nada foi gravado")
+
+    manifesto = montar_manifesto(
+        pool, filtros, cde.sha256_do_arquivo(args.bruto), random_state, reservado, amostra
+    )
     args.saida.mkdir(parents=True, exist_ok=True)
     pool.to_csv(args.saida / cde.CAMINHO_POOL.name, index=False)
+    reservado.to_csv(args.saida / cde.CAMINHO_RESERVADO.name, index=False)
+    amostra.to_csv(args.saida / cde.CAMINHO_AMOSTRA.name, index=False)
     gravar_json(args.saida / cde.CAMINHO_MANIFESTO.name, manifesto)
 
     p = manifesto["pool"]
@@ -298,6 +342,12 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         f"historico 0 em {p['historico_noshow_zero']:.1%}, lembrete {p['taxa_lembrete']:.1%}"
     )
     print(f"[ok] remocoes por filtro: {filtros}")
+    for nome in ("reservado", "amostra"):
+        r = manifesto[nome]
+        print(
+            f"[ok] {nome}: {r['linhas']} linhas, {r['pacientes']} pacientes, "
+            f"falta {r['taxa_falta']:.1%}"
+        )
     return manifesto
 
 

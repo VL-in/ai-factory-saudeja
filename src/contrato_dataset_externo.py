@@ -185,6 +185,26 @@ def remocoes_por_filtro(bruto: pd.DataFrame) -> dict[str, int]:
     return contagens
 
 
+def pool_de_simulacao(pool: pd.DataFrame, reservado: pd.DataFrame) -> pd.DataFrame:
+    """O pool sem nenhum paciente do teste reservado: é daqui que o teste de
+    sinal e a simulação tiram as linhas de treino. O reservado só é tocado na
+    avaliação (risco R12 do ADR-014)."""
+    pacientes_reservados = set(reservado["id_paciente"])
+    return pool[~pool["id_paciente"].isin(pacientes_reservados)].reset_index(drop=True)
+
+
+def amostra_estratificada(df: pd.DataFrame, n: int, random_state: int) -> pd.DataFrame:
+    """`n` linhas de `df` com a mesma proporção de `no_show` (arredondada).
+    Usada para a amostra de treino oficial e para as amostras extras do teste
+    de robustez (risco R11): as duas precisam sortear do mesmo jeito."""
+    positivos = round(n * float(df["no_show"].mean()))
+    partes = [
+        df[df["no_show"] == 1].sample(n=positivos, random_state=random_state),
+        df[df["no_show"] == 0].sample(n=n - positivos, random_state=random_state),
+    ]
+    return pd.concat(partes).sample(frac=1, random_state=random_state).reset_index(drop=True)
+
+
 def sha256_do_arquivo(caminho: Path) -> str:
     h = hashlib.sha256()
     with open(caminho, "rb") as arquivo:

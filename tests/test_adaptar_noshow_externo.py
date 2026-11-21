@@ -224,3 +224,49 @@ def test_sal_curto_e_recusado(monkeypatch):
     monkeypatch.setenv(adaptador.VARIAVEL_SAL, "curto")
     with pytest.raises(SystemExit):
         adaptador.ler_sal()
+
+
+# --------------------------------------------------------------------------
+# partição (Fase 3)
+# --------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def particao(cenario):
+    reservado, amostra = adaptador.particionar(
+        cenario["pool"], n_amostra=200, random_state=42, alvo_reservado=300
+    )
+    return reservado, amostra
+
+
+def test_particao_por_paciente_passa_no_contrato(cenario, particao):
+    reservado, amostra = particao
+    violacoes = cde.verificar_particao(
+        cenario["pool"],
+        reservado,
+        amostra,
+        n_amostra=200,
+        faixa_reservado=(250, 300),
+        tolerancia_amostra=0.04,
+        tolerancia_reservado=0.08,  # 300 linhas: o desvio-padrão da taxa é ~0,026
+    )
+    assert violacoes == []
+
+
+def test_nenhum_paciente_do_reservado_no_pool_de_simulacao_nem_na_amostra(cenario, particao):
+    reservado, amostra = particao
+    simulacao = cde.pool_de_simulacao(cenario["pool"], reservado)
+    assert not set(reservado["id_paciente"]) & set(simulacao["id_paciente"])
+    assert not set(reservado["id_paciente"]) & set(amostra["id_paciente"])
+    assert len(simulacao) + len(reservado) == len(cenario["pool"])
+
+
+def test_particao_nao_resorteia_a_imputacao(cenario, particao):
+    """A amostra é recorte do pool: mesmos valores imputados linha a linha."""
+    _, amostra = particao
+    do_pool = cenario["pool"].set_index("id_consulta").loc[amostra["id_consulta"]]
+    assert (do_pool["data_hora_agendada"].to_numpy() == amostra["data_hora_agendada"]).all()
+
+
+def test_particao_e_deterministica(cenario, particao):
+    de_novo = adaptador.particionar(cenario["pool"], 200, 42, alvo_reservado=300)
+    pd.testing.assert_frame_equal(de_novo[0], particao[0])
+    pd.testing.assert_frame_equal(de_novo[1], particao[1])
