@@ -23,6 +23,16 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
   `pytest -m dados_externos -rs` roda as regras contra os arquivos de `data/externo/` e pula, com o motivo, os que ainda não foram gerados. No CI, sem os dados, as mesmas regras são provadas com dado fictício.
 
+- **[ADR-014](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-014-dataset-externo-desfecho-real.md) aberto como Proposto: dataset externo de desfecho real como terceira origem de dado.** O ADR traz a auditoria do *Medical Appointment No Shows*: 70.985 consultas na população do SaúdeJá, com 28,6% de falta, e nenhum SMS para quem marcou com 1 ou 2 dias. Registra as decisões:
+  - população de 1 a 90 dias de antecedência;
+  - especialidade, distância e horário sorteados da semente, independentes do desfecho;
+  - amostra de treino de 1.500 linhas e teste reservado separado por paciente;
+  - `dados.externa.habilitada` desligado até uma emenda;
+  - tag `dados_externos` no MLflow;
+  - a tabela de quais origens contam em cada regra do pipeline.
+
+  Registra também os riscos aceitos: domínio diferente, features sorteadas como ruído, histórico truncado e SMS confundido com a antecedência. Nada muda no modelo em produção.
+
 ### Modificado
 - **[ADR-003](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-003-SMOTE-NC.md) emendado.** Refeita em validação cruzada repetida, a comparação de 2026-09-08 não se sustenta: o SMOTE-NC não supera o `class_weight`, as três condições ordenam os pacientes igualmente mal, e nenhuma tem Brier melhor que o modelo que responde sempre a taxa base. O SMOTE-NC continua em produção até um desafiante o substituir pelo fluxo normal, e as comparações entre configurações passam a usar o `scripts/avaliar_cv.py`.
 
