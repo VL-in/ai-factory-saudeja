@@ -8,6 +8,12 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado]
+
+### Corrigido
+- **Painéis do Grafana mostram 0, e não "No data", em dia sem movimento.** Os contadores do job D-2 (agendamentos por resultado e braço, lembretes por status e, com o SMS de verdade e preço preenchido, o custo) só passavam a existir no primeiro agendamento processado. Com a fila vazia, os painéis de job, mensageria e custo ficavam em "No data", que não diferencia "não houve" de "não chegou". Agora toda execução registra essas séries valendo 0, e as regras de alerta com `increase()` passam a contar também o primeiro incremento de uma série. O custo continua de fora com o stub ou sem preço, para não aparecer um 0 enganoso.
+- **Cada painel diz o que mostrar quando a consulta volta vazia.** Contagens mostram 0. Percentis, taxa de erro, cobertura e disponibilidade mostram "Sem medição no período", e nunca 0, porque 0 ms ou 0% sem medição seriam números falsos. Logs e tabelas dizem que não há linha ou registro. O painel Interface passa a abrir nos últimos 7 dias, e não em 24 horas, porque com o uso de uma clínica um dia quase nunca tem ação suficiente para uma taxa.
+
 ## [v3.2.0] (Vanessa + Claude) - 2026-11-08
 
 ### Modificado
