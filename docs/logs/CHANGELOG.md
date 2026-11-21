@@ -8,6 +8,14 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [Não publicado]
+
+### Adicionado
+- **Avaliação do modelo em validação cruzada repetida** (`scripts/avaliar_cv.py`). Até aqui, toda decisão de modelo do projeto foi medida num único split 80/20, com 21 positivos no fold de teste: só trocar a semente do split levava o `roc_auc` do mesmo pipeline de 0,51 a 0,68. O script mede uma configuração em 5 folds × 5 repetições e imprime média, desvio e intervalo de 95% (com a correção de Nadeau-Bengio, porque os folds não são independentes) de `roc_auc`, `pr_auc`, Brier, `f1_1`, `recall_1` e do recall com 30% da fila avisada, o "cortar 70% do custo" do BRIEFING. Compara LightGBM e regressão logística, com SMOTE-NC, `class_weight` ou sem balanceamento, sempre com o balanceamento dentro do fold. É exploratório, como o `tune.py`: não entra no `dvc.yaml`, não grava artefato e não muda o modelo em produção, cujo número oficial continua sendo o do fold de teste isolado. Na configuração vigente, o `roc_auc` fica em 0,555 ± 0,060, e o intervalo inclui 0,5.
+
+### Modificado
+- **[ADR-003](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-003-SMOTE-NC.md) emendado.** Refeita em validação cruzada repetida, a comparação de 2026-09-08 não se sustenta: o SMOTE-NC não supera o `class_weight`, as três condições ordenam os pacientes igualmente mal, e nenhuma tem Brier melhor que o modelo que responde sempre a taxa base. O SMOTE-NC continua em produção até um desafiante o substituir pelo fluxo normal, e as comparações entre configurações passam a usar o `scripts/avaliar_cv.py`.
+
 ## [v3.2.0] (Vanessa + Claude) - 2026-11-08
 
 ### Modificado
