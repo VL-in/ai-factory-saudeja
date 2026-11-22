@@ -81,16 +81,14 @@ stages:
       - requirements/base.txt
       - requirements/train.txt
       - src/train.py
+      - src/modelo.py
       - src/preprocess.py
       - src/config_projeto.py
       - data/interim/train_raw.pkl
       - data/interim/mapa_especialidade.json
     params:
-      - model.n_estimators
-      - model.learning_rate
-      - model.max_depth
-      - model.num_leaves
-      - balancing.k_neighbors
+      - model
+      - balancing
     outs:
       - data/model.pkl
       - data/interim/mlflow_run_id.txt
@@ -111,6 +109,7 @@ stages:
       - requirements/base.txt
       - requirements/train.txt
       - src/validate.py
+      - src/modelo.py
       - src/config_projeto.py
       - data/model.pkl
       - data/interim/test.pkl

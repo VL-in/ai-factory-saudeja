@@ -80,12 +80,13 @@ ai-factory-saudeja/
 │   ├── campeao.py                     # "só o campeão vai para produção": sha + threshold
 │   ├── canario.py                     # canário do modelo: divisão da fila, guardrails e rollback
 │   ├── preprocess.py                  # feature engineering + split treino/teste (stage 1)
-│   ├── train.py                       # SMOTE-NC + treino LightGBM, loga no MLflow (stage 2)
+│   ├── train.py                       # treino da configuração do params.yaml (model.tipo, balancing.strategy, model.calibracao), loga no MLflow (stage 2)
+│   ├── modelo.py                      # fábrica do classificador (LightGBM | logística, calibração) e acesso uniforme: colunas, categóricas, margem
 │   ├── validate.py                    # métricas no fold de teste isolado (stage 3)
 │   ├── tune.py                        # GridSearchCV de hiperparâmetros (exploratório, fora do dvc.yaml)
 │   ├── features.py
 │   ├── inference.py                   # payload -> features -> predição, reusado por API/job
-│   ├── explain.py                     # explicabilidade SHAP + plug LLM inativo
+│   ├── explain.py                     # explicabilidade SHAP (árvore, linear exato, calibrado) + plug LLM inativo
 │   ├── api/                           # API FastAPI: schemas.py + main.py
 │   ├── ui/                            # logic.py (regra de negócio da interface, sem framework) + cache_ttl.py
 │   ├── web/                           # interface NiceGUI: main.py (app por fábrica, /healthz), sessao.py, execucao.py, dados.py, tema.py, paginas/

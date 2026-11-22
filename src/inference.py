@@ -11,10 +11,10 @@ especialidade recebida para 0, incorporando um enviesamento sistemático
 silencioso. Este módulo só APLICA o mapa já treinado e salvo em
 data/model.pkl (ver src/train.py:95), nunca recalcula.
 """
-import re
-
 import joblib
 import pandas as pd
+
+import modelo as modelo_ml
 
 # `calcular_model_version` mora em campeao.py (só biblioteca padrão, para o
 # deploy rodar a guarda do campeão sem instalar o stack de ML) e é reexportada
@@ -66,31 +66,26 @@ def colunas_esperadas(features_temporais: bool | None = None) -> list[str]:
     return colunas
 
 
-_LINHA_CATEGORICAS = re.compile(r"^\[categorical_feature: ?([\d,]*)\]$", re.MULTILINE)
-
-
 def _categoricas_do_modelo(model) -> list[str]:
-    """Features que o booster trata como categóricas, lidas do modelo
-    serializado -- é essa linha que o LightGBM usa ao predizer."""
-    booster = model.booster_
-    achado = _LINHA_CATEGORICAS.search(booster.model_to_string())
-    indices = [int(i) for i in achado.group(1).split(",") if i] if achado else []
-    nomes = booster.feature_name()
-    return [nomes[i] for i in indices]
+    """Features que o modelo trata como categóricas (ver
+    `modelo.categoricas_do_modelo`: no LightGBM, a linha do booster que vale
+    ao predizer; na logística, as colunas do one-hot)."""
+    return modelo_ml.categoricas_do_modelo(model)
 
 
 def verificar_assinatura(model, features_temporais: bool | None = None) -> None:
-    """Nomes, ordem e categóricas do modelo (`booster_.feature_name()`) contra
-    o que este código monta. Um modelo treinado com `features.temporais=false`
-    carregado com `true` -- ou com as colunas em outra ordem -- prediria sem
-    erro nenhum sobre colunas trocadas; aqui isso vira falha na carga, antes
-    de qualquer predição (e, no job, antes de qualquer SMS)."""
+    """Nomes, ordem e categóricas do modelo contra o que este código monta,
+    para qualquer tipo de modelo (`src/modelo.py`). Um modelo treinado com
+    `features.temporais=false` carregado com `true` -- ou com as colunas em
+    outra ordem -- prediria sem erro nenhum sobre colunas trocadas; aqui isso
+    vira falha na carga, antes de qualquer predição (e, no job, antes de
+    qualquer SMS)."""
     esperadas = colunas_esperadas(features_temporais)
-    obtidas = list(model.booster_.feature_name())
+    obtidas = modelo_ml.colunas_do_modelo(model)
     if obtidas != esperadas:
         raise ModeloIncompativelError(
             f"o modelo espera as features {obtidas}, mas o código monta {esperadas} "
-            "(nomes ou ordem divergem -- confira features.temporais em params.yaml)"
+            "(nomes ou ordem divergem -- confira o bloco features em params.yaml)"
         )
     categoricas_esperadas = sorted(c for c in COLUNAS_CATEGORICAS if c in esperadas)
     categoricas_obtidas = sorted(_categoricas_do_modelo(model))

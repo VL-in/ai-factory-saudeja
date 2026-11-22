@@ -20,9 +20,12 @@ Garantias:
 - O balanceamento roda DENTRO de cada fold, só sobre as linhas de treino
   daquele fold (mesma regra do ADR-003 e do tune.py): o fold de validação
   nunca recebe linha sintética. `tests/test_avaliar_cv.py` trava isso.
-- Na configuração vigente (lightgbm + smotenc), o ajuste por fold é o mesmo
-  de `train.treinar`: mesmos hiperparâmetros de params.yaml, mesmo SMOTE-NC
-  (`train._balancear`), mesmas colunas categóricas.
+- O ajuste por fold é o de `train.treinar`, pela mesma fábrica
+  (`src/modelo.py`): mesmos hiperparâmetros de params.yaml, mesmo SMOTE-NC,
+  mesma logística, mesma calibração, mesmas colunas categóricas. Da linha de
+  comando vêm só o tipo, o balanceamento e a calibração.
+- `--calibracao sigmoid`: sigmoide de Platt com CV interna, dentro do fold de
+  treino (mede o Brier antes e depois da calibração).
 
 Extensões para o teste de sinal do dataset externo (ADR-014):
 - `--grupo id_paciente`: troca o `RepeatedStratifiedKFold` por
@@ -45,6 +48,8 @@ Uso (na raiz do repo):
     python scripts/avaliar_cv.py                                   # vigente
     python scripts/avaliar_cv.py --balanceamento class_weight
     python scripts/avaliar_cv.py --modelo logistica --balanceamento class_weight
+    python scripts/avaliar_cv.py --modelo logistica --balanceamento class_weight \
+        --calibracao sigmoid
     python scripts/avaliar_cv.py --sem-mlflow                      # só imprime
     python scripts/avaliar_cv.py --dados data/externo/consultas-externas.csv \
         --grupo id_paciente --modelo logistica --balanceamento class_weight \
@@ -58,12 +63,9 @@ import os
 import sys
 from pathlib import Path
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from scipy import stats
-from sklearn.compose import ColumnTransformer
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
@@ -73,8 +75,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import RepeatedStratifiedKFold, StratifiedGroupKFold
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
@@ -82,11 +82,12 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import contrato_dataset_externo as cde  # noqa: E402
+import modelo as modelo_ml  # noqa: E402
 import preprocess  # noqa: E402
-import train  # noqa: E402
 from config_projeto import carregar_params  # noqa: E402
 
 PARAMS = carregar_params()
+CONFIG_PARAMS = modelo_ml.config_do_modelo(PARAMS)
 
 DADOS_PADRAO = REPO_ROOT / "data" / "consultas-treino.csv"
 RANDOM_STATE = 42
@@ -95,13 +96,13 @@ N_REPEATS = 5
 # "Cortar 70% do custo de mensageria" do BRIEFING: avisar os 30% de maior risco.
 FRACAO_DA_FILA = 0.30
 
-MODELOS = ("lightgbm", "logistica")
-BALANCEAMENTOS = ("smotenc", "class_weight", "none")
+MODELOS = modelo_ml.TIPOS
+BALANCEAMENTOS = modelo_ml.BALANCEAMENTOS
+CALIBRACOES = modelo_ml.CALIBRACOES
 
-# Regularização da logística: o valor medido no diagnóstico do modelo. Fica aqui,
-# e não em params.yaml, enquanto a logística for só desafiante exploratória; vira
-# parâmetro quando model.tipo existir no pipeline oficial.
-C_LOGISTICA = 0.3
+# Regularização da logística: `model.logistica.C` do params.yaml (0,3, o valor
+# medido no diagnóstico do modelo, quando o params não o traz).
+C_LOGISTICA = CONFIG_PARAMS["C"]
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 MLFLOW_EXPERIMENT_NAME = os.environ.get("MLFLOW_EXPERIMENT_NAME", "saudeja-no-show")
@@ -127,49 +128,32 @@ METRICAS = (
 # Modelo por fold
 # --------------------------------------------------------------------------
 def _colunas_categoricas(X):
-    return [c for c in preprocess.COLUNAS_CATEGORICAS if c in X.columns]
+    return modelo_ml.colunas_categoricas(X, preprocess.COLUNAS_CATEGORICAS)
 
 
 def _logistica(X, class_weight):
-    """One-hot nas categóricas de vários níveis e padronização nas numéricas.
-    `sexo` já é 0/1 e passa direto. Label encoding (o que o LightGBM recebe)
-    não serve a um modelo linear: trataria a especialidade 6 como "maior" que a 2."""
-    categoricas = [c for c in _colunas_categoricas(X) if c != "sexo"]
-    numericas = [c for c in X.columns if c not in preprocess.COLUNAS_CATEGORICAS]
-    transformador = ColumnTransformer(
-        [
-            ("onehot", OneHotEncoder(handle_unknown="ignore"), categoricas),
-            ("padronizar", StandardScaler(), numericas),
-        ],
-        remainder="passthrough",
-    )
-    modelo = LogisticRegression(C=C_LOGISTICA, class_weight=class_weight, max_iter=2000)
-    return Pipeline([("transformar", transformador), ("modelo", modelo)])
+    """A logística da fábrica (`src/modelo.py`), com o `C` do params.yaml."""
+    return modelo_ml.logistica(X, preprocess.COLUNAS_CATEGORICAS, class_weight, C_LOGISTICA)
 
 
-def ajustar_no_fold(X_treino, y_treino, modelo, balanceamento):
-    """Ajusta a configuração pedida SÓ com as linhas de treino do fold.
-    O SMOTE-NC, quando pedido, gera as linhas sintéticas aqui dentro, a partir
-    de X_treino -- o fold de validação não passa por esta função."""
-    cat_cols = _colunas_categoricas(X_treino)
-    class_weight = "balanced" if balanceamento == "class_weight" else None
+def config_da_rodada(modelo, balanceamento, calibracao="none"):
+    """A configuração do params.yaml (hiperparâmetros, `C`, `k_neighbors`)
+    com tipo, balanceamento e calibração trocados pelos da linha de comando."""
+    config = modelo_ml.config_do_modelo(PARAMS)
+    config.update(tipo=modelo, balanceamento=balanceamento, calibracao=calibracao, C=C_LOGISTICA)
+    modelo_ml.validar_config(config)
+    return config
 
-    if balanceamento == "smotenc":
-        X_treino, y_treino = train._balancear(
-            X_treino, y_treino, cat_cols, PARAMS["balancing"]["k_neighbors"]
-        )
 
-    if modelo == "lightgbm":
-        kwargs = train._construir_modelo_kwargs()
-        # verbose só silencia o log de 25 ajustes; não muda o modelo.
-        estimador = lgb.LGBMClassifier(**kwargs, class_weight=class_weight, verbose=-1)
-        estimador.fit(X_treino, y_treino, categorical_feature=cat_cols)
-    elif modelo == "logistica":
-        estimador = _logistica(X_treino, class_weight)
-        estimador.fit(X_treino, y_treino)
-    else:
+def ajustar_no_fold(X_treino, y_treino, modelo, balanceamento, calibracao="none"):
+    """Ajusta a configuração pedida SÓ com as linhas de treino do fold, pela
+    mesma fábrica do `train.py` (`modelo.ajustar`). O SMOTE-NC e a CV interna
+    da calibração, quando pedidos, rodam aqui dentro, a partir de X_treino --
+    o fold de validação não passa por esta função."""
+    if modelo not in MODELOS:
         raise ValueError(f"modelo desconhecido: {modelo}")
-    return estimador
+    config = config_da_rodada(modelo, balanceamento, calibracao)
+    return modelo_ml.ajustar(X_treino, y_treino, config, preprocess.COLUNAS_CATEGORICAS)
 
 
 # --------------------------------------------------------------------------
@@ -258,6 +242,7 @@ def avaliar(
     n_repeats=N_REPEATS,
     random_state=RANDOM_STATE,
     grupos=None,
+    calibracao="none",
 ):
     """Roda a CV repetida e devolve {"folds": {métrica: [valores]},
     "resumo": {métrica: {media, desvio, ic95_inf, ic95_sup}}, "referencia": {...}}."""
@@ -269,7 +254,9 @@ def avaliar(
 
     folds = {m: [] for m in METRICAS}
     for idx_treino, idx_validacao in divisoes(X, y, grupos, n_splits, n_repeats, random_state):
-        estimador = ajustar_no_fold(X.iloc[idx_treino], y.iloc[idx_treino], modelo, balanceamento)
+        estimador = ajustar_no_fold(
+            X.iloc[idx_treino], y.iloc[idx_treino], modelo, balanceamento, calibracao
+        )
         X_val, y_val = X.iloc[idx_validacao], y.iloc[idx_validacao]
         y_proba = estimador.predict_proba(X_val)[:, 1]
         for nome, valor in metricas_do_fold(y_val, y_proba, threshold, fracao).items():
@@ -448,7 +435,7 @@ def logar_mlflow(resultado, args, n_linhas, dados_externos=False, extras=None):
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
-    with mlflow.start_run(run_name=f"cv-{args.modelo}-{args.balanceamento}"):
+    with mlflow.start_run(run_name=f"cv-{args.modelo}-{args.balanceamento}-{args.calibracao}"):
         mlflow.set_tag(PIPELINE_TAG_KEY, PIPELINE_TAG_VALUE)
         if dados_externos:
             # ADR-014: todo run que usa a origem externa é rastreável
@@ -463,6 +450,7 @@ def logar_mlflow(resultado, args, n_linhas, dados_externos=False, extras=None):
             {
                 "modelo": args.modelo,
                 "balancing": args.balanceamento,
+                "calibracao": args.calibracao,
                 "cv_n_splits": args.n_splits,
                 "cv_n_repeats": args.n_repeats,
                 "decision_threshold": args.threshold,
@@ -473,11 +461,11 @@ def logar_mlflow(resultado, args, n_linhas, dados_externos=False, extras=None):
             }
         )
         if args.modelo == "lightgbm":
-            mlflow.log_params(train._construir_modelo_kwargs())
+            mlflow.log_params(CONFIG_PARAMS["lightgbm"])
         else:
             mlflow.log_param("C", C_LOGISTICA)
         if args.balanceamento == "smotenc":
-            mlflow.log_param("k_neighbors", PARAMS["balancing"]["k_neighbors"])
+            mlflow.log_param("k_neighbors", CONFIG_PARAMS["k_neighbors"])
         for nome, r in resultado["resumo"].items():
             for estatistica, valor in r.items():
                 mlflow.log_metric(f"cv_{nome}_{estatistica}", valor)
@@ -487,6 +475,12 @@ def _parser():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--modelo", choices=MODELOS, default="lightgbm")
     p.add_argument("--balanceamento", choices=BALANCEAMENTOS, default="smotenc")
+    p.add_argument(
+        "--calibracao",
+        choices=CALIBRACOES,
+        default="none",
+        help="sigmoide de Platt dentro do fold (exige class_weight ou none)",
+    )
     p.add_argument("--dados", default=str(DADOS_PADRAO))
     p.add_argument("--threshold", type=float, default=PARAMS["decision"]["threshold"])
     p.add_argument("--fracao", type=float, default=FRACAO_DA_FILA)
@@ -520,6 +514,7 @@ def main(argv=None):
         n_splits=args.n_splits,
         n_repeats=args.n_repeats,
         grupos=grupos,
+        calibracao=args.calibracao,
     )
     imprimir(resultado, args, len(X))
     extras = {}

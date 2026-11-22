@@ -6,6 +6,17 @@ de uma clínica) e TreeExplainer sobre LightGBM é da ordem de milissegundos,
 então cobrir 100% das predições é mais simples por construção do que com um
 job assíncrono que pode falhar e deixar predições sem explicação.
 
+O explicador depende do tipo de modelo (`src/modelo.py`):
+- LightGBM sem calibração (o campeão em produção): `shap.TreeExplainer`, como
+  sempre;
+- regressão logística: `ExplicadorLinear`, o SHAP exato de um modelo linear
+  com fundo no dado de treino (o mesmo valor do `shap.LinearExplainer`
+  intervencional), somando as colunas do one-hot de volta na feature de origem;
+- modelo calibrado (sigmoide de Platt): o explicador da base, com as
+  contribuições escaladas pela calibração (`ExplicadorCalibrado`). A
+  calibração é afim na margem da base, então a soma continua fechando com o
+  log-odds da probabilidade mostrada.
+
 O valor numérico do SHAP (contribuição por feature, em log-odds/margem) é a
 fonte de verdade auditável e testável por aditividade
 (soma(contribuicoes) + expected_value ≈ margem prevista, ver
@@ -22,16 +33,104 @@ contexto do prompt por construção -- ver `contexto_sem_pii`.
 """
 from abc import ABC, abstractmethod
 
+import numpy as np
 import shap
 
+import modelo as modelo_ml
 from logging_config import chave_de_pii
 
 
 def construir_explicador(model):
-    """TreeExplainer sobre o LightGBM já treinado (model_output="raw", i.e.
-    em espaço de margem/log-odds -- é o espaço em que a aditividade SHAP
-    vale exatamente, ver docstring do módulo)."""
-    return shap.TreeExplainer(model)
+    """Explicador no espaço de log-odds da probabilidade que o modelo entrega
+    -- é o espaço em que a aditividade SHAP vale exatamente (ver docstring do
+    módulo). Todos expõem `shap_values(X)` e `expected_value`, a interface do
+    `shap.TreeExplainer`. Para o LightGBM sem calibração, é o próprio
+    TreeExplainer (model_output="raw")."""
+    base, escala, deslocamento = modelo_ml.base_e_calibracao(model)
+    if modelo_ml.tipo_do_estimador(base) == "lightgbm":
+        explicador = shap.TreeExplainer(base)
+    else:
+        explicador = ExplicadorLinear(base)
+    if modelo_ml.calibrado(model):
+        return ExplicadorCalibrado(explicador, escala, deslocamento)
+    return explicador
+
+
+class ExplicadorLinear:
+    """SHAP exato da regressão logística (`Pipeline` de `src/modelo.py`).
+
+    Num modelo linear com features tratadas como independentes, a
+    contribuição de cada coluna transformada é coef * (valor - média no
+    treino), e o valor esperado é intercepto + coef . média -- a soma das
+    contribuições mais o esperado dá a margem (`decision_function`) por
+    construção. As colunas do one-hot de uma categórica somam numa
+    contribuição só, a da feature de origem: a explicação fala em
+    "especialidade", não em "especialidade_3".
+    """
+
+    def __init__(self, pipeline):
+        self._transformar = pipeline.named_steps["transformar"]
+        regressao = pipeline.named_steps["modelo"]
+        self._coef = np.asarray(regressao.coef_[0], dtype=float)
+        self._media = np.asarray(pipeline.media_transformada_, dtype=float)
+        self.expected_value = float(regressao.intercept_[0] + self._coef @ self._media)
+        self._colunas = [str(c) for c in pipeline.feature_names_in_]
+        origem = _feature_de_cada_saida(self._transformar)
+        if len(origem) != len(self._coef):
+            raise ValueError(
+                f"o transformador gera {len(origem)} colunas, a regressão tem {len(self._coef)}"
+            )
+        # matriz (colunas transformadas x features de origem) que soma o one-hot
+        self._agregar = np.zeros((len(origem), len(self._colunas)))
+        for i, nome in enumerate(origem):
+            self._agregar[i, self._colunas.index(nome)] = 1.0
+
+    def shap_values(self, X):
+        Z = np.asarray(self._transformar.transform(X[self._colunas]), dtype=float)
+        return (self._coef * (Z - self._media)) @ self._agregar
+
+
+def _feature_de_cada_saida(transformador) -> list[str]:
+    """Feature de origem de cada coluna que o `ColumnTransformer` produz, na
+    ordem de saída. One-hot: uma coluna por categoria vista, menos a
+    descartada (`drop="if_binary"`); padronização: uma por feature."""
+    origem: list[str] = []
+    for nome, etapa, colunas in transformador.transformers_:
+        if nome == "remainder" or etapa == "drop" or len(colunas) == 0:
+            continue
+        if nome == "onehot":
+            descartadas = getattr(etapa, "drop_idx_", None)
+            for i, coluna in enumerate(colunas):
+                n = len(etapa.categories_[i])
+                if descartadas is not None and descartadas[i] is not None:
+                    n -= 1
+                origem += [str(coluna)] * n
+        else:
+            origem += [str(c) for c in colunas]
+    return origem
+
+
+class ExplicadorCalibrado:
+    """Explicador de um modelo calibrado: log-odds final = escala * margem da
+    base + deslocamento (ver `modelo.base_e_calibracao`). Escalar cada
+    contribuição e levar o deslocamento para o valor esperado mantém a soma
+    exata no espaço da probabilidade calibrada."""
+
+    def __init__(self, explicador_base, escala: float, deslocamento: float):
+        self._base = explicador_base
+        self._escala = escala
+        esperado_base = float(_esperado_classe_positiva(explicador_base))
+        self.expected_value = escala * esperado_base + deslocamento
+
+    def shap_values(self, X):
+        valores, _ = _valores_classe_positiva(self._base, X)
+        return self._escala * np.asarray(valores, dtype=float)
+
+
+def _esperado_classe_positiva(explainer) -> float:
+    """Valor esperado da classe positiva: escalar, ou o último de um vetor
+    [neg, pos] (ou de um vetor de um elemento só)."""
+    return float(np.ravel(explainer.expected_value)[-1])
 
 
 def _valores_classe_positiva(explainer, X):

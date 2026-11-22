@@ -39,7 +39,6 @@ import json
 import sys
 from pathlib import Path
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from scipy import optimize
@@ -51,8 +50,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import contrato_dataset_externo as cde  # noqa: E402
+import modelo as modelo_ml  # noqa: E402
 import preprocess  # noqa: E402
-import train  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "avaliar_cv", REPO_ROOT / "scripts" / "avaliar_cv.py"
@@ -97,21 +96,11 @@ COEF_ESPECIALIDADE = {"cardiologia": -0.4, "pediatria": 0.4, "dermatologia": 0.3
 # modelo e métricas
 # --------------------------------------------------------------------------
 def ajustar(X, y, modelo, peso=None):
-    """Mesmo ajuste do `avaliar_cv` (logística com one-hot e padronização;
-    LightGBM com os hiperparâmetros do params.yaml), com `class_weight`
-    balanceado e peso por linha opcional (o peso da semente, na 5c)."""
-    if modelo == "logistica":
-        estimador = avaliar_cv._logistica(X, "balanced")
-        estimador.fit(X, y, modelo__sample_weight=peso)
-    elif modelo == "lightgbm":
-        cat_cols = avaliar_cv._colunas_categoricas(X)
-        estimador = lgb.LGBMClassifier(
-            **train._construir_modelo_kwargs(), class_weight="balanced", verbose=-1
-        )
-        estimador.fit(X, y, sample_weight=peso, categorical_feature=cat_cols)
-    else:
-        raise ValueError(f"modelo desconhecido: {modelo}")
-    return estimador
+    """Mesmo ajuste do `avaliar_cv` e do `train.py` (a fábrica de
+    `src/modelo.py`), com `class_weight` balanceado e peso por linha opcional
+    (o peso da semente, na 5c)."""
+    config = avaliar_cv.config_da_rodada(modelo, "class_weight")
+    return modelo_ml.ajustar(X, y, config, preprocess.COLUNAS_CATEGORICAS, sample_weight=peso)
 
 
 def medir(y, proba):

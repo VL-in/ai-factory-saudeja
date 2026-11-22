@@ -40,7 +40,7 @@ def test_fold_de_validacao_nunca_recebe_linha_sintetica(X_y, monkeypatch):
     X, y = X_y
     chamadas = []
 
-    class Espiao(avaliar_cv.lgb.LGBMClassifier):
+    class Espiao(avaliar_cv.modelo_ml.LGBMComMargem):
         def fit(self, X_fit, y_fit, **kwargs):
             chamadas.append({"fit": X_fit.copy()})
             return super().fit(X_fit, y_fit, **kwargs)
@@ -49,7 +49,7 @@ def test_fold_de_validacao_nunca_recebe_linha_sintetica(X_y, monkeypatch):
             chamadas[-1]["predict"] = X_pred.copy()
             return super().predict_proba(X_pred, **kwargs)
 
-    monkeypatch.setattr(avaliar_cv.lgb, "LGBMClassifier", Espiao)
+    monkeypatch.setattr(avaliar_cv.modelo_ml, "LGBMComMargem", Espiao)
     n_splits, n_repeats = 3, 2
 
     avaliar_cv.avaliar(

@@ -40,6 +40,7 @@ import numpy as np
 
 import contrato_features
 import inference
+import modelo as modelo_ml
 from config_projeto import carregar_params, fuso_da_clinica
 from explain import _valores_classe_positiva, construir_explicador
 
@@ -136,7 +137,7 @@ def _checar_aditividade(model: Any, X: Any, resultado: ResultadoSanidade) -> Non
     prevê -- senão a explicação na fila não é a da probabilidade mostrada."""
     amostra = X.iloc[:LINHAS_PARA_SHAP]
     valores, esperado = _valores_classe_positiva(construir_explicador(model), amostra)
-    margem = model.predict(amostra, raw_score=True)
+    margem = modelo_ml.margem(model, amostra)
     erro = float(np.max(np.abs(np.asarray(valores).sum(axis=1) + float(esperado) - margem)))
     if erro > TOLERANCIA_ADITIVIDADE:
         resultado.falhas.append(
@@ -193,14 +194,14 @@ def _avisar_dominio(model: Any, resultado: ResultadoSanidade) -> None:
     """O domínio do contrato (o que marca `fora_do_dominio`) tem de ser o que
     o modelo de fato viu. Um re-treino com dado novo (distância 60 km) muda o
     que o modelo viu sem mudar o contrato -- a marca passaria a mentir."""
-    infos = model.booster_.dump_model().get("feature_infos", {})
+    maximos = modelo_ml.maximos_vistos(model)
     for campo in contrato_features.CAMPOS_NUMERICOS:
-        info = infos.get(campo.nome)
-        if not info or campo.dominio.maximo is None:
+        maximo = maximos.get(campo.nome)
+        if maximo is None or campo.dominio.maximo is None:
             continue
-        if float(info["max_value"]) != float(campo.dominio.maximo):
+        if float(maximo) != float(campo.dominio.maximo):
             resultado.avisos.append(
-                f"{campo.nome}: o modelo viu até {info['max_value']:g}, o contrato marca "
+                f"{campo.nome}: o modelo viu até {maximo:g}, o contrato marca "
                 f"fora do domínio acima de {campo.dominio.maximo:g} -- atualizar "
                 "src/contrato_features.py"
             )

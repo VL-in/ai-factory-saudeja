@@ -154,3 +154,28 @@ def test_construir_features_lote_bate_com_linha_a_linha():
     for i, payload in enumerate(payloads):
         linha = inference.construir_features(payload, mapa)
         assert lote.iloc[[i]].reset_index(drop=True).equals(linha.reset_index(drop=True))
+
+
+@pytest.mark.parametrize(
+    ("tipo", "balanceamento", "calibracao"),
+    [("logistica", "class_weight", "sigmoid"), ("lightgbm", "class_weight", "sigmoid")],
+)
+def test_assinatura_vale_para_logistica_e_modelo_calibrado(tipo, balanceamento, calibracao):
+    """O mesmo contrato de colunas, ordem e categóricas para qualquer tipo de
+    modelo: aceita o que o código monta, recusa colunas fora de ordem."""
+    import modelo
+    import preprocess
+    from test_modelo import _config, dataset_sintetico
+
+    X, y, _ = preprocess.preprocessar(dataset_sintetico())
+    ajustado = modelo.ajustar(
+        X, y, _config(tipo, balanceamento, calibracao), preprocess.COLUNAS_CATEGORICAS
+    )
+    inference.verificar_assinatura(ajustado, features_temporais=True)
+
+    invertido = modelo.ajustar(
+        X[list(reversed(X.columns))], y, _config(tipo, balanceamento, calibracao),
+        preprocess.COLUNAS_CATEGORICAS,
+    )
+    with pytest.raises(inference.ModeloIncompativelError):
+        inference.verificar_assinatura(invertido, features_temporais=True)

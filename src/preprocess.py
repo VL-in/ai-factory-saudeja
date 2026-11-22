@@ -108,6 +108,10 @@ def dividir_treino_teste(X, y):
     )
 
 
+def _origem_de(origem, X):
+    return None if origem is None else origem.loc[X.index]
+
+
 def main():
     for path in (TRAIN_RAW_PATH, TEST_PATH, MAPA_ESPECIALIDADE_PATH):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -116,8 +120,14 @@ def main():
     X, y, mapa_esp = preprocessar(df)
     X_train, X_test, y_train, y_test = dividir_treino_teste(X, y)
 
-    joblib.dump({"X": X_train, "y": y_train}, TRAIN_RAW_PATH)
-    joblib.dump({"X": X_test, "y": y_test}, TEST_PATH)
+    # A origem (semente | producao | externa) viaja junto, fora de X: não é
+    # feature, mas o treino marca o run com `dados_externos` quando há linha
+    # externa (ADR-014) e as métricas podem ser separadas por origem.
+    origem = df["origem"].astype(str) if "origem" in df.columns else None
+    joblib.dump(
+        {"X": X_train, "y": y_train, "origem": _origem_de(origem, X_train)}, TRAIN_RAW_PATH
+    )
+    joblib.dump({"X": X_test, "y": y_test, "origem": _origem_de(origem, X_test)}, TEST_PATH)
     with open(MAPA_ESPECIALIDADE_PATH, "w") as f:
         json.dump(mapa_esp, f)
 
