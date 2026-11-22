@@ -8,7 +8,7 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
-## [Não publicado]
+## [v3.3.0] (Vanessa + Claude) - 2026-11-22
 
 ### Adicionado
 - **Curva de custo por fração da fila no `scripts/avaliar_cv.py`** (`--curva`). Com a mesma validação cruzada, o script calcula a curva da regra por orçamento: para cada fração da fila avisada (`--fracoes`, padrão de 10% a 60% e 100%), avisa os pacientes de maior probabilidade fora da amostra e mostra recall, precisão, lift, custo de SMS, faltas evitadas e receita preservada por 1.000 consultas, com a linha do sorteio para comparar. As probabilidades vêm dos mesmos ajustes das métricas, sem treinar de novo. As premissas são declaradas e ajustáveis: eficácia do lembrete (`--eficacia`, 30% assumidos), custo da falta (`--custo-falta`, R$ 180), segmentos por lembrete (`--segmentos`, 2), e o preço do SMS e o câmbio do `params.yaml`. É a tabela do SLA §4.1, que agora traz o comando para reproduzi-la. Com MLflow, a curva vai para a run (`curva_recall_30`, `curva_lift_30`, `curva_receita_30`…) e as premissas vão como parâmetros. Nada muda no modelo em produção.
