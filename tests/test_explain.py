@@ -6,6 +6,7 @@ import pytest
 
 import explain
 import inference
+import modelo as modelo_ml
 
 
 class _ExplicadorFalso:
@@ -89,7 +90,7 @@ def test_explicar_aditividade_bate_com_margem_prevista(explicacao_real):
     contribuicoes = explain.explicar(explainer, X)
 
     soma = sum(c["contribuicao"] for c in contribuicoes)
-    margem_prevista = model.predict(X, raw_score=True)[0]
+    margem_prevista = modelo_ml.margem(model, X)[0]
 
     assert soma + explainer.expected_value == pytest.approx(margem_prevista, abs=1e-6)
 
@@ -317,8 +318,18 @@ def test_explicador_linear_e_o_shap_linear_intervencional(X_y_sintetico):
     assert nosso.expected_value == pytest.approx(float(np.ravel(referencia.expected_value)[0]))
 
 
-def test_campeao_lightgbm_continua_com_o_tree_explainer():
+def test_campeao_usa_o_explicador_da_familia_dele():
+    """LightGBM sem calibração continua no `shap.TreeExplainer`; logística, no
+    `ExplicadorLinear`; calibrado, embrulhado no `ExplicadorCalibrado`."""
     import shap
 
     model, _ = inference.carregar_modelo("data/model.pkl")
-    assert isinstance(explain.construir_explicador(model), shap.TreeExplainer)
+    explicador = explain.construir_explicador(model)
+    if modelo_ml.calibrado(model):
+        assert isinstance(explicador, explain.ExplicadorCalibrado)
+        explicador = explicador._base
+    esperado = {
+        "lightgbm": shap.TreeExplainer,
+        "logistica": explain.ExplicadorLinear,
+    }[modelo_ml.tipo_do_modelo(model)]
+    assert isinstance(explicador, esperado)

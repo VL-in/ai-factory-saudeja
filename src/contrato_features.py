@@ -20,9 +20,10 @@ UI. Aqui mora a regra única, aplicada no job, no export do re-treino, no
   (distância 60 km, 120 dias de antecedência). Decisão da autora: marcar,
   nunca rejeitar.
 
-As faixas do domínio são o que o modelo vigente de fato viu (`feature_infos`
-do booster: idade 0-85, distância até 50, antecedência 1-90, histórico até 10,
-seg-sáb 8h-18h). A suíte de sanidade (`src/sanidade_modelo.py`) avisa se um
+As faixas do domínio são o que o modelo vigente de fato viu
+(`modelo.maximos_vistos`: idade 0-85, distância até 53 -- 50 na semente, 53
+com os desfechos de produção do re-treino de 2026-11 --, antecedência 1-90,
+histórico até 10, seg-sáb 8h-18h). A suíte de sanidade (`src/sanidade_modelo.py`) avisa se um
 modelo re-treinado passar a ver outra coisa.
 
 **Coerção explícita, não implícita.** `"45"` e `45.0` viram `45`; `45.5` é
@@ -103,7 +104,7 @@ DISTANCIA_MAXIMA_KM = 500.0
 CAMPOS_NUMERICOS = (
     CampoNumerico("idade", inteiro=True, negocio=Faixa(0, 120), dominio=Faixa(0, 85)),
     CampoNumerico(
-        "distancia_km", inteiro=False, negocio=Faixa(0, DISTANCIA_MAXIMA_KM), dominio=Faixa(0, 50)
+        "distancia_km", inteiro=False, negocio=Faixa(0, DISTANCIA_MAXIMA_KM), dominio=Faixa(0, 53)
     ),
     CampoNumerico(
         "dias_entre_agendamento_consulta",
