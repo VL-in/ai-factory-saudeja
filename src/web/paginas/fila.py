@@ -59,7 +59,7 @@ SLOT_RISCO = r"""
     <q-badge v-if="props.row.alto_risco" color="negative" outline label="alto risco" />
     <q-icon v-if="props.row.incerto" name="help_outline" color="warning" size="18px">
       <q-tooltip>Previsão incerta: o agendamento tem dados diferentes dos que o sistema
-        costuma ver (ex.: distância acima de 50 km, antecedência acima de 90 dias). Use a
+        costuma ver (ex.: distância ou antecedência bem maiores que o habitual). Use a
         probabilidade com cautela.</q-tooltip>
     </q-icon>
   </div>
@@ -87,10 +87,10 @@ PASSOS_DA_REVISAO = (
     "Se algum dado estiver errado (distância, histórico, horário), corrija o cadastro.",
     "Se o lembrete deveria ter sido enviado, avise o paciente por telefone. A decisão nunca "
     "afeta o atendimento.",
-    "Explique ao paciente o resultado. Se a predição não aparecer (mais de 90 dias) ou se o "
+    "Explique ao paciente o resultado. Se a avaliação não aparecer (mais de 90 dias) ou se o "
     f"paciente contestar o critério, escreva para {CANAL_REVISAO_SAUDEJA} com o assunto "
-    '"Revisão art. 20" e o código do agendamento (em "Detalhes técnicos" da linha). Não '
-    "envie nome, CPF, telefone nem o identificador interno do paciente.",
+    '"Revisão art. 20" e o código do agendamento (no fim do detalhe do paciente). Não '
+    "envie nome, CPF nem telefone do paciente.",
 )
 
 
@@ -238,8 +238,7 @@ class FilaDoDia:
                 )
                 tema.cartao_metrica(
                     "Alto risco", resumo["alto_risco"], "warning", "red",
-                    "Os escolhidos para o lembrete pago. "
-                    + logic.descrever_regra(logic.regra_de_decisao())[1],
+                    logic.descrever_regra(logic.regra_de_decisao())[1],
                 )
                 tema.cartao_metrica(
                     "Sem predição", resumo["sem_predicao"], "hourglass_empty", "slate",
@@ -319,21 +318,29 @@ class FilaDoDia:
                 )
             mostrar_motivos(item.explicacao, item.explicacao_texto)
 
-        # O identificador continua acessível: é por ele que se rastreia o
-        # paciente no banco e nos logs (onde o nome nunca aparece). O código do
-        # agendamento é o que vai num pedido de revisão à SaúdeJá.
-        with ui.expansion("Detalhes técnicos").classes("w-full text-sm").props("dense"):
-            ui.label(f"código do agendamento: {item.id_agendamento}").classes(
-                "font-mono text-xs break-all"
-            )
-            ui.label(f"identificador interno: {item.id_paciente_externo}").classes(
-                "font-mono text-xs break-all"
-            )
-            if item.tem_predicao:
-                ui.label(
-                    f"probabilidade {item.probabilidade:.1%} · modelo {item.model_version} · "
-                    "explicação lida de predicoes.explicacao_shap"
-                ).classes("font-mono text-xs break-all")
+        # Só o código do agendamento: é o que a recepção usa (pedido do titular,
+        # apoio à SaúdeJá). O identificador interno (hash do CPF, que pode ser
+        # revertido) e a versão do modelo não servem a quem atende; o time
+        # técnico chega a eles pelo código, no banco.
+        ui.separator()
+        with ui.row().classes("w-full items-center gap-1 no-wrap"):
+            ui.label("Código do agendamento").classes("text-sm font-semibold grow")
+            ui.button(
+                icon="content_copy", on_click=lambda: self._copiar_codigo(item.id_agendamento)
+            ).props('flat round dense size=sm aria-label="Copiar código"').tooltip(
+                "Copiar código"
+            ).mark("copiar-codigo")
+        ui.label(item.id_agendamento).classes("font-mono text-xs break-all sj-suave").mark(
+            "codigo-agendamento"
+        )
+        ui.label(
+            "Use este código para registrar um pedido do paciente ou pedir apoio à SaúdeJá."
+        ).classes("text-xs sj-suave")
+
+    @staticmethod
+    def _copiar_codigo(codigo: str) -> None:
+        ui.clipboard.write(codigo)
+        ui.notify("Código copiado.", type="positive", icon="content_copy")
 
 
 def mostrar_motivos(explicacao: list, explicacao_texto: str | None = None) -> None:

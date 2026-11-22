@@ -48,7 +48,7 @@ O mesmo roteiro aparece na tela "Fila do dia", no quadro "Paciente pediu revisã
 ## 4 PEDIDO DE APOIO À SAÚDEJÁ
 
 - **Canal:** e-mail para o encarregado da SaúdeJá, Vanessa Lin, `v.lin@gmail.com`, com o assunto "Revisão art. 20".
-- **Conteúdo:** o código do agendamento, exibido em "Detalhes técnicos" da linha, e a dúvida da clínica.
+- **Conteúdo:** o código do agendamento, exibido no fim do detalhe do paciente, na Fila do dia, e a dúvida da clínica.
 - **Não enviar:** nome, CPF, telefone nem o identificador interno do paciente. O identificador é o hash do CPF, que pode ser revertido.
 - **Prazo da SaúdeJá:** resposta em até 5 dias úteis, para a clínica conseguir cumprir os 15 dias.
 - **Resposta da SaúdeJá:** a probabilidade, a explicação registrada em `predicoes.explicacao_shap` e a versão do modelo, enquanto a predição existir. Depois de 90 dias, só a descrição geral dos critérios do modelo, respeitado o segredo comercial (art. 20, § 1º).

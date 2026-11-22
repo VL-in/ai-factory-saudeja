@@ -708,6 +708,22 @@ def test_decision_modo_de_params_nao_muda_o_campeao_legado(repositorio, monkeypa
     assert {p["modo_decisao"] for p in falso.predicoes} == {"threshold"}
 
 
+def test_sem_registro_do_campeao_decide_pela_regra_inteira_de_params(
+    repositorio, tmp_path, monkeypatch
+):
+    """Imagem do Space (sem champion_metrics.json): a aba de dev decide pela
+    regra de params.yaml, e não pelo threshold -- com ele, o modelo calibrado
+    não avisaria ninguém."""
+    falso = repositorio(_fila_variada(10), threshold=1.01)
+    job.inference.PARAMS["decision"].update(modo="top_fracao", fracao_da_fila=0.3)
+    monkeypatch.setenv("CHAMPION_METRICS_PATH", str(tmp_path / "nao_existe.json"))
+
+    job.processar_dia(cliente_mensageria=_Espiao())
+
+    assert sum(status == "enviado" for _, status in falso.mensagens) == 3  # ceil(0,3 x 10)
+    assert {p["modo_decisao"] for p in falso.predicoes} == {"top_fracao"}
+
+
 def test_pos_checagem_nao_avisa_disparo_dentro_do_orcamento_arredondado():
     """Fila de 7 no top_fracao: 3 lembretes (43%) é o orçamento, não excesso."""
     resultado = _resultado(predicoes_gravadas=7, agendamentos_encontrados=7,

@@ -41,7 +41,6 @@ import httpx  # noqa: E402
 from supabase_auth.errors import AuthApiError  # noqa: E402
 
 import agenda_clinica  # noqa: E402
-import campeao  # noqa: E402
 import consentimento  # noqa: E402
 import contrato_features  # noqa: E402
 import db.client as db_client  # noqa: E402
@@ -137,20 +136,9 @@ class LeituraDoLembrete:
 
 
 def regra_de_decisao() -> decisao.ConfigDecisao:
-    """A regra que decide o lembrete pago, para a tela explicar uma predição.
-
-    A do campeão (`champion_metrics.json`, bloco `decisao`), que é a que o job
-    D-2 agendado usa. O registro não vai para a imagem do Space, e lá a regra
-    vem do bloco `decision` de `params.yaml` -- o gate grava o bloco `decisao`
-    a partir dele, então os dois só divergem entre um re-treino que mudou a
-    regra e a promoção do desafiante."""
-    try:
-        registro = campeao.carregar_campeao()
-    except (FileNotFoundError, ValueError):
-        registro = {}
-    if registro.get("decisao"):
-        return decisao.config_registrada(registro)
-    return decisao.config_de_params(inference.PARAMS)
+    """A regra que decide o lembrete pago, para a tela explicar uma predição:
+    a mesma do braço campeão do job D-2 (ver `regra_do_campeao`)."""
+    return job_inferencia_diaria.regra_do_campeao()
 
 
 def _pct(valor: float) -> str:
@@ -873,21 +861,21 @@ def validar_cadastro(
 
     if nome_completo is not None and not nome_valido(nome_completo):
         problemas.append(
-            f"Nome inválido -- informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
+            f"Nome inválido: informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
         )
     if not cpf_valido(cpf):
-        problemas.append("CPF inválido -- confira os números digitados.")
+        problemas.append("CPF inválido: confira os números digitados.")
     if not telefone_valido(telefone):
-        problemas.append("Telefone inválido -- informe DDD + número (ex. (11) 98765-4321).")
+        problemas.append("Telefone inválido: informe DDD + número (ex. (11) 98765-4321).")
     if data_nascimento is None:
         problemas.append("Informe a data de nascimento.")
     elif not data_nascimento_valida(data_nascimento, data_consulta, hoje):
         problemas.append(
-            "Data de nascimento inválida -- informe uma data até hoje, de quem terá no "
+            "Data de nascimento inválida: informe uma data até hoje, de quem terá no "
             f"máximo {IDADE_MAXIMA} anos na data da consulta."
         )
     if sexo not in contrato_features.SEXOS_VALIDOS:
-        problemas.append("Sexo inválido -- escolha uma das opções da lista.")
+        problemas.append("Sexo inválido: escolha uma das opções da lista.")
 
     # Antes, sem lista de especialidades, o formulário caía em texto livre e
     # gravava qualquer coisa -- o erro só aparecia no job D-2, dias depois,
@@ -899,7 +887,7 @@ def validar_cadastro(
             "está configurada. Tente mais tarde ou fale com a clínica."
         )
     elif especialidade not in especialidades:
-        problemas.append("Especialidade inválida -- escolha uma das opções da lista.")
+        problemas.append("Especialidade inválida: escolha uma das opções da lista.")
 
     # Vazio é erro, nunca 0 km: a distância é feature do modelo, e um zero
     # inventado vira predição sobre quem mora na porta da clínica.
@@ -907,12 +895,12 @@ def validar_cadastro(
         problemas.append("Informe a distância até a clínica, em km.")
     elif not _distancia_valida(distancia_km):
         problemas.append(
-            f"Distância inválida -- informe um valor entre 0 e {DISTANCIA_MAXIMA_KM:g} km."
+            f"Distância inválida: informe um valor entre 0 e {DISTANCIA_MAXIMA_KM:g} km."
         )
 
     if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje):
         problemas.append(
-            "Data da consulta inválida -- escolha entre hoje e "
+            "Data da consulta inválida: escolha entre hoje e "
             f"{agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS} dias à frente."
         )
     if hora_consulta is None:
@@ -940,7 +928,7 @@ def validar_cadastro(
         )
         if violacao is not None:
             rotulo = ROTULOS_FEATURES.get(violacao.campo, violacao.campo)
-            problemas.append(f"{rotulo}: valor não aceito -- confira o campo.")
+            problemas.append(f"{rotulo}: valor não aceito. Confira o campo.")
 
     return problemas
 
@@ -1178,7 +1166,9 @@ def registrar_pedido_da_clinica(codigo_agendamento: str, tipo: str) -> None:
     confirma em seguida, depois de conferir a identidade de quem pede."""
     codigo = (codigo_agendamento or "").strip()
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", codigo):
-        raise ErroPedido("Código do agendamento inválido -- copie-o de \"Detalhes técnicos\".")
+        raise ErroPedido(
+            "Código do agendamento inválido. Copie-o do detalhe do paciente, na Fila do dia."
+        )
     try:
         id_paciente = repositories.paciente_do_agendamento(codigo)
         if id_paciente is None:
@@ -1200,7 +1190,7 @@ def encaminhar_pedido_ao_treino(cpf: str) -> None:
     aprimoramento: diria a quem digitasse um CPF alheio se aquela pessoa
     autorizou o treino."""
     if not cpf_valido(cpf):
-        raise ErroPedido("CPF inválido -- confira os números digitados.")
+        raise ErroPedido("CPF inválido: confira os números digitados.")
     try:
         repositorio_treino.registrar_pedido(pseudonimo.id_titular(cpf), "eliminacao", "clinica")
     except Exception as exc:

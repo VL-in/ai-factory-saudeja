@@ -1263,14 +1263,14 @@ def test_data_nascimento_minima_e_a_de_quem_tem_120_anos(referencia, minima):
     "sobrescritos, problema",
     [
         ({"distancia_km": None}, "Informe a distância até a clínica, em km."),
-        ({"distancia_km": -3.0}, "Distância inválida -- informe um valor entre 0 e 500 km."),
-        ({"distancia_km": 500.5}, "Distância inválida -- informe um valor entre 0 e 500 km."),
+        ({"distancia_km": -3.0}, "Distância inválida: informe um valor entre 0 e 500 km."),
+        ({"distancia_km": 500.5}, "Distância inválida: informe um valor entre 0 e 500 km."),
         (
             {"distancia_km": float("nan")},
-            "Distância inválida -- informe um valor entre 0 e 500 km.",
+            "Distância inválida: informe um valor entre 0 e 500 km.",
         ),
-        ({"sexo": "X"}, "Sexo inválido -- escolha uma das opções da lista."),
-        ({"sexo": None}, "Sexo inválido -- escolha uma das opções da lista."),
+        ({"sexo": "X"}, "Sexo inválido: escolha uma das opções da lista."),
+        ({"sexo": None}, "Sexo inválido: escolha uma das opções da lista."),
     ],
     ids=["distancia-vazia", "distancia-negativa", "acima-de-500", "nan", "sexo-x", "sexo-vazio"],
 )
@@ -1299,14 +1299,14 @@ def test_regra_do_contrato_que_o_cadastro_nao_conhece_ainda_recusa(hoje_fixo, mo
     monkeypatch.setattr(logic.contrato_features, "violacao_ou_none", contrato_mais_estrito)
 
     assert logic.validar_cadastro(**_campos_validos()) == [
-        "Faltas anteriores: valor não aceito -- confira o campo."
+        "Faltas anteriores: valor não aceito. Confira o campo."
     ]
 
 
 def test_especialidade_fora_da_lista_e_recusada(hoje_fixo):
     problemas = logic.validar_cadastro(**_campos_validos(especialidade="cardio"))
 
-    assert problemas == ["Especialidade inválida -- escolha uma das opções da lista."]
+    assert problemas == ["Especialidade inválida: escolha uma das opções da lista."]
 
 
 def test_sem_lista_de_especialidades_o_cadastro_e_recusado(hoje_fixo, monkeypatch):
@@ -1341,7 +1341,7 @@ def test_cadastro_com_varios_erros_nao_toca_o_banco_e_lista_todos(hoje_fixo, mon
         )
 
     assert erro.value.problemas == [
-        "CPF inválido -- confira os números digitados.",
+        "CPF inválido: confira os números digitados.",
         "Informe a data de nascimento.",
     ]
 
