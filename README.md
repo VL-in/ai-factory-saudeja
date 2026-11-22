@@ -6,7 +6,7 @@
 [![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Space-produ%C3%A7%C3%A3o-yellow)](https://vl-in-saudeja-prod.hf.space)
 [![Licença MIT](https://img.shields.io/github/license/VL-in/ai-factory-saudeja)](LICENSE)
 
-Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia lembrete por SMS só para eles, dois dias antes do atendimento.
+Prevê o risco de cada paciente faltar a uma consulta e envia lembrete por SMS só para os de maior risco, dentro do orçamento de mensageria, dois dias antes do atendimento.
 
 **Demonstração:** <https://vl-in-saudeja-prod.hf.space> · **Painéis ao vivo:** [Grafana Cloud, sem login](#painéis-públicos) · **Histórico de versões:** [CHANGELOG](docs/logs/CHANGELOG.md)
 
@@ -27,7 +27,7 @@ Prevê quais pacientes têm alta probabilidade de faltar a uma consulta e envia 
 
 ## Visão geral
 
-O SaúdeJá é um SaaS (fictício) para clínicas particulares de pequeno e médio porte, com agendamento online, prontuário, faturamento e comunicação com pacientes. Este repositório desenvolve a funcionalidade que prevê quais pacientes vão faltar à consulta, com um classificador LightGBM e a explicação SHAP de cada previsão.
+O SaúdeJá é um SaaS (fictício) para clínicas particulares de pequeno e médio porte, com agendamento online, prontuário, faturamento e comunicação com pacientes. Este repositório desenvolve a funcionalidade que prevê quais pacientes vão faltar à consulta, com uma regressão logística de probabilidade calibrada e a explicação SHAP de cada previsão.
 
 ### Problema
 
@@ -37,14 +37,47 @@ O no-show custa em média **R$ 180 por consulta perdida**, e a taxa nacional gir
 
 - **Autoagendamento:** o paciente se cadastra pelo CPF e marca a consulta na interface web.
 - **Predição D-2:** todo dia, um job calcula o risco de falta das consultas dos próximos dois dias e grava a explicação de cada uma.
-- **Lembrete seletivo:** só quem passa do limite de risco recebe SMS, apenas com data e hora da consulta.
+- **Lembrete seletivo:** os 30% de maior risco da fila de cada dia recebem SMS, apenas com data e hora da consulta.
 - **Fila do dia:** a equipe da clínica vê os pacientes ordenados por risco, com a explicação, registra quem compareceu e atende os pedidos de titular da LGPD.
 - **Ciclo de vida do modelo:** re-treino mensal com os desfechos registrados pela clínica, gate de promoção, canário com 20% da fila e rollback.
 - **Observabilidade:** logs, métricas e traces no Grafana Cloud, sem dado pessoal, com alertas por criticidade e sonda de disponibilidade.
 
+### Como o modelo decide
+
+Desde a v3.3.1 (22/11/2026), o modelo em produção (`07bcfede25ea`) é uma **regressão logística com `class_weight="balanced"` e calibração sigmoide** ([ADR-015](docs/adr/adr-015-familia-do-modelo-e-calibracao.md)), no lugar do LightGBM com SMOTE-NC. Em validação cruzada, a logística ordenou os pacientes por risco melhor que o LightGBM: com cerca de 300 linhas de treino e sinal fraco, o modelo simples erra menos por variância.
+
+O lembrete pago segue uma **regra por orçamento** ([ADR-016](docs/adr/adr-016-regra-de-decisao-por-orcamento.md)), e não mais um corte fixo de probabilidade:
+
+1. o job D-2 prediz a fila inteira dos próximos dois dias e a ordena por probabilidade;
+2. avisa os ⌈0,30 × fila⌉ de maior risco (`decision.fracao_da_fila`, o "cortar 70% do custo de mensageria" do [BRIEFING](docs/BRIEFING.md));
+3. duas válvulas ajustam o corte: abaixo de **0,15** de probabilidade ninguém é avisado, mesmo com orçamento sobrando, e acima de **0,50** o aviso sai mesmo estourando os 30%.
+
+A probabilidade é calibrada, ou seja, fica perto da frequência real de falta (em torno de 27%). Por isso ela quase nunca passa de 0,6, e a `classe_prevista` do `/predict`, que ainda usa esse threshold, fica quase sempre 0. Quem decide o lembrete é a posição na fila. A regra viaja com o modelo, no bloco `decisao` de [`data/champion_metrics.json`](data/champion_metrics.json): mudar o `params.yaml` só afeta o próximo desafiante, que passa pelo gate.
+
 ### Desempenho do modelo
 
-Medido no fold de teste isolado, o modelo em produção tem **acurácia de 0,67, F1-score de 0,42 para a classe positiva e ROC-AUC de 0,64** ([`data/champion_metrics.json`](data/champion_metrics.json)). O protótipo herdado reportava acurácia de 78%, F1 de 0,65 e ROC-AUC de 0,81; reproduzido, o F1 real da classe positiva era 0,235 ([ADR-003](docs/adr/adr-003-SMOTE-NC.md)). Ver [Limitações conhecidas](#limitações-conhecidas).
+O gate de promoção compara modelos por duas métricas que não dependem da escala da probabilidade:
+
+- **`recall_at_fracao`**: dos pacientes que faltaram, quantos estavam entre os 30% avisados;
+- **`roc_auc`**: chance de o modelo dar risco maior a quem falta do que a quem comparece (0,5 é sorteio).
+
+O **lift** é o recall dividido pela fração avisada: 1,0 é o mesmo que sortear 30% da fila.
+
+| Medição | `roc_auc` | `recall_at_fracao` | Lift | Brier |
+|---|---|---|---|---|
+| Campeão atual, fold de teste oficial (65 consultas, 18 faltas) | 0,648 | 0,389 | 1,26 | 0,199 |
+| Validação cruzada 5×5 na semente: modelo atual | 0,619 [0,549; 0,689] | 0,448 [0,358; 0,538] | 1,48 | 0,194 |
+| Validação cruzada 5×5 na semente: modelo anterior (LightGBM + SMOTE-NC) | 0,555 [0,488; 0,622] | 0,340 [0,260; 0,421] | 1,12 | 0,244 |
+| Dado real externo, teste reservado de 10.000 consultas: atual × anterior | 0,563 × 0,560 | — | 1,17 × 1,18 | 0,206 × 0,240 |
+
+Os colchetes são o intervalo de 95%. O Brier mede o erro da probabilidade: menor é melhor, e responder sempre a taxa base dá cerca de 0,20. Leitura:
+
+- **Na semente sintética, o modelo novo ganha**: com o mesmo orçamento, captura cerca de 45% dos faltosos contra 34% do anterior.
+- **No dado real externo, os dois empatam** perto de 0,56. O sinal das features que o SaúdeJá coleta é fraco: nem com 60 mil consultas reais a `roc_auc` passa de 0,60 ([ADR-014](docs/adr/adr-014-dataset-externo-desfecho-real.md)). A vantagem prática do modelo novo é a probabilidade calibrada, a única com Brier abaixo da taxa base.
+- **O fold oficial mudou na promoção**: com os primeiros desfechos de produção, o teste passou a ser separado por paciente (65 consultas). O 0,643 / 0,429 do campeão anterior foi medido no fold antigo e não se compara direto com o 0,648 / 0,389 de hoje.
+- **`recall_1` e `f1_1` ficam em 0** no `champion_metrics.json`. É efeito da calibração: medidas no threshold de 0,6, que a probabilidade quase nunca alcança. Desde o ADR-016 as duas são só informativas.
+
+Com 30% da fila avisada, o modelo evitaria cerca de 40% mais faltas que um sorteio pelo mesmo custo (34 contra 25 por 1.000 consultas), supondo que o lembrete evite 30% das faltas, premissa ainda não medida ([SLA §4.1](docs/SLA.md)). Contra os alvos revisados do [SLO §3](docs/SLO.md), medidos em validação cruzada, o campeão atende os três na média: `roc_auc` 0,609 (alvo 0,60), lift 1,43 (alvo 1,3) e Brier 0,195 (taxa base 0,198). O protótipo herdado reportava acurácia de 78%, F1 de 0,65 e ROC-AUC de 0,81; reproduzido, o F1 real da classe positiva era 0,235 ([ADR-003](docs/adr/adr-003-SMOTE-NC.md)). Ver [Limitações conhecidas](#limitações-conhecidas).
 
 ## Capturas de tela
 
@@ -70,13 +103,13 @@ flowchart LR
     DB -.->|gatilho das 08h17| JOB
     JOB[Job D-2<br/>GitHub Actions, diário] -->|agendamentos pendentes| DB
     JOB -->|predição + explicação| DB
-    JOB -->|SMS só para alto risco| SMS[Infobip]
+    JOB -->|SMS para os 30% de maior risco| SMS[Infobip]
     API[API FastAPI] -.->|integrações externas| EXT[Sistemas da clínica]
 ```
 
 1. O paciente se cadastra e agenda a consulta pela interface. Os dados vão para o Supabase.
 2. Todo dia às 08h17 (horário de São Paulo), o Supabase dispara o job D-2 no GitHub Actions (`pg_cron`); o cron do próprio GitHub fica de reserva. O job busca os agendamentos dos próximos dois dias ainda sem predição, calcula a probabilidade de no-show e grava o resultado com a explicação SHAP. Rodar duas vezes no mesmo dia não manda SMS em dobro.
-3. Os pacientes que a regra de decisão do modelo seleciona recebem SMS via Infobip, só com data e hora da consulta. A regra é a registrada com o modelo campeão: hoje, quem passa do threshold (`decision.threshold` em [`params.yaml`](params.yaml)); no modo por orçamento ([ADR-016](docs/adr/adr-016-regra-de-decisao-por-orcamento.md)), os 30% de maior risco da fila. Toda decisão, enviada ou não, fica registrada para auditoria por 90 dias.
+3. Os pacientes que a regra de decisão do modelo seleciona recebem SMS via Infobip, só com data e hora da consulta. A regra é a registrada com o modelo campeão: hoje, os 30% de maior risco da fila, com as válvulas de 0,15 e 0,50 ([Como o modelo decide](#como-o-modelo-decide)). Toda decisão, enviada ou não, fica registrada para auditoria por 90 dias, com a posição do paciente na fila e o modo que a decidiu.
 4. A equipe consulta a "Fila do dia", ordenada pelo risco da avaliação mais recente, com a explicação de cada paciente.
 
 ### Componentes
@@ -88,11 +121,13 @@ flowchart LR
 | Inferência | [`src/inference.py`](src/inference.py), [`src/explain.py`](src/explain.py) | Núcleo de predição e explicabilidade, compartilhado por interface, API e job |
 | Contrato de features | [`src/contrato_features.py`](src/contrato_features.py) | Barra dado fora da regra de negócio (quarentena) e marca dado fora do domínio do treino |
 | Job D-2 | [`src/jobs/inferencia_diaria.py`](src/jobs/inferencia_diaria.py) | Predição em lote e disparo de lembretes |
+| Regra de decisão | [`src/decisao.py`](src/decisao.py) | `threshold` ou `top_fracao` (os K de maior risco da fila, com as válvulas), e o `recall_at_fracao` que o gate compara ([ADR-016](docs/adr/adr-016-regra-de-decisao-por-orcamento.md)) |
 | Mensageria | [`src/messaging/`](src/messaging/) | `StubMessagingClient` (padrão, sem rede) ou `InfobipClient` (SMS real) |
 | Banco | [`src/db/`](src/db/), [`supabase/migrations/`](supabase/migrations/) | Supabase em São Paulo: banco da clínica (`public`), base de treino (`treino`, só por RPC) e agregados para o Grafana (`observabilidade`). RLS em todas as tabelas |
 | LGPD | [`src/id_paciente.py`](src/id_paciente.py), [`src/pseudonimo.py`](src/pseudonimo.py), [`src/consentimento.py`](src/consentimento.py), [`src/lgpd_purga.py`](src/lgpd_purga.py) | Identificador do paciente com HMAC, pseudônimos da base de treino, consentimento e purga diária |
 | Observabilidade | [`src/observabilidade.py`](src/observabilidade.py), [`src/telemetria.py`](src/telemetria.py), [`infra/grafana/`](infra/grafana/) | Eventos em `eventos_app` e telemetria OpenTelemetry para o Grafana Cloud; alertas e painéis como código |
-| Pipeline de treino | [`dvc.yaml`](dvc.yaml) | DVC + MLflow: `validate_data` → `preprocess` → `train` (SMOTE-NC só no fold de treino + LightGBM) → `validate`, cada stage em container Docker |
+| Pipeline de treino | [`dvc.yaml`](dvc.yaml), [`src/modelo.py`](src/modelo.py) | DVC + MLflow: `validate_data` → `preprocess` → `train` → `validate`, cada stage em container Docker. Família, balanceamento e calibração são parâmetros (`model.tipo`, `balancing.strategy`, `model.calibracao`); hoje, logística + `class_weight` + sigmoide |
+| Avaliação exploratória | [`scripts/avaliar_cv.py`](scripts/avaliar_cv.py), [`scripts/simular_dados.py`](scripts/simular_dados.py) | Validação cruzada repetida com intervalo, curva de custo por fração da fila e estudos com o dataset externo; fora do `dvc.yaml`, não mudam o modelo em produção |
 
 A interface chama o modelo **em processo**, sem passar pela API (`PREDICT_BACKEND=processo`, [ADR-005](docs/adr/adr-005-integracoes-implicitas.md)).
 
@@ -117,14 +152,39 @@ Cada ambiente tem Space, projeto Supabase e secrets próprios. O Space publica s
 | `grafana.yml` | fim do deploy em `main`; manual | Aplica regras de alerta e painéis do Grafana |
 | `dependency-review.yml` | PR | Bloqueia dependência vulnerável |
 
-Só o modelo campeão vai para produção: deploy e job D-2 conferem o hash do `model.pkl` e o threshold contra `data/champion_metrics.json`.
+Só o modelo campeão vai para produção: deploy e job D-2 conferem o hash do `model.pkl`, o threshold e a regra de decisão contra `data/champion_metrics.json`.
+
+### Ciclo de vida do modelo
+
+```mermaid
+flowchart LR
+    BT[(Base de treino)] -->|export mensal| VD[validate_data]
+    VD --> PP[preprocess<br/>split por paciente]
+    PP --> TR[train<br/>logística + sigmoide]
+    TR --> VA[validate<br/>recall_at_fracao, lift, Brier]
+    VA --> G{gate}
+    G -->|aprovado| CAN[canário<br/>20% da fila]
+    G -->|bloqueado| FIM[campeão segue]
+    CAN -->|não inferior| PR[PR de promoção]
+    CAN -->|violou guardrail| REV[PR de reversão]
+    PR -->|merge em main| DEP[deploy + Release PATCH]
+```
+
+1. **Re-treino** (`retrain.yml`, dia 1 de cada mês): exporta os desfechos de quem consentiu, junta com a semente e roda o `dvc repro`.
+2. **Dados** (`validate_data`): barra o dataset por schema, regra de negócio, taxa de faltas e mínimo de faltas no fold de teste. Conta as linhas por origem (semente, produção, externa) e calcula o PSI de cada uma contra a semente.
+3. **Split**: com desfechos de produção, o fold de teste separa por paciente, para as consultas de uma mesma pessoa não caírem no treino e no teste ao mesmo tempo. Só a semente continua no split aleatório estratificado.
+4. **Gate** (`src/retrain_gate.py`): o desafiante não pode regredir mais que 0,05 em `recall_at_fracao` nem mais que 0,02 em `roc_auc` em relação ao campeão. Precisa também ficar acima do piso de 0,60 de `roc_auc` e passar na suíte de sanidade: saída entre 0 e 1, SHAP aditivo e contrato de features nos casos limítrofes. O desafiante aprovado leva junto a regra de decisão com que foi medido.
+5. **Canário** (`canario.yml`, diário): o aprovado decide 20% da fila real e é comparado ao campeão no mesmo período, pela falta não avisada e pela quarentena (a taxa de disparo só informa, porque a fração é fixa). Não inferior, abre o PR de promoção; violou um guardrail ou não juntou evidência em 21 dias, é revertido ([ADR-008](docs/adr/adr-008-canario-do-modelo.md)).
+6. **Promoção**: o PR reescreve `champion_metrics.json` e o `dvc.lock`. O CI roda os testes sobre o `model.pkl` real, com SHAP e explicador conferidos para a família do campeão. O merge faz o deploy e uma Release PATCH, como a v3.3.1.
+
+A promoção da v3.3.1 foi direta, sem canário, por decisão da autora: sem desfecho real suficiente, o canário não teria predições para decidir. O canário volta a valer nos próximos re-treinos.
 
 ## Stack
 
 | Camada | Tecnologia | Por quê |
 |---|---|---|
 | Linguagem | Python 3.10 | [ADR-001](docs/adr/adr-001-stack.md) |
-| Modelo | LightGBM 4.5, imbalanced-learn (SMOTE-NC), scikit-learn | [ADR-003](docs/adr/adr-003-SMOTE-NC.md) |
+| Modelo | scikit-learn (regressão logística, `CalibratedClassifierCV`); LightGBM 4.5 e imbalanced-learn (SMOTE-NC) como alternativas configuráveis | [ADR-015](docs/adr/adr-015-familia-do-modelo-e-calibracao.md), [ADR-003](docs/adr/adr-003-SMOTE-NC.md) |
 | Explicabilidade | SHAP | Explicação por paciente na fila e na API |
 | Versionamento de dados e experimentos | DVC (remote no Azure Blob Storage, Brazil South), MLflow | [ADR-002](docs/adr/adr-002-versionamento.md) |
 | Interface | NiceGUI 3.2 | [ADR-013](docs/adr/adr-013-interface-nicegui.md) |
@@ -240,27 +300,28 @@ No projeto remoto, desligue "Allow new users to sign up" e defina "Minimum passw
 curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d "{\"idade\":45,\"sexo\":\"F\",\"especialidade\":\"cardiologia\",\"distancia_km\":5.5,\"dias_entre_agendamento_consulta\":14,\"historico_noshow\":1,\"data_hora_agendada\":\"2026-01-09T18:00:00\"}"
 ```
 
-Resposta com o modelo campeão `6430cb3315da`, resumida:
+Resposta com o modelo campeão `07bcfede25ea`, resumida:
 
 ```json
 {
-  "probabilidade": 0.482,
+  "probabilidade": 0.276,
   "classe_prevista": 0,
   "threshold_usado": 0.6,
   "explicacao": [
-    {"feature": "dias_entre_agendamento_consulta", "contribuicao": -0.523},
-    {"feature": "dia_de_semana", "contribuicao": 0.459},
-    {"feature": "horario", "contribuicao": 0.416},
+    {"feature": "dia_de_semana", "contribuicao": 0.199},
+    {"feature": "horario", "contribuicao": 0.173},
+    {"feature": "dias_entre_agendamento_consulta", "contribuicao": -0.173},
+    {"feature": "distancia_km", "contribuicao": -0.170},
     "..."
   ],
   "explicacao_texto": null,
-  "model_version": "6430cb3315da",
+  "model_version": "07bcfede25ea",
   "fora_do_dominio": false,
   "campos_fora_do_dominio": []
 }
 ```
 
-A probabilidade fica abaixo do threshold, então esse paciente não receberia lembrete. Cada item da explicação é a contribuição SHAP de uma feature, ordenada pelo valor absoluto: positiva puxa o risco para cima, negativa para baixo.
+A probabilidade é calibrada: 0,276 quer dizer que, de cada 100 pacientes com esse perfil, cerca de 28 faltam, perto da taxa média. A `classe_prevista` vem do threshold de 0,6 e quase sempre é 0 com o modelo calibrado. No job D-2, o que decide o lembrete é a posição desse paciente na fila do dia (os 30% de maior risco), e não a classe. Cada item da explicação é a contribuição SHAP de uma feature, ordenada pelo valor absoluto: positiva puxa o risco para cima, negativa para baixo. Na logística, o SHAP é calculado de forma exata a partir dos coeficientes, somando as colunas do one-hot na feature de origem.
 
 A rota aplica o mesmo contrato de features do job D-2. Um dado fora da regra de negócio (idade acima de 120, distância acima de 500 km, antecedência acima de 180 dias, horário fora da grade da clínica) volta como 422, com o campo e a regra, sem o valor. Um dado que o modelo não viu no treino é predito e marcado em `fora_do_dominio`, com os campos em `campos_fora_do_dominio`.
 
@@ -277,6 +338,7 @@ dvc exp show                         # compara experimentos
 | `dvc exp run` | Testar variações (ex.: hiperparâmetros em `params.yaml`) sem alterar o `dvc.lock` |
 | `dvc exp apply <exp>` | Trazer um experimento escolhido para o workspace |
 | `dvc repro` | Consolidar uma mudança definitiva; atualiza `dvc.lock` e `data/model.pkl` |
+| `python scripts/avaliar_cv.py --modelo logistica --balanceamento class_weight --calibracao sigmoid` | Medir uma configuração em validação cruzada 5×5, com intervalo de 95%, antes de propô-la como desafiante; `--curva` mostra o custo por fração da fila ([SLA §4.1](docs/SLA.md)) |
 
 Ao mudar o dataset, rode `dvc add data/<arquivo>` (nunca `dvc add .`), faça commit do código junto com `dvc.lock` e o `.dvc` correspondente, e envie os artefatos com `dvc push`. Em produção, o modelo não é trocado manualmente: o `retrain.yml` treina, compara com o campeão e abre um PR ([Operação](docs/OPERACAO.md#ciclo-de-vida-do-modelo)).
 
@@ -346,7 +408,7 @@ Convenções:
 
 | Sintoma | Causa | Solução |
 |---|---|---|
-| Job D-2 ou deploy recusa o modelo | O `model.pkl` ou o `decision.threshold` não batem com `data/champion_metrics.json` | `dvc pull` para baixar o campeão; não altere o threshold sem uma promoção |
+| Job D-2 ou deploy recusa o modelo | O `model.pkl`, o `decision.threshold` ou o bloco `decisao` não batem com `data/champion_metrics.json` | `dvc pull` para baixar o campeão; não altere o threshold sem uma promoção |
 | Paciente agendado não aparece com risco na fila | O job ainda não rodou para a data, ou o agendamento caiu em quarentena (dado fora da regra de negócio) | Aguarde o job das 08h17 ou rode-o manualmente; a quarentena aparece no painel "Job D-2" |
 | `retrain.yml` termina com código 1, 2, 3 ou 4 | Gate bloqueou, sem dado novo, pipeline falhou ou canário em observação | Ver [Operação → Ciclo de vida do modelo](docs/OPERACAO.md#ciclo-de-vida-do-modelo) |
 | CI do PR para `main` falha na versão | `## [Não publicado]` não foi renomeado, ou a versão já tem tag | Use uma versão SemVer nova no topo do CHANGELOG |
@@ -355,8 +417,10 @@ Convenções:
 
 ## Limitações conhecidas
 
-- **Desempenho do modelo abaixo da meta.** Recall e F1 da classe positiva ficam abaixo dos alvos do [SLO](docs/SLO.md) por limite do dataset; a exceção está documentada no SLO (§3), com decisão prevista entre recalibrar o threshold ou aceitar o gap.
-- **Dados sintéticos.** A clínica é fictícia e a semente do dataset é sintética ([`data/AVISO-DADOS-SINTETICOS.md`](data/AVISO-DADOS-SINTETICOS.md)). O desempenho em dados reais é desconhecido.
+- **Sinal fraco nas features.** Em validação cruzada na semente, o modelo fica em `roc_auc` 0,62, com intervalo que vai de 0,55 a 0,69. No dado real externo, nenhuma configuração passa de 0,60, nem com 60 mil consultas ([ADR-014](docs/adr/adr-014-dataset-externo-desfecho-real.md)). O ganho esperado vem de features novas, não de mais linhas do mesmo tipo.
+- **Validação cruzada fora do gate.** Os alvos do [SLO §3](docs/SLO.md) são medidos em validação cruzada, mas o gate do re-treino compara só o fold isolado, hoje com 18 faltas, em que um paciente move o recall em 0,056. Usar o desvio da validação cruzada na tolerância do gate está pendente. O limite inferior do intervalo do `roc_auc` (0,53) ainda fica abaixo de 0,60.
+- **Eficácia do lembrete assumida.** A conta de faltas evitadas supõe que o lembrete evite 30% das faltas. O número será medido com o canário, comparando pacientes de risco parecido avisados e não avisados.
+- **Dados sintéticos.** A clínica é fictícia e a semente do dataset é sintética ([`data/AVISO-DADOS-SINTETICOS.md`](data/AVISO-DADOS-SINTETICOS.md)), com um padrão "sexta 17h" injetado que o dado real não confirma. Um dataset público de desfecho real (Kaggle *Medical Appointment No Shows*, CC BY-NC-SA 4.0) foi adaptado como terceira origem, `externa`, para medir o sinal, mas segue desligado no treino oficial (`dados.externa.habilitada: false`). O desempenho com pacientes reais do SaúdeJá é desconhecido.
 - **LGPD sem validação jurídica.** Política de privacidade, Termos de uso e a caixa de consentimento do treino ainda não foram revisados por profissional do direito.
 - **Premissa de operação não cumprida no protótipo.** A transferência internacional se apoia em contas pagas com as cláusulas-padrão da ANPD assinadas; as contas atuais (planos gratuitos, estudante e teste) não têm esse aditivo.
 - **Infraestrutura em planos gratuitos.** O banco não tem backup (plano gratuito do Supabase), e o Space roda nos Estados Unidos.
@@ -417,7 +481,8 @@ Na visão pública, o painel de traces do Job D-2 fica vazio, porque o compartil
 | [`docs/architecture.md`](docs/architecture.md) | Arquitetura detalhada, diagramas C4 e roadmap técnico |
 | [`docs/adr/`](docs/adr/) | Registros de decisão de arquitetura |
 | [`docs/OPERACAO.md`](docs/OPERACAO.md) | Operação, alertas e rollback |
-| [`docs/SLO.md`](docs/SLO.md), [`docs/SLA.md`](docs/SLA.md) | Metas de serviço |
+| [`docs/SLO.md`](docs/SLO.md), [`docs/SLA.md`](docs/SLA.md) | Metas de serviço; curva de custo por fração da fila (SLA §4.1) |
+| [`docs/analises/`](docs/analises/) | Análise exploratória do dataset externo contra a semente |
 | [`docs/LGPD/`](docs/LGPD/) | Análise LGPD, política, termos e procedimentos do titular |
 | [`docs/logs/CHANGELOG.md`](docs/logs/CHANGELOG.md) | Histórico de versões |
 | [`docs/post-mortem/`](docs/post-mortem/), [`docs/rollbacks/`](docs/rollbacks/) | Registros de incidente e de rollback |

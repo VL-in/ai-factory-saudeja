@@ -1,7 +1,7 @@
 # ADR-016: Regra de decisão do lembrete por orçamento da fila
 
 ## Status
-Aceito - 2026-11-22. O mecanismo está no código. O campeão em produção continua decidindo pelo threshold de 0,6: o modo novo só chega a ele por promoção (ver "Decisão", item 5).
+Aceito - 2026-11-22. O mecanismo está no código, e a promoção única do item 5 foi feita na v3.3.1: o campeão `07bcfede25ea` decide por `top_fracao` (fração 0,30, válvulas 0,15 e 0,50), sem canário, por decisão da autora (ver "Changelog").
 
 As palavras-chave **DEVE**, **NÃO DEVE** e **PODE** seguem o sentido da [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
 
@@ -77,3 +77,4 @@ Negativas e riscos aceitos:
 
 ## Changelog
 - 2026-11-22: aceito, com o mecanismo implementado e o campeão complementado no critério novo. A promoção da configuração recomendada fica pendente.
+- 2026-11-22: promoção única feita (v3.3.1, campeão `07bcfede25ea`, regra `top_fracao` registrada no bloco `decisao` do `champion_metrics.json`). No fold por paciente do re-treino (65 consultas, 18 faltas), `recall_at_fracao` 0,389, `roc_auc` 0,648 e taxa de disparo projetada de 30,8% (20 de 65, o orçamento arredondado para cima). O item 5 previa o canário; ele foi desligado só nesta promoção, por decisão da autora, porque sem desfecho real não haveria predições para decidir, e voltou a `true` no próprio PR. A partir daqui, a `classe_prevista` do `/predict` (item 6) fica quase sempre 0, porque a probabilidade calibrada raramente passa de 0,6.
