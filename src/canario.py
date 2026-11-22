@@ -27,7 +27,10 @@ pode passar a ser ela (ADR-008); `braco()` recebe a unidade como texto.
 (`predicoes.model_version`), desde o início do canário:
 
 - `taxa_disparo`: fração da fila mandada para lembrete pago. É o custo do
-  BRIEFING ("cortar 70%");
+  BRIEFING ("cortar 70%"). Com o canário decidindo pela regra `top_fracao`
+  (`src/decisao.py`), a fração é fixa por construção e a comparação vira
+  **informativa**: aparece no resumo, mas não reverte nem segura a promoção --
+  quem decide passa a ser a `falta_nao_avisada`;
 - `falta_nao_avisada`: entre os pacientes que o modelo classificou como baixo
   risco (não receberam lembrete) e cuja consulta já tem desfecho, a fração
   que faltou. É o erro que custa R$ 180, e o único desfecho que o SMS não
@@ -75,6 +78,7 @@ from pathlib import Path
 from typing import Any
 
 import campeao
+import decisao
 from config_projeto import caminho_de_env, carregar_params, fuso_da_clinica
 from saida_actions import escrever_json_atomico, escrever_saida, publicar
 
@@ -102,6 +106,9 @@ SITUACAO_AMOSTRA_INSUFICIENTE = "amostra_insuficiente"
 SITUACAO_VIOLADO = "violado"
 SITUACAO_NAO_INFERIOR = "nao_inferior"
 SITUACAO_INCONCLUSIVO = "inconclusivo"
+# Comparação que vai para o resumo mas não decide (taxa de disparo no
+# top_fracao, onde a fração é fixa pela regra e não pelo modelo).
+SITUACAO_INFORMATIVO = "informativo"
 
 # O que o job e o `avaliar` comparam no banco: (numerador, denominador) dentro
 # de `Estatisticas`. A quarentena não está aqui -- agendamento em quarentena
@@ -342,9 +349,11 @@ def promover(evidencia: dict[str, Any] | None = None) -> dict[str, Any]:
             f"{registro.get('motivo', '')}"
         ),
         "decision_threshold": registro["decision_threshold"],
+        "decisao": decisao.config_registrada(registro).como_dict(),
         "taxa_disparo_projetada": registro.get("taxa_disparo_projetada"),
         "dataset": registro.get("dataset", {}),
         "metricas": registro["metricas"],
+        **({"cv": registro["cv"]} if registro.get("cv") else {}),
         "canario": {
             "iniciado_em": registro.get("iniciado_em"),
             "encerrado_em": agora,
@@ -429,7 +438,22 @@ def verificar(params: dict[str, Any] | None = None) -> str | None:
     threshold = float(registro["decision_threshold"])
     if not 0.0 <= threshold <= 1.0:
         raise ErroCanario(f"decision_threshold do canário fora de [0, 1]: {threshold}")
+    regra = regra_do_registro(registro)
+    if regra.threshold != threshold:
+        raise ErroCanario(
+            f"a regra de decisão do canário (threshold {regra.threshold}) diverge do "
+            f"decision_threshold registrado ({threshold})"
+        )
     return str(obtido)
+
+
+def regra_do_registro(registro: dict[str, Any]) -> decisao.ConfigDecisao:
+    """A regra de decisão com que o canário foi aprovado no gate (bloco
+    `decisao` de `canario.json`; registro anterior a ela = threshold)."""
+    try:
+        return decisao.config_registrada(registro)
+    except (TypeError, ValueError) as exc:
+        raise ErroCanario(f"regra de decisão do canário inválida: {exc}") from exc
 
 
 # --------------------------------------------------------------------------
@@ -535,17 +559,30 @@ def _descrever(c: dict[str, Any]) -> str:
     )
 
 
+def guardrails_informativos(regra_canario: decisao.ConfigDecisao | None) -> frozenset[str]:
+    """Guardrails que só informam para a regra do canário. No `top_fracao` a
+    taxa de disparo é a fração configurada (arredondada para cima), não uma
+    escolha do modelo: compará-la com a do campeão mediria a regra."""
+    if regra_canario is not None and regra_canario.modo == decisao.MODO_TOP_FRACAO:
+        return frozenset({"taxa_disparo"})
+    return frozenset()
+
+
 def decidir(
     est_canario: Estatisticas,
     est_campeao: Estatisticas,
     agora: datetime,
     cfg: dict[str, Any],
+    informativos: frozenset[str] = frozenset(),
 ) -> Avaliacao:
     """aguardar, promover ou reverter. Função pura.
 
     Os dias contam da **primeira predição** do canário, não da aprovação no
     gate: o PR do canário pode levar dias para ser revisado, e esse tempo não
-    é observação."""
+    é observação.
+
+    `informativos`: guardrails que entram na tabela com a situação
+    `informativo` e ficam fora da decisão (ver `guardrails_informativos`)."""
     comparacoes = [
         comparar_proporcao(
             nome,
@@ -558,6 +595,10 @@ def decidir(
         )
         for nome, (num, den) in GUARDRAILS_DO_BANCO.items()
     ]
+    for c in comparacoes:
+        if c["metrica"] in informativos:
+            c["situacao"] = SITUACAO_INFORMATIVO
+    decisivas = [c for c in comparacoes if c["situacao"] != SITUACAO_INFORMATIVO]
     avisos = []
     if est_canario.predicoes and est_canario.fora_do_dominio / est_canario.predicoes > 0.10:
         avisos.append(
@@ -574,7 +615,7 @@ def decidir(
         )
     dias = (agora - est_canario.primeira_predicao).days
 
-    violados = [c for c in comparacoes if c["situacao"] == SITUACAO_VIOLADO]
+    violados = [c for c in decisivas if c["situacao"] == SITUACAO_VIOLADO]
     if violados:
         return Avaliacao(
             ACAO_REVERTER,
@@ -584,7 +625,7 @@ def decidir(
             avisos,
         )
 
-    todos_nao_inferiores = all(c["situacao"] == SITUACAO_NAO_INFERIOR for c in comparacoes)
+    todos_nao_inferiores = all(c["situacao"] == SITUACAO_NAO_INFERIOR for c in decisivas)
     amostra_ok = (
         est_canario.predicoes >= cfg["predicoes_minimas"]
         and est_canario.desfechos_baixo_risco >= cfg["desfechos_minimos"]
@@ -638,7 +679,8 @@ def avaliar(agora: datetime | None = None, params: dict[str, Any] | None = None)
     # fila, e esse período não é comparação -- é só o campeão sozinho.
     desde = est_c.primeira_predicao or datetime.fromisoformat(registro["iniciado_em"])
     est_b = estatisticas_do_banco(registro["campeao_base"], desde)
-    return decidir(est_c, est_b, agora or _agora(), cfg)
+    informativos = guardrails_informativos(regra_do_registro(registro))
+    return decidir(est_c, est_b, agora or _agora(), cfg, informativos)
 
 
 # --------------------------------------------------------------------------
@@ -652,7 +694,7 @@ class ContextoCanario:
     mapa_especialidade: dict[str, Any]
     explainer: Any
     model_version: str
-    threshold: float
+    regra: decisao.ConfigDecisao
     fracao: float
 
     def decide(self, unidade: str | None) -> bool:
@@ -747,7 +789,7 @@ def preparar_para_job(
             mapa_especialidade=mapa,
             explainer=construir_explicador(model),
             model_version=versao,
-            threshold=float(registro["decision_threshold"]),
+            regra=regra_do_registro(registro),
             fracao=cfg["fracao"],
         )
     except ErroCanario as exc:

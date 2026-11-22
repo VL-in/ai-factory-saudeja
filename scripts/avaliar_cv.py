@@ -85,6 +85,7 @@ import contrato_dataset_externo as cde  # noqa: E402
 import modelo as modelo_ml  # noqa: E402
 import preprocess  # noqa: E402
 from config_projeto import carregar_params  # noqa: E402
+from decisao import recall_na_fracao  # noqa: E402  (reexportada: a mesma do validate.py)
 
 PARAMS = carregar_params()
 CONFIG_PARAMS = modelo_ml.config_do_modelo(PARAMS)
@@ -93,8 +94,9 @@ DADOS_PADRAO = REPO_ROOT / "data" / "consultas-treino.csv"
 RANDOM_STATE = 42
 N_SPLITS = 5
 N_REPEATS = 5
-# "Cortar 70% do custo de mensageria" do BRIEFING: avisar os 30% de maior risco.
-FRACAO_DA_FILA = 0.30
+# "Cortar 70% do custo de mensageria" do BRIEFING: avisar os 30% de maior risco
+# (`decision.fracao_da_fila`, a mesma fração do validate.py e do gate).
+FRACAO_DA_FILA = float(PARAMS["decision"].get("fracao_da_fila", 0.30))
 
 MODELOS = modelo_ml.TIPOS
 BALANCEAMENTOS = modelo_ml.BALANCEAMENTOS
@@ -159,20 +161,6 @@ def ajustar_no_fold(X_treino, y_treino, modelo, balanceamento, calibracao="none"
 # --------------------------------------------------------------------------
 # Métricas
 # --------------------------------------------------------------------------
-def recall_na_fracao(y_true, y_proba, fracao):
-    """Recall quando se avisa os ceil(fracao * n) pacientes de maior
-    probabilidade. É a pergunta do negócio ("com o orçamento de 30% da fila,
-    quantos faltosos pegamos?"), e não depende de threshold nem de calibração.
-    Devolve (recall, fração efetivamente avisada)."""
-    y_true = np.asarray(y_true)
-    n = len(y_true)
-    k = math.ceil(fracao * n)
-    # sort estável: em empate, a ordem original decide (resultado reproduzível)
-    ordem = np.argsort(-np.asarray(y_proba), kind="stable")
-    capturados = y_true[ordem[:k]].sum()
-    return capturados / y_true.sum(), k / n
-
-
 def metricas_do_fold(y_true, y_proba, threshold, fracao):
     y_pred = (y_proba >= threshold).astype(int)
     recall_k, fracao_avisada = recall_na_fracao(y_true, y_proba, fracao)

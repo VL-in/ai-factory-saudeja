@@ -32,8 +32,31 @@ balancing:
   strategy: smotenc      # smotenc | class_weight | none (ADR-003 e emenda)
   k_neighbors: 3         # SMOTE-NC: vizinhos da interpolacao
 
+# Regra de decisao do lembrete pago (src/decisao.py).
+# - modo: threshold | top_fracao. threshold avisa quem passa de `threshold`;
+#   top_fracao avisa os ceil(fracao_da_fila x fila) de maior probabilidade da
+#   fila do job (o orcamento do BRIEFING), com as duas valvulas abaixo.
+# - threshold: corte da API /predict nos dois modos, e o ponto em que
+#   recall_1/f1_1 sao medidos (informativos no gate).
+# - fracao_da_fila: 0.30 = "cortar 70% do custo de mensageria". Tambem e' a
+#   fracao do recall_at_fracao que o validate.py loga e o gate compara.
+# - probabilidade_minima / probabilidade_certa (null = desligada), so' no
+#   top_fracao e na escala da probabilidade -- so' tem sentido com modelo
+#   calibrado (model.calibracao: sigmoid). Abaixo da minima nao avisa nem com
+#   orcamento sobrando; acima da certa avisa mesmo estourando a fracao. Na
+#   logistica calibrada (validacao cruzada da semente), 0.15 barra ~2% da fila
+#   e 0.50 forca ~1%; a mediana e' 0.26 e a taxa base 0.27.
+# O job D-2 decide cada modelo pela regra registrada junto dele
+# (champion_metrics.json / canario.json, bloco `decisao`, gravado pelo gate a
+# partir deste bloco). Campeao registrado antes da regra decide pelo
+# `threshold` daqui, conferido contra o registrado. Trocar o modo aqui muda o
+# PROXIMO desafiante, que ainda passa pelo gate e pelo canario.
 decision:
   threshold: 0.6         # corte de probabilidade para classificar como no-show (classe 1)
+  modo: threshold
+  fracao_da_fila: 0.30
+  probabilidade_minima: 0.15
+  probabilidade_certa: 0.50
 
 features:
   temporais: true       # true | false -- inclui dia_de_semana e horario

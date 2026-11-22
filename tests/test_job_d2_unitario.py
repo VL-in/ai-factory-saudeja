@@ -15,6 +15,9 @@ O que se trava aqui:
   re-treino usa contra o feedback loop e o que impede reenvio na janela de
   três dias.
 """
+import json
+import math
+
 import pytest
 
 import observabilidade
@@ -74,7 +77,13 @@ def _agendamento(id_agendamento, **extra):
 
 
 @pytest.fixture
-def repositorio(monkeypatch):
+def repositorio(monkeypatch, tmp_path):
+    # Campeão registrado sem o bloco `decisao` (anterior à regra por fila): o
+    # braço dele decide pelo decision.threshold que cada teste instala.
+    legado = tmp_path / "champion_metrics.json"
+    legado.write_text('{"decision_threshold": 0.6}', encoding="utf-8")
+    monkeypatch.setenv("CHAMPION_METRICS_PATH", str(legado))
+
     def _instalar(pendentes, threshold=0.0):
         falso = _RepositorioFalso(pendentes)
         for nome in (
@@ -498,7 +507,9 @@ def test_envio_cobrado_grava_os_segmentos_e_soma_segmentos_vezes_preco(
     job.processar_dia(cliente_mensageria=sms)
 
     esperados = [segmentos_sms(m) for m in sms.mensagens]
-    assert falso.segmentos == [*esperados, None]
+    # A quarentena (a02, a03) envia na primeira passada; o disparo por risco
+    # (a01) só depois de a fila inteira ser predita. A ordem não importa aqui.
+    assert sorted(falso.segmentos, key=lambda s: s is None) == [*esperados, None]
     custo = {
         a["status_envio"]: v
         for a, v in telemetria_em_memoria.pontos("saudeja_sms_custo_usd_total")
@@ -553,3 +564,104 @@ def test_preco_preenchido_nao_gera_aviso(monkeypatch):
     monkeypatch.setenv("MESSAGING_PROVIDER", "infobip")
     assert job.preco_do_segmento_usd("sms") == 0.0
     assert job.avisos_de_custo() == []
+
+
+# --- regra de decisão por orçamento (top_fracao) ----------------------------------
+
+
+def _fila_variada(n):
+    """`n` agendamentos com risco variado (distância, antecedência e histórico
+    mudam), todos dentro do domínio do treino."""
+    return [
+        _agendamento(
+            f"a{i:02d}",
+            distancia_km=1.0 + 2.3 * i,
+            dias_entre_agendamento_consulta=1 + (i * 7) % 60,
+            historico_noshow=i % 6,
+        )
+        for i in range(n)
+    ]
+
+
+def _campeao_com_regra(tmp_path, monkeypatch, **regra):
+    bloco = {
+        "modo": "top_fracao",
+        "threshold": 0.6,
+        "fracao_da_fila": 0.3,
+        "probabilidade_minima": None,
+        "probabilidade_certa": None,
+        **regra,
+    }
+    caminho = tmp_path / "campeao_top.json"
+    caminho.write_text(
+        json.dumps({"decision_threshold": 0.6, "decisao": bloco}), encoding="utf-8"
+    )
+    monkeypatch.setenv("CHAMPION_METRICS_PATH", str(caminho))
+
+
+def test_fila_de_20_no_top_fracao_avisa_exatamente_6_os_de_maior_risco(
+    repositorio, tmp_path, monkeypatch
+):
+    falso = repositorio(_fila_variada(20), threshold=0.6)
+    _campeao_com_regra(tmp_path, monkeypatch)
+
+    resultado = job.processar_dia(cliente_mensageria=_Espiao())
+
+    enviados = {i for i, status in falso.mensagens if status == "enviado"}
+    assert len(enviados) == math.ceil(0.3 * 20) == 6
+    assert resultado["mensagens_disparadas"] == 6
+    por_id = {p["id_agendamento"]: p for p in falso.predicoes}
+    assert {i for i, p in por_id.items() if p["posicao_na_fila"] <= 6} == enviados
+    assert all(p["modo_decisao"] == "top_fracao" for p in falso.predicoes)
+    assert sorted(p["posicao_na_fila"] for p in falso.predicoes) == list(range(1, 21))
+    menor_avisada = min(por_id[i]["probabilidade"] for i in enviados)
+    assert all(por_id[i]["probabilidade"] <= menor_avisada for i in por_id if i not in enviados)
+    # threshold_usado é o corte que a fila produziu, e classe_prevista = enviado
+    assert {p["threshold_usado"] for p in falso.predicoes} == {menor_avisada}
+    assert {i for i, p in por_id.items() if p["classe_prevista"] == 1} == enviados
+
+
+def test_probabilidade_certa_forca_e_minima_bloqueia_no_job(repositorio, tmp_path, monkeypatch):
+    falso = repositorio(_fila_variada(20), threshold=0.6)
+    _campeao_com_regra(tmp_path, monkeypatch, probabilidade_certa=0.0)
+    job.processar_dia(cliente_mensageria=_Espiao())
+    assert sum(status == "enviado" for _, status in falso.mensagens) == 20
+
+    falso = repositorio(_fila_variada(20), threshold=0.6)
+    _campeao_com_regra(tmp_path, monkeypatch, probabilidade_minima=1.0)
+    job.processar_dia(cliente_mensageria=_Espiao())
+    assert sum(status == "enviado" for _, status in falso.mensagens) == 0
+
+
+def test_quarentena_fica_fora_do_orcamento(repositorio, tmp_path, monkeypatch):
+    """Quem não pôde ser predito recebe o lembrete sem predição e não ocupa
+    vaga do top-K: o orçamento é sobre a fila predita."""
+    fila = [*_fila_variada(10), _agendamento("q01", especialidade="neurologia")]
+    falso = repositorio(fila, threshold=0.6)
+    _campeao_com_regra(tmp_path, monkeypatch)
+
+    resultado = job.processar_dia(cliente_mensageria=_Espiao())
+
+    assert resultado["lembretes_sem_predicao"] == 1
+    assert sum(status == "enviado" for _, status in falso.mensagens) == 3  # ceil(0,3 x 10)
+
+
+def test_decision_modo_de_params_nao_muda_o_campeao_legado(repositorio, monkeypatch):
+    """`decision.modo` descreve o próximo desafiante. O campeão registrado sem
+    regra continua decidindo pelo threshold, mesmo com params em top_fracao."""
+    falso = repositorio(_fila_variada(10), threshold=1.01)
+    job.inference.PARAMS["decision"].update(modo="top_fracao", fracao_da_fila=0.3)
+
+    job.processar_dia(cliente_mensageria=_Espiao())
+
+    assert all(status == "nao_enviado" for _, status in falso.mensagens)
+    assert {p["modo_decisao"] for p in falso.predicoes} == {"threshold"}
+
+
+def test_pos_checagem_nao_avisa_disparo_dentro_do_orcamento_arredondado():
+    """Fila de 7 no top_fracao: 3 lembretes (43%) é o orçamento, não excesso."""
+    resultado = _resultado(predicoes_gravadas=7, agendamentos_encontrados=7,
+                           mensagens_disparadas=3, orcamento_por_risco=3)
+    assert job.pos_checagem(resultado) == ([], [])
+    resultado["mensagens_disparadas"] = 4  # a probabilidade_certa passou do orçamento
+    assert any("taxa de disparo" in a for a in job.pos_checagem(resultado)[1])

@@ -18,12 +18,14 @@ trava aqui:
   predita, gravada e disparada com o modelo e o threshold dele.
 """
 import json
+import math
 import shutil
 from datetime import datetime, timedelta
 
 import pytest
 
 import canario
+import decisao as decisao_mod
 import inference
 from config_projeto import fuso_da_clinica
 from jobs import inferencia_diaria as job
@@ -203,7 +205,7 @@ def repo_falso(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _iniciar(tmp_path, modelo=MODEL_PATH, campeao_base="campeao00001"):
+def _iniciar(tmp_path, modelo=MODEL_PATH, campeao_base="campeao00001", decisao=None):
     lock_do_treino = tmp_path / "lock-do-treino"
     lock_do_treino.write_text("stages: {canario: 1}\n", encoding="utf-8")
     dataset_do_treino = tmp_path / "dataset-do-treino.dvc"
@@ -216,6 +218,7 @@ def _iniciar(tmp_path, modelo=MODEL_PATH, campeao_base="campeao00001"):
             "decision_threshold": 0.6,
             "metricas": {"recall_1": 0.5, "f1_1": 0.45, "roc_auc": 0.66},
             "dataset": {"md5_dvc": "canario"},
+            **({"decisao": decisao} if decisao else {}),
         },
         campeao_base=campeao_base,
         dvc_lock_path=lock_do_treino,
@@ -525,7 +528,7 @@ def test_guardrail_violado_faz_rollback_automatico(repo_falso, banco):
 # --------------------------------------------------------------------------
 # guardrail de quarentena, por execução
 # --------------------------------------------------------------------------
-def _contexto(model_version="canario-teste", threshold=0.0, fracao=0.5):
+def _contexto(model_version="canario-teste", threshold=0.0, fracao=0.5, regra=None):
     model, mapa = inference.carregar_modelo(MODEL_PATH)
     from explain import construir_explicador
 
@@ -534,7 +537,7 @@ def _contexto(model_version="canario-teste", threshold=0.0, fracao=0.5):
         mapa_especialidade=mapa,
         explainer=construir_explicador(model),
         model_version=model_version,
-        threshold=threshold,
+        regra=regra or decisao_mod.ConfigDecisao(modo="threshold", threshold=threshold),
         fracao=fracao,
     )
 
@@ -614,7 +617,13 @@ def _agendamento(i):
 
 
 @pytest.fixture
-def fila(monkeypatch):
+def fila(monkeypatch, tmp_path):
+    # Campeão registrado sem o bloco `decisao` (anterior à regra por fila): o
+    # job decide o braço dele pelo decision.threshold de params.yaml.
+    legado = tmp_path / "champion_metrics.json"
+    legado.write_text(json.dumps({"decision_threshold": 0.6}), encoding="utf-8")
+    monkeypatch.setenv("CHAMPION_METRICS_PATH", str(legado))
+
     def _instalar(n):
         falso = _RepositorioDoJob([_agendamento(i) for i in range(n)])
         for nome in (
@@ -737,3 +746,84 @@ def test_copia_do_modelo_real_para_o_canario_tem_a_mesma_versao(tmp_path):
     copia = tmp_path / "model.pkl"
     shutil.copyfile(MODEL_PATH, copia)
     assert inference.calcular_model_version(copia) == inference.calcular_model_version(MODEL_PATH)
+
+
+# --------------------------------------------------------------------------
+# regra de decisão por orçamento (top_fracao)
+# --------------------------------------------------------------------------
+REGRA_TOP = decisao_mod.ConfigDecisao(
+    modo="top_fracao", threshold=0.6, fracao_da_fila=0.3,
+    probabilidade_minima=0.15, probabilidade_certa=0.5,
+)
+
+
+def test_no_top_fracao_a_taxa_de_disparo_so_informa():
+    """A fração do top_fracao é a da regra: um canário avisando 30% contra um
+    campeão por threshold avisando 16% não é "custo maior por culpa do
+    modelo". Quem decide é a falta não avisada."""
+    informativos = canario.guardrails_informativos(REGRA_TOP)
+    resultado = canario.decidir(
+        _est("c", 400, 240, 100, 20, dias_atras=2),
+        _est("b", 1600, 480, 800, 160, dias_atras=2),
+        AGORA,
+        CFG,
+        informativos,
+    )
+    assert resultado.acao == canario.ACAO_AGUARDAR
+    taxa = next(c for c in resultado.comparacoes if c["metrica"] == "taxa_disparo")
+    assert taxa["situacao"] == canario.SITUACAO_INFORMATIVO
+
+
+def test_no_threshold_a_taxa_de_disparo_continua_decidindo():
+    assert canario.guardrails_informativos(
+        decisao_mod.ConfigDecisao(modo="threshold", threshold=0.6)
+    ) == frozenset()
+
+
+def test_no_top_fracao_promove_com_falta_nao_avisada_nao_inferior():
+    resultado = canario.decidir(
+        _est("c", 2000, 900, 1100, 220, dias_atras=8),  # avisa 45%: só informa
+        _est("b", 8000, 2400, 4800, 960, dias_atras=8),
+        AGORA,
+        CFG,
+        canario.guardrails_informativos(REGRA_TOP),
+    )
+    assert resultado.acao == canario.ACAO_PROMOVER
+
+
+def test_promover_leva_a_regra_do_canario_para_o_campeao(repo_falso):
+    _iniciar(repo_falso, decisao=REGRA_TOP.como_dict())
+
+    novo = canario.promover({"acao": "promover"})
+
+    assert novo["decisao"] == REGRA_TOP.como_dict()
+    assert decisao_mod.config_registrada(novo) == REGRA_TOP
+
+
+def test_promover_canario_legado_registra_a_regra_threshold(repo_falso):
+    _iniciar(repo_falso)
+    novo = canario.promover({"acao": "promover"})
+    assert novo["decisao"]["modo"] == "threshold" and novo["decisao"]["threshold"] == 0.6
+
+
+def test_verificar_recusa_regra_incoerente_com_o_threshold(repo_falso):
+    _iniciar(repo_falso, decisao={**REGRA_TOP.como_dict(), "threshold": 0.4})
+    with pytest.raises(canario.ErroCanario, match="regra de decisão"):
+        canario.verificar(PARAMS)
+
+
+def test_canario_em_top_fracao_avisa_a_fracao_da_parte_dele(fila):
+    """Cada braço decide sobre a parte da fila que ele recebeu, com a regra
+    dele: o canário avisa ceil(0,3 x n_canario); o campeão (threshold 1.01 da
+    fixture) não avisa ninguém."""
+    falso = fila(40)
+    regra = decisao_mod.ConfigDecisao(modo="top_fracao", threshold=0.6, fracao_da_fila=0.3)
+    contexto = _contexto(fracao=0.5, regra=regra)
+
+    resultado = job.processar_dia(cliente_mensageria=_Espiao(), contexto_canario=contexto)
+
+    n_canario = resultado["por_braco"]["canario"]["predicoes_gravadas"]
+    assert resultado["por_braco"]["canario"]["disparos_por_risco"] == math.ceil(0.3 * n_canario)
+    assert resultado["por_braco"]["campeao"]["disparos_por_risco"] == 0
+    do_canario = [p for p in falso.predicoes if p["model_version"] == "canario-teste"]
+    assert sorted(p["posicao_na_fila"] for p in do_canario) == list(range(1, n_canario + 1))
