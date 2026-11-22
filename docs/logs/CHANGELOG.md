@@ -10,6 +10,8 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
 ## [Não publicado]
 
+## [v3.4.0] (Vanessa + Claude) - 2026-11-22
+
 ### Modificado
 - **Alvos de qualidade do modelo revisados no [SLO §3](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/SLO.md) e no [SLA §4](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/SLA.md).** Saem `recall_1` ≥ 0,75 e `f1_1` ≥ 0,65, herdados de um desempenho que não se reproduziu e medidos no threshold de 0,6, que a probabilidade calibrada quase nunca alcança (as duas ficam em 0 no campeão). Entram três alvos medidos em validação cruzada 5 × 5, sobre quem a regra por orçamento escolhe: `roc_auc` ≥ 0,60, lift com 30% da fila ≥ 1,3 e Brier não pior que o da taxa base. O campeão `07bcfede25ea` atende os três na média (0,609, 1,43 e 0,195 contra 0,198), com o limite inferior do `roc_auc` abaixo de 0,60. Os alvos não bloqueiam promoção; o gate continua decidindo por regressão relativa de `recall_at_fracao` e `roc_auc`. A nota `excecao_slo_documentada` que o gate e o canário gravam no `champion_metrics.json` passa a citar os alvos novos a partir da próxima promoção.
 - **Curva de custo do SLA §4.1 refeita com o lembrete de 3 segmentos** (R$ 0,44, o texto atual de 177 caracteres) e com o dataset de treino atual (390 linhas, 10 delas de produção). Com 30% da fila, o modelo evitaria cerca de 40% mais faltas que um sorteio (34,3 contra 24,5 por 1.000 consultas), e não os 50% da versão anterior. O padrão de `--segmentos` do `scripts/avaliar_cv.py` passa de 2 para 3, o tamanho do texto atual, travado por teste contra o texto do job D-2.
