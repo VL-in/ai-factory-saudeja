@@ -172,7 +172,8 @@ def decidir_fila(probabilidades: Sequence[float], config: ConfigDecisao) -> Deci
         avisar = [p >= config.threshold for p in probs]
         return DecisaoDaFila(avisar, posicao, float(config.threshold), None, config.modo)
 
-    k = tamanho_do_orcamento(len(probs), float(config.fracao_da_fila))
+    # `validar` já garante a fração no top_fracao; o `or` só estreita o tipo.
+    k = tamanho_do_orcamento(len(probs), float(config.fracao_da_fila or 0.0))
     minima = config.probabilidade_minima
     certa = config.probabilidade_certa
     avisar = []
