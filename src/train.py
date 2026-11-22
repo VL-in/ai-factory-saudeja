@@ -123,6 +123,9 @@ def main():
         if tem_origem_externa(dados_treino):
             mlflow.set_tag(TAG_DADOS_EXTERNOS, "true")
         mlflow.log_param("features_temporais", PARAMS.get("features", {}).get("temporais", False))
+        mlflow.log_param(
+            "features_periodo_do_dia", PARAMS.get("features", {}).get("periodo_do_dia", False)
+        )
 
         model = treinar(X_train, y_train)
 

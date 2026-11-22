@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 
 import contrato_features
 from config_projeto import caminho_de_env, carregar_params
-from features import extrair_features_temporais
+from features import adicionar_features_derivadas
 
 PARAMS = carregar_params()
 
@@ -45,7 +45,29 @@ COLUNAS_BASE = [
 # usadas tanto pelo SMOTENC (evita interpolar valores fracionarios que nao
 # existem, ex. dia_de_semana=2.7) quanto pelo LightGBM (categorical_feature).
 # dia_de_semana/horario so entram se a feature estiver ativa (ver preprocessar).
-COLUNAS_CATEGORICAS = ["sexo", "especialidade", "dia_de_semana", "horario"]
+COLUNAS_CATEGORICAS = ["sexo", "especialidade", "dia_de_semana", "horario", "periodo"]
+
+# Com `features.periodo_do_dia`, o `horario` cru (10 niveis) sai e entram o
+# periodo (3 niveis) e as duas flags. Desligado, a lista e' a de sempre.
+COLUNAS_PERIODO = ["periodo", "fim_expediente_sexta", "fim_de_semana"]
+
+
+def flags_de_features(params_features=None) -> tuple[bool, bool]:
+    """(temporais, periodo_do_dia) do bloco `features` do params.yaml."""
+    cfg = PARAMS.get("features", {}) if params_features is None else params_features
+    return bool(cfg.get("temporais", False)), bool(cfg.get("periodo_do_dia", False))
+
+
+def colunas_de_features(temporais: bool, periodo: bool) -> list[str]:
+    """Colunas do modelo, na ordem -- fonte unica para o treino
+    (`preprocessar`) e para o serving (`inference.colunas_esperadas`)."""
+    if periodo and not temporais:
+        raise ValueError("features.periodo_do_dia exige features.temporais")
+    colunas = list(COLUNAS_BASE)
+    if temporais:
+        colunas.append("dia_de_semana")
+        colunas += COLUNAS_PERIODO if periodo else ["horario"]
+    return colunas
 
 
 def carregar_dados(path):
@@ -89,11 +111,9 @@ def preprocessar(df):
     mapa_esp = {e: i for i, e in enumerate(especialidades)}
     df["especialidade"] = df["especialidade"].map(mapa_esp)
 
-    features = list(COLUNAS_BASE)
-
-    if PARAMS.get("features", {}).get("temporais", False):
-        df = extrair_features_temporais(df)
-        features += ["dia_de_semana", "horario"]
+    temporais, periodo = flags_de_features()
+    df = adicionar_features_derivadas(df, temporais, periodo)
+    features = colunas_de_features(temporais, periodo)
 
     X = df[features]
     y = df["no_show"]

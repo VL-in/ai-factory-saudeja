@@ -37,6 +37,11 @@ decision:
 
 features:
   temporais: true       # true | false -- inclui dia_de_semana e horario
+  # true troca o horario cru (~10 niveis) por periodo (manha | inicio de tarde |
+  # fim de tarde), fim_expediente_sexta e fim_de_semana; exige temporais. O
+  # serving le esta flag: so' muda junto com um model.pkl treinado com ela
+  # (inference.verificar_assinatura barra a carga se divergir).
+  periodo_do_dia: false
 
 # Gate de promoção do re-treino mensal (src/retrain_gate.py).
 # Tolerância de REGRESSÃO relativa ao campeão (data/champion_metrics.json),

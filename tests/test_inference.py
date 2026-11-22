@@ -127,8 +127,10 @@ def test_modelo_com_features_diferentes_do_codigo_e_recusado_na_carga():
 
 def test_categoricas_do_modelo_conferem_com_o_codigo(monkeypatch):
     model, _ = inference.carregar_modelo("data/model.pkl")
+    # as categóricas presentes nas colunas do campeão (`periodo` só existe
+    # com features.periodo_do_dia)
     assert sorted(inference._categoricas_do_modelo(model)) == sorted(
-        inference.COLUNAS_CATEGORICAS
+        c for c in inference.COLUNAS_CATEGORICAS if c in inference.colunas_esperadas()
     )
 
     monkeypatch.setattr(inference, "COLUNAS_CATEGORICAS", ["sexo", "especialidade"])
@@ -179,3 +181,28 @@ def test_assinatura_vale_para_logistica_e_modelo_calibrado(tipo, balanceamento, 
     )
     with pytest.raises(inference.ModeloIncompativelError):
         inference.verificar_assinatura(invertido, features_temporais=True)
+
+
+def test_paridade_com_periodo_do_dia_em_todas_as_linhas(df_consultas, monkeypatch):
+    """Com `features.periodo_do_dia`, treino e serving derivam periodo e flags
+    pela mesma função -- lote inteiro, inclusive a sexta 17h e o sábado."""
+    flags = {"temporais": True, "periodo_do_dia": True}
+    monkeypatch.setitem(preprocess.PARAMS, "features", flags)
+    X_treino, _, mapa_esp = preprocess.preprocessar(df_consultas.copy())
+
+    payloads = [_payload_da_linha(df_consultas, i) for i in range(len(df_consultas))]
+    X_serving = inference.construir_features_lote(
+        payloads, mapa_esp, features_temporais=True, periodo_do_dia=True
+    )
+
+    assert "horario" not in X_serving.columns
+    pd.testing.assert_frame_equal(
+        X_serving.reset_index(drop=True), X_treino.reset_index(drop=True), check_dtype=False
+    )
+
+
+def test_modelo_sem_periodo_e_recusado_quando_o_params_pede_periodo():
+    """O serving lê `features.periodo_do_dia` do params.yaml: ligar a flag sem
+    um model.pkl treinado com ela vira falha na carga, não predição errada."""
+    with pytest.raises(inference.ModeloIncompativelError):
+        inference.carregar_modelo("data/model.pkl", features_temporais=True, periodo_do_dia=True)

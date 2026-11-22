@@ -456,6 +456,9 @@ def logar_mlflow(resultado, args, n_linhas, dados_externos=False, extras=None):
                 "decision_threshold": args.threshold,
                 "fracao_da_fila": args.fracao,
                 "features_temporais": PARAMS.get("features", {}).get("temporais", False),
+                "features_periodo_do_dia": PARAMS.get("features", {}).get(
+                    "periodo_do_dia", False
+                ),
                 "n_linhas": n_linhas,
                 "dados": Path(args.dados).name,
             }

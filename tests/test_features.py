@@ -69,3 +69,48 @@ def test_extrair_features_temporais_nao_muta_o_df_recebido(df_consultas):
     extrair_features_temporais(df_consultas)
 
     assert list(df_consultas.columns) == colunas_antes
+
+
+def test_periodo_do_dia_e_flags_nas_fronteiras():
+    import features
+
+    df = pd.DataFrame(
+        {
+            "data_hora_agendada": [
+                "2026-01-05 11:00:00",  # segunda, manhã
+                "2026-01-05 13:00:00",  # segunda, início de tarde
+                "2026-01-05 15:00:00",  # segunda, início de tarde
+                "2026-01-05 16:00:00",  # segunda, fim de tarde
+                "2026-01-09 16:00:00",  # sexta 16h: fim de tarde, não é fim de expediente
+                "2026-01-09 17:00:00",  # sexta 17h: fim de expediente
+                "2026-01-10 09:00:00",  # sábado
+            ]
+        }
+    )
+    out = features.adicionar_features_derivadas(df, temporais=True, periodo=True)
+
+    assert out["periodo"].tolist() == [0, 1, 1, 2, 2, 2, 0]
+    assert out["fim_expediente_sexta"].tolist() == [0, 0, 0, 0, 0, 1, 0]
+    assert out["fim_de_semana"].tolist() == [0, 0, 0, 0, 0, 0, 1]
+
+
+def test_periodo_sem_temporais_e_recusado():
+    import features
+    import preprocess
+
+    with pytest.raises(ValueError, match="temporais"):
+        features.adicionar_features_derivadas(pd.DataFrame(), temporais=False, periodo=True)
+    with pytest.raises(ValueError, match="temporais"):
+        preprocess.colunas_de_features(temporais=False, periodo=True)
+
+
+def test_colunas_sem_periodo_continuam_as_do_campeao():
+    import preprocess
+
+    assert preprocess.colunas_de_features(True, False)[-2:] == ["dia_de_semana", "horario"]
+    assert preprocess.colunas_de_features(True, True)[-4:] == [
+        "dia_de_semana",
+        "periodo",
+        "fim_expediente_sexta",
+        "fim_de_semana",
+    ]

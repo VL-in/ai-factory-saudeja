@@ -58,7 +58,7 @@ stages:
       - data/consultas-treino.csv
       - data/interim/dados_validados.json
     params:
-      - features.temporais
+      - features
     outs:
       - data/interim/train_raw.pkl
       - data/interim/test.pkl
