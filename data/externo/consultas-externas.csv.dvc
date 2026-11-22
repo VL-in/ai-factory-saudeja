@@ -1,0 +1,5 @@
+outs:
+- md5: 911e9026a262f7e8ecc012eed7deed85
+  size: 183937
+  hash: md5
+  path: consultas-externas.csv

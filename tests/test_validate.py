@@ -34,7 +34,7 @@ def test_validar_retorna_todas_as_metricas_esperadas(modelo_treinado):
         "accuracy", "roc_auc", "pr_auc",
         "f1_1", "precision_1", "recall_1",
         "f1_0", "precision_0", "recall_0",
-        "f1_macro",
+        "f1_macro", "recall_at_fracao", "lift_at_fracao", "brier",
     }
     assert set(metrics.keys()) == esperadas
     assert all(isinstance(v, float) for v in metrics.values())
@@ -111,3 +111,29 @@ def test_main_end_to_end_loga_metricas_na_mesma_run_do_treino(
     assert run.data.tags.get(train.PIPELINE_TAG_KEY) == train.PIPELINE_TAG_VALUE
     assert "roc_auc" in run.data.metrics
     assert "f1_1" in run.data.metrics
+
+
+class _ModeloFixo:
+    """Probabilidades dadas, para conferir as métricas de orçamento à mão."""
+
+    def __init__(self, proba):
+        self.proba = np.asarray(proba, dtype=float)
+
+    def predict_proba(self, X):
+        return np.column_stack([1 - self.proba, self.proba])
+
+
+def test_recall_e_lift_na_fracao_contam_os_k_de_maior_risco(tmp_path):
+    import mlflow
+
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow-fracao.db'}")
+    mlflow.set_experiment("teste-fracao")
+    y = pd.Series([1, 0, 1, 0, 0, 0, 0, 0, 0, 1])
+    modelo = _ModeloFixo([0.9, 0.8, 0.7, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.05])
+
+    with mlflow.start_run():
+        metrics = validate.validar(modelo, pd.DataFrame({"x": range(10)}), y, fracao=0.3)
+
+    # avisa 3 de 10 (0,9 / 0,8 / 0,7): pega 2 dos 3 faltosos
+    assert metrics["recall_at_fracao"] == pytest.approx(2 / 3)
+    assert metrics["lift_at_fracao"] == pytest.approx((2 / 3) / 0.3)

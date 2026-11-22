@@ -11,21 +11,21 @@ especialidade recebida para 0, incorporando um enviesamento sistemático
 silencioso. Este módulo só APLICA o mapa já treinado e salvo em
 data/model.pkl (ver src/train.py:95), nunca recalcula.
 """
-import re
-
 import joblib
 import pandas as pd
+
+import modelo as modelo_ml
 
 # `calcular_model_version` mora em campeao.py (só biblioteca padrão, para o
 # deploy rodar a guarda do campeão sem instalar o stack de ML) e é reexportada
 # daqui: API, job e UI continuam chamando `inference.calcular_model_version`.
 from campeao import calcular_model_version  # noqa: F401
 from config_projeto import carregar_params
-from features import extrair_features_temporais
+from features import adicionar_features_derivadas
 
 # As mesmas listas do treino, importadas e não copiadas: a ordem das colunas é
 # parte do contrato com o modelo (ver `verificar_assinatura`).
-from preprocess import COLUNAS_BASE, COLUNAS_CATEGORICAS
+from preprocess import COLUNAS_CATEGORICAS, colunas_de_features, flags_de_features
 
 PARAMS = carregar_params()
 
@@ -44,53 +44,59 @@ class EspecialidadeDesconhecidaError(Exception):
     """
 
 
-def carregar_modelo(path, features_temporais: bool | None = None):
+def carregar_modelo(
+    path, features_temporais: bool | None = None, periodo_do_dia: bool | None = None
+):
     """Carrega o artefato salvo por train.py: o modelo e o mapa de
     especialidade usados naquele treino (nunca recalculado aqui) -- e confere,
     antes de devolver, que o modelo espera exatamente as features que
     `construir_features` monta (contrato de features)."""
     artefato = joblib.load(path)
     model = artefato["model"]
-    verificar_assinatura(model, features_temporais)
+    verificar_assinatura(model, features_temporais, periodo_do_dia)
     return model, artefato["mapa_especialidade"]
 
 
-def colunas_esperadas(features_temporais: bool | None = None) -> list[str]:
+def _flags(features_temporais: bool | None, periodo_do_dia: bool | None) -> tuple[bool, bool]:
+    """(temporais, periodo) pedidos ou, se omitidos, os do params.yaml -- a
+    mesma fonte do treino. Sem features temporais, não há período do dia."""
+    temporais_params, periodo_params = flags_de_features(PARAMS.get("features", {}))
+    temporais = temporais_params if features_temporais is None else bool(features_temporais)
+    periodo = (periodo_params and temporais) if periodo_do_dia is None else bool(periodo_do_dia)
+    return temporais, periodo
+
+
+def colunas_esperadas(
+    features_temporais: bool | None = None, periodo_do_dia: bool | None = None
+) -> list[str]:
     """Colunas, na ordem, que `construir_features` e `preprocess.preprocessar`
-    produzem para o valor vigente de `features.temporais`."""
-    if features_temporais is None:
-        features_temporais = PARAMS.get("features", {}).get("temporais", False)
-    colunas = list(COLUNAS_BASE)
-    if features_temporais:
-        colunas += ["dia_de_semana", "horario"]
-    return colunas
-
-
-_LINHA_CATEGORICAS = re.compile(r"^\[categorical_feature: ?([\d,]*)\]$", re.MULTILINE)
+    produzem para o bloco `features` vigente (`preprocess.colunas_de_features`,
+    a mesma função do treino)."""
+    return colunas_de_features(*_flags(features_temporais, periodo_do_dia))
 
 
 def _categoricas_do_modelo(model) -> list[str]:
-    """Features que o booster trata como categóricas, lidas do modelo
-    serializado -- é essa linha que o LightGBM usa ao predizer."""
-    booster = model.booster_
-    achado = _LINHA_CATEGORICAS.search(booster.model_to_string())
-    indices = [int(i) for i in achado.group(1).split(",") if i] if achado else []
-    nomes = booster.feature_name()
-    return [nomes[i] for i in indices]
+    """Features que o modelo trata como categóricas (ver
+    `modelo.categoricas_do_modelo`: no LightGBM, a linha do booster que vale
+    ao predizer; na logística, as colunas do one-hot)."""
+    return modelo_ml.categoricas_do_modelo(model)
 
 
-def verificar_assinatura(model, features_temporais: bool | None = None) -> None:
-    """Nomes, ordem e categóricas do modelo (`booster_.feature_name()`) contra
-    o que este código monta. Um modelo treinado com `features.temporais=false`
-    carregado com `true` -- ou com as colunas em outra ordem -- prediria sem
-    erro nenhum sobre colunas trocadas; aqui isso vira falha na carga, antes
-    de qualquer predição (e, no job, antes de qualquer SMS)."""
-    esperadas = colunas_esperadas(features_temporais)
-    obtidas = list(model.booster_.feature_name())
+def verificar_assinatura(
+    model, features_temporais: bool | None = None, periodo_do_dia: bool | None = None
+) -> None:
+    """Nomes, ordem e categóricas do modelo contra o que este código monta,
+    para qualquer tipo de modelo (`src/modelo.py`). Um modelo treinado com
+    `features.temporais=false` carregado com `true` -- ou com as colunas em
+    outra ordem -- prediria sem erro nenhum sobre colunas trocadas; aqui isso
+    vira falha na carga, antes de qualquer predição (e, no job, antes de
+    qualquer SMS)."""
+    esperadas = colunas_esperadas(features_temporais, periodo_do_dia)
+    obtidas = modelo_ml.colunas_do_modelo(model)
     if obtidas != esperadas:
         raise ModeloIncompativelError(
             f"o modelo espera as features {obtidas}, mas o código monta {esperadas} "
-            "(nomes ou ordem divergem -- confira features.temporais em params.yaml)"
+            "(nomes ou ordem divergem -- confira o bloco features em params.yaml)"
         )
     categoricas_esperadas = sorted(c for c in COLUNAS_CATEGORICAS if c in esperadas)
     categoricas_obtidas = sorted(_categoricas_do_modelo(model))
@@ -117,17 +123,25 @@ def aplicar_mapa_especialidade(df, mapa_especialidade):
 
 
 def construir_features(
-    payload: dict, mapa_especialidade: dict, features_temporais: bool | None = None
+    payload: dict,
+    mapa_especialidade: dict,
+    features_temporais: bool | None = None,
+    periodo_do_dia: bool | None = None,
 ):
     """Monta 1 linha com exatamente as colunas/ordem que
     preprocess.preprocessar() produz, a partir de um payload cru (dict).
-    features_temporais, se omitido, vem de params.yaml (mesma fonte que o
-    pipeline de treino usa) -- parametrizável para o teste de paridade."""
-    return construir_features_lote([payload], mapa_especialidade, features_temporais)
+    As flags de features, se omitidas, vêm de params.yaml (mesma fonte que o
+    pipeline de treino usa) -- parametrizáveis para o teste de paridade."""
+    return construir_features_lote(
+        [payload], mapa_especialidade, features_temporais, periodo_do_dia
+    )
 
 
 def construir_features_lote(
-    payloads: list[dict], mapa_especialidade: dict, features_temporais: bool | None = None
+    payloads: list[dict],
+    mapa_especialidade: dict,
+    features_temporais: bool | None = None,
+    periodo_do_dia: bool | None = None,
 ):
     """`construir_features` para várias linhas de uma vez -- a suíte de
     sanidade do modelo (`src/sanidade_modelo.py`) prediz uma grade inteira de casos."""
@@ -135,11 +149,9 @@ def construir_features_lote(
     df["sexo"] = df["sexo"].map({"F": 0, "M": 1})
     df = aplicar_mapa_especialidade(df, mapa_especialidade)
 
-    features = colunas_esperadas(features_temporais)
-    if "dia_de_semana" in features:
-        df = extrair_features_temporais(df)
-
-    return df[features]
+    temporais, periodo = _flags(features_temporais, periodo_do_dia)
+    df = adicionar_features_derivadas(df, temporais, periodo)
+    return df[colunas_de_features(temporais, periodo)]
 
 
 def predizer(model, X):

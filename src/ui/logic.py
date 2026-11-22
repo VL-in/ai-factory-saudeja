@@ -510,6 +510,9 @@ ROTULOS_FEATURES = {
     "historico_noshow": "Faltas anteriores",
     "dia_de_semana": "Dia da semana da consulta",
     "horario": "Horário da consulta",
+    "periodo": "Período do dia da consulta",
+    "fim_expediente_sexta": "Sexta no fim do expediente",
+    "fim_de_semana": "Consulta no sábado",
 }
 
 

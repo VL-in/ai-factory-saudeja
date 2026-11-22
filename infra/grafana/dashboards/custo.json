@@ -243,7 +243,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "Nenhum envio cobrado registrado"
+        },
         "overrides": []
       },
       "options": {},
@@ -282,7 +284,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },

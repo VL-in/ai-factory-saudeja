@@ -229,8 +229,18 @@ def gravar_predicao(
     model_version: str,
     explicacao_texto: str | None = None,
     fora_do_dominio: bool | None = None,
+    posicao_na_fila: int | None = None,
+    modo_decisao: str | None = None,
 ) -> Linha:
-    """`fora_do_dominio` (contrato de features, migration
+    """`posicao_na_fila` e `modo_decisao` (migration
+    `20261122000000_decisao_por_fila.sql`): a posição do agendamento na fila do
+    braço dele, ordenada por probabilidade (1 = maior risco), e a regra que
+    decidiu o lembrete (`threshold` | `top_fracao`, `src/decisao.py`). No
+    top_fracao, `threshold_usado` é o corte que aquela fila produziu, e a
+    posição é o que audita quem ficou dentro do orçamento. `None` nas duas é
+    "predição anterior às colunas".
+
+    `fora_do_dominio` (contrato de features, migration
     `20260930000000_fora_do_dominio.sql`): o agendamento tinha algum campo que
     o modelo não viu no treino (distância > 50 km, antecedência > 90 dias...).
     A predição é gravada mesmo assim -- o contrato manda marcar, nunca
@@ -249,6 +259,8 @@ def gravar_predicao(
                 "explicacao_texto": explicacao_texto,
                 "model_version": model_version,
                 "fora_do_dominio": fora_do_dominio,
+                "posicao_na_fila": posicao_na_fila,
+                "modo_decisao": modo_decisao,
             }
         )
         .execute()

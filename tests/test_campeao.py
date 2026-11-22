@@ -59,3 +59,21 @@ def test_cli_devolve_1_com_anotacao_de_erro(tmp_path, capsys):
 
 def test_cli_devolve_0_para_o_repositorio():
     assert campeao.main(["--model", MODEL_PATH]) == 0
+
+
+def test_regra_de_decisao_incoerente_com_o_threshold_reprova(tmp_path):
+    """O job aplica ao campeão a regra do bloco `decisao`; o threshold dela
+    tem de ser o mesmo em que as métricas foram medidas."""
+    registro = campeao.carregar_campeao()
+    registro["decisao"] = {"modo": "top_fracao", "threshold": 0.5, "fracao_da_fila": 0.3}
+    caminho = tmp_path / "champion_metrics.json"
+    caminho.write_text(json.dumps(registro), encoding="utf-8")
+
+    with pytest.raises(campeao.ModeloNaoCampeao, match="incoerente"):
+        campeao.verificar_campeao(MODEL_PATH, champion_path=caminho)
+
+
+def test_mudar_o_modo_em_params_nao_reprova_o_campeao():
+    """`decision.modo` de params.yaml descreve o próximo desafiante: a guarda
+    só confere o threshold (que a API usa) e o modelo."""
+    assert campeao.verificar_campeao(MODEL_PATH, threshold=0.6)

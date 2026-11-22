@@ -95,8 +95,11 @@ def test_main_gera_train_raw_test_e_mapa_especialidade(csv_consultas, tmp_path, 
 
     dados_treino = joblib.load(train_raw_path)
     dados_teste = joblib.load(test_path)
-    assert set(dados_treino.keys()) == {"X", "y"}
-    assert set(dados_teste.keys()) == {"X", "y"}
+    assert set(dados_treino.keys()) == {"X", "y", "origem", "modo_split"}
+    assert set(dados_teste.keys()) == {"X", "y", "origem", "modo_split"}
+    assert dados_treino["modo_split"] == "aleatorio"
+    # dataset sem a coluna `origem` (exportado antes dela): None
+    assert dados_treino["origem"] is None and dados_teste["origem"] is None
     assert len(dados_treino["X"]) + len(dados_teste["X"]) == 6  # linhas do df_consultas
 
     with open(mapa_path) as f:
@@ -113,3 +116,81 @@ def test_preprocessar_nao_muta_o_df_recebido(df_consultas):
     preprocess.preprocessar(df_consultas)
 
     pd.testing.assert_frame_equal(df_consultas, original)
+
+
+def test_main_leva_a_origem_de_cada_linha_fora_de_X(df_consultas_smote, tmp_path, monkeypatch):
+    """A origem não é feature, mas viaja alinhada às linhas de cada fold (o
+    treino marca o run com dados_externos; métricas por origem)."""
+    df = df_consultas_smote.copy()
+    df["origem"] = ["externa" if i % 4 == 0 else "semente" for i in range(len(df))]
+    csv = tmp_path / "treino.csv"
+    df.to_csv(csv, index=False)
+    caminhos = {n: tmp_path / n for n in ("raw.pkl", "test.pkl", "mapa.json")}
+    monkeypatch.setattr(preprocess, "DATA_PATH", str(csv))
+    monkeypatch.setattr(preprocess, "TRAIN_RAW_PATH", str(caminhos["raw.pkl"]))
+    monkeypatch.setattr(preprocess, "TEST_PATH", str(caminhos["test.pkl"]))
+    monkeypatch.setattr(preprocess, "MAPA_ESPECIALIDADE_PATH", str(caminhos["mapa.json"]))
+
+    preprocess.main()
+
+    for nome in ("raw.pkl", "test.pkl"):
+        dados = joblib.load(caminhos[nome])
+        assert "origem" not in dados["X"].columns
+        assert list(dados["origem"].index) == list(dados["X"].index)
+        assert (dados["origem"] == df.loc[dados["X"].index, "origem"]).all()
+
+
+def _com_origem(df, origens):
+    df = df.copy()
+    df["origem"] = origens
+    return df
+
+
+def test_modo_de_split_segue_a_regra_das_origens(df_consultas_smote):
+    """Sem a coluna, ou só semente: aleatório (o campeão de sempre). Com
+    linha externa ou de produção (id estável): por paciente."""
+    n = len(df_consultas_smote)
+    assert preprocess.modo_de_split(df_consultas_smote) == "aleatorio"
+    assert preprocess.modo_de_split(_com_origem(df_consultas_smote, ["semente"] * n)) == (
+        "aleatorio"
+    )
+    misto = _com_origem(df_consultas_smote, ["semente"] * (n - 5) + ["externa"] * 5)
+    assert preprocess.modo_de_split(misto) == "por_grupo"
+
+
+def test_split_por_grupo_nunca_poe_o_mesmo_paciente_dos_dois_lados(df_consultas_smote):
+    df = df_consultas_smote.copy()
+    # 10 pacientes com 4 consultas cada
+    df["id_paciente"] = [f"P{i % 10}" for i in range(len(df))]
+    X, y, _ = preprocess.preprocessar(df)
+    grupos = df.loc[X.index, "id_paciente"].to_numpy()
+
+    X_tr, X_te, _, y_te = preprocess.dividir_treino_teste(X, y, grupos)
+
+    pacientes_treino = set(df.loc[X_tr.index, "id_paciente"])
+    pacientes_teste = set(df.loc[X_te.index, "id_paciente"])
+    assert pacientes_treino.isdisjoint(pacientes_teste)
+    assert len(X_tr) + len(X_te) == len(X)
+    assert 0.1 <= len(X_te) / len(X) <= 0.3
+    assert y_te.sum() > 0
+
+
+def test_main_com_linha_externa_faz_split_por_paciente(df_consultas_smote, tmp_path, monkeypatch):
+    df = df_consultas_smote.copy()
+    df["id_paciente"] = [f"P{i % 10}" for i in range(len(df))]
+    df["origem"] = ["externa" if i % 2 else "semente" for i in range(len(df))]
+    csv = tmp_path / "treino.csv"
+    df.to_csv(csv, index=False)
+    caminhos = {n: tmp_path / n for n in ("raw.pkl", "test.pkl", "mapa.json")}
+    monkeypatch.setattr(preprocess, "DATA_PATH", str(csv))
+    monkeypatch.setattr(preprocess, "TRAIN_RAW_PATH", str(caminhos["raw.pkl"]))
+    monkeypatch.setattr(preprocess, "TEST_PATH", str(caminhos["test.pkl"]))
+    monkeypatch.setattr(preprocess, "MAPA_ESPECIALIDADE_PATH", str(caminhos["mapa.json"]))
+
+    preprocess.main()
+
+    treino, teste = joblib.load(caminhos["raw.pkl"]), joblib.load(caminhos["test.pkl"])
+    assert treino["modo_split"] == teste["modo_split"] == "por_grupo"
+    assert set(df.loc[treino["X"].index, "id_paciente"]).isdisjoint(
+        df.loc[teste["X"].index, "id_paciente"]
+    )

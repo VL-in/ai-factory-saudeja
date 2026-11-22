@@ -1377,8 +1377,10 @@ def test_toda_feature_do_modelo_tem_rotulo_para_a_recepcao():
     import contrato_features
     import preprocess
 
-    features = {campo.nome for campo in contrato_features.CAMPOS_NUMERICOS} | set(
-        preprocess.COLUNAS_CATEGORICAS
+    features = (
+        {campo.nome for campo in contrato_features.CAMPOS_NUMERICOS}
+        | set(preprocess.COLUNAS_CATEGORICAS)
+        | set(preprocess.colunas_de_features(temporais=True, periodo=True))
     )
     assert features <= set(logic.ROTULOS_FEATURES)
 

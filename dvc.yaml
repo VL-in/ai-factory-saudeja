@@ -20,6 +20,7 @@ stages:
       - requirements/base.txt
       - requirements/train.txt
       - src/validate_data.py
+      - src/regras_dado_real.py
       - src/contrato_features.py
       - src/agenda_clinica.py
       - src/preprocess.py
@@ -52,12 +53,14 @@ stages:
       - src/preprocess.py
       - src/features.py
       - src/contrato_features.py
+      - src/regras_dado_real.py
       - src/agenda_clinica.py
       - src/config_projeto.py
       - data/consultas-treino.csv
       - data/interim/dados_validados.json
     params:
-      - features.temporais
+      - features
+      - dados.split
     outs:
       - data/interim/train_raw.pkl
       - data/interim/test.pkl
@@ -80,16 +83,14 @@ stages:
       - requirements/base.txt
       - requirements/train.txt
       - src/train.py
+      - src/modelo.py
       - src/preprocess.py
       - src/config_projeto.py
       - data/interim/train_raw.pkl
       - data/interim/mapa_especialidade.json
     params:
-      - model.n_estimators
-      - model.learning_rate
-      - model.max_depth
-      - model.num_leaves
-      - balancing.k_neighbors
+      - model
+      - balancing
     outs:
       - data/model.pkl
       - data/interim/mlflow_run_id.txt
@@ -110,9 +111,12 @@ stages:
       - requirements/base.txt
       - requirements/train.txt
       - src/validate.py
+      - src/decisao.py
+      - src/modelo.py
       - src/config_projeto.py
       - data/model.pkl
       - data/interim/test.pkl
       - data/interim/mlflow_run_id.txt
     params:
       - decision.threshold
+      - decision.fracao_da_fila

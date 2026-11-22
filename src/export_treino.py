@@ -40,6 +40,13 @@ consulta passada ainda `agendado` só é visível no banco. É alerta, não
 bloqueio -- mas, se a clínica registra só as faltas e esquece as presenças, o
 dataset fica enviesado para o no-show, e isso precisa aparecer no resumo.
 
+**Origem de cada linha** (`origem`, ADR-014): `semente`, `producao` ou
+`externa`. A origem externa (dataset público de desfecho real,
+`data/externo/consultas-externas.csv`) só entra com
+`dados.externa.habilitada` -- desligado, o dataset continua semente +
+produção. É a coluna que o `validate_data` usa para contar produção, em vez
+de "id que não está na semente".
+
 Nunca inclui `telefone` nem outra PII -- guardado automaticamente por
 `tests/test_coerencia_repo.py::test_export_treino_sem_coluna_proibida_de_pii`.
 """
@@ -66,6 +73,13 @@ CONSULTAS_HISTORICAS_PATH = caminho_de_env(
     "CONSULTAS_HISTORICAS_PATH", "data/consultas-historicas.csv"
 )
 CONSULTAS_TREINO_PATH = caminho_de_env("CONSULTAS_TREINO_PATH", "data/consultas-treino.csv")
+CONSULTAS_EXTERNAS_PATH = caminho_de_env(
+    "CONSULTAS_EXTERNAS_PATH", "data/externo/consultas-externas.csv"
+)
+
+ORIGEM_SEMENTE = "semente"
+ORIGEM_PRODUCAO = "producao"
+ORIGEM_EXTERNA = "externa"
 
 COLUNAS_SAIDA = [
     "id_consulta",
@@ -84,6 +98,8 @@ COLUNAS_SAIDA = [
     # (feedback loop). Não é feature -- `preprocess.py` não o seleciona --, é o
     # dado que permite tratar o efeito depois. Vazio na semente (desconhecido).
     "lembrete_enviado",
+    # semente | producao | externa (ADR-014): quem conta em cada regra.
+    "origem",
 ]
 
 
@@ -127,6 +143,7 @@ def montar_dataset_producao_com_quarentena(
             # export inteiro, com o valor na mensagem de erro do log público.
             "data_hora_agendada": c["data_hora_agendada"],
             "lembrete_enviado": int(bool(c.get("lembrete_enviado"))),
+            "origem": ORIGEM_PRODUCAO,
         }
         for c in consultas
     ]
@@ -154,25 +171,58 @@ def montar_dataset_producao_com_quarentena(
     return df[COLUNAS_SAIDA].reset_index(drop=True), quarentena
 
 
+def externa_habilitada(params: dict[str, Any] | None = None) -> bool:
+    externa = (params or PARAMS).get("dados", {}).get("externa", {})
+    return bool(externa.get("habilitada", False))
+
+
+def carregar_externa(caminho: str | None = None) -> pd.DataFrame:
+    """A amostra de treino do dataset externo, só com as colunas do export
+    (`colunas_imputadas` é metadado do teste de sinal e fica de fora). Sem o
+    arquivo, falha dizendo o que fazer: o parâmetro ligado sem o dado não pode
+    virar um dataset silenciosamente sem a origem externa."""
+    caminho = caminho or CONSULTAS_EXTERNAS_PATH
+    try:
+        externa = pd.read_csv(caminho, dtype={"id_consulta": str, "id_paciente": str})
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"dados.externa.habilitada é true, mas {caminho} não existe -- "
+            "rode `dvc pull data/externo/consultas-externas.csv.dvc`"
+        ) from exc
+    if (externa["origem"] != ORIGEM_EXTERNA).any():
+        raise ValueError(f"{caminho} tem linha com origem diferente de '{ORIGEM_EXTERNA}'")
+    return externa[COLUNAS_SAIDA]
+
+
 def montar_dataset_treino(
     caminho_semente: str | None = None,
     consultas: list[dict[str, Any]] | None = None,
     producao: pd.DataFrame | None = None,
+    externa: pd.DataFrame | None = None,
+    params: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Semente (intocada, herdada da Camila) + produção real.
+    """Semente (intocada, herdada da Camila) + externa (só com
+    `dados.externa.habilitada`) + produção real, cada linha com a `origem`.
     Enquanto o volume de produção for pequeno, o resultado continua dominado
     pela semente sintética -- esperado, não um bug: o que o gate mede segue
     sendo ruído até a clínica acumular desfechos reais. `producao` já
-    montada dispensa `consultas`."""
-    semente = pd.read_csv(caminho_semente or CONSULTAS_HISTORICAS_PATH)
+    montada dispensa `consultas`; `externa` já carregada dispensa o arquivo."""
+    semente = pd.read_csv(caminho_semente or CONSULTAS_HISTORICAS_PATH).assign(
+        origem=ORIGEM_SEMENTE
+    )
     if producao is None:
         producao = montar_dataset_producao(consultas)
-    if producao.empty:
+    partes = [semente]
+    if externa_habilitada(params):
+        partes.append(carregar_externa() if externa is None else externa)
+    if not producao.empty:
+        partes.append(producao)
+    if len(partes) == 1:
         # Enquanto não há desfecho real registrado, o dataset é a semente,
         # ponto -- concatenar com um DataFrame vazio (dtype object por
         # default) mudaria os dtypes das colunas numéricas da semente à toa.
         return semente
-    return pd.concat([semente, producao], ignore_index=True)
+    return pd.concat(partes, ignore_index=True)
 
 
 def medir_completude_de_rotulo(com_desfecho: int) -> dict[str, Any]:
@@ -200,7 +250,10 @@ def main(caminho_saida: str | None = None) -> int:
     linhas = [
         "### Export do dataset de re-treino",
         "",
-        f"- {len(dataset)} linha(s) em {caminho_saida} (semente + {len(producao)} de produção)",
+        f"- {len(dataset)} linha(s) em {caminho_saida} "
+        f"({(dataset['origem'] == ORIGEM_SEMENTE).sum()} da semente, "
+        f"{(dataset['origem'] == ORIGEM_EXTERNA).sum()} externa(s), "
+        f"{len(producao)} de produção)",
     ]
     if quarentena:
         linhas.append(

@@ -10,7 +10,7 @@
   "editable": true,
   "refresh": "5m",
   "time": {
-    "from": "now-24h",
+    "from": "now-7d",
     "to": "now"
   },
   "templating": {
@@ -48,7 +48,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "0"
+        },
         "overrides": []
       },
       "options": {}
@@ -82,7 +84,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "noValue": "Sem ações no período"
         },
         "overrides": []
       },
@@ -140,7 +143,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms"
+          "unit": "ms",
+          "noValue": "Sem medição no período"
         },
         "overrides": []
       },
@@ -175,7 +179,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms"
+          "unit": "ms",
+          "noValue": "Sem medição no período"
         },
         "overrides": []
       },
@@ -213,7 +218,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -247,7 +253,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "Nenhuma ação registrada no mês"
+        },
         "overrides": [
           {
             "matcher": {
@@ -292,7 +300,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "Nenhuma linha de log no período"
+        },
         "overrides": []
       },
       "options": {

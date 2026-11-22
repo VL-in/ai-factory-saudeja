@@ -12,15 +12,59 @@
   },
   "metricas": {
     "accuracy": 0.6710526315789473,
+    "brier": 0.22946507531673724,
     "f1_0": 0.7706422018348624,
     "f1_1": 0.4186046511627907,
     "f1_macro": 0.5946234264988266,
+    "lift_at_fracao": 1.4161490683229814,
     "pr_auc": 0.40808307080532286,
     "precision_0": 0.7777777777777778,
     "precision_1": 0.4090909090909091,
     "recall_0": 0.7636363636363637,
     "recall_1": 0.42857142857142855,
+    "recall_at_fracao": 0.42857142857142855,
     "roc_auc": 0.6432900432900432
   },
-  "excecao_slo_documentada": "recall_1/f1_1 abaixo dos alvos absolutos do SLO §3 (0.75/0.65). O gate protege contra regressão relativa; o gap absoluto é limite do dataset (ADR-003) e será decidido na validação final para o pitch -- não é critério de promoção (SLO §3.1)."
+  "excecao_slo_documentada": "recall_1/f1_1 abaixo dos alvos absolutos do SLO §3 (0.75/0.65). O gate protege contra regressão relativa; o gap absoluto é limite do dataset (ADR-003) e será decidido na validação final para o pitch -- não é critério de promoção (SLO §3.1).",
+  "cv": {
+    "_comentario": "Validação cruzada repetida (scripts/avaliar_cv.py: 5 folds × 5 repetições, intervalo de 95% com a correção de Nadeau-Bengio) da configuração do campeão (LightGBM + SMOTE-NC, sem calibração) na semente de 380 linhas. Referência para comparar desafiantes pela média, não pelo split único.",
+    "dataset": "consultas-treino.csv",
+    "md5_dvc": "9024cbcd0c3dcba3bdcbb35c8b7f4667",
+    "esquema": "RepeatedStratifiedKFold 5x5, random_state 42",
+    "fracao_da_fila": 0.3,
+    "medido_em": "2026-11-22",
+    "metricas": {
+      "roc_auc": {
+        "media": 0.5549,
+        "desvio": 0.0604,
+        "ic95_inf": 0.4877,
+        "ic95_sup": 0.6221
+      },
+      "pr_auc": {
+        "media": 0.351,
+        "desvio": 0.0565,
+        "ic95_inf": 0.2883,
+        "ic95_sup": 0.4138
+      },
+      "brier": {
+        "media": 0.2438,
+        "desvio": 0.0222,
+        "ic95_inf": 0.2192,
+        "ic95_sup": 0.2685
+      },
+      "recall_at_fracao": {
+        "media": 0.3404,
+        "desvio": 0.0728,
+        "ic95_inf": 0.2595,
+        "ic95_sup": 0.4213
+      },
+      "lift_at_fracao": {
+        "media": 1.1247,
+        "desvio": 0.2405,
+        "ic95_inf": 0.8575,
+        "ic95_sup": 1.392
+      }
+    }
+  },
+  "complementado_em": "2026-11-22: recall_at_fracao, lift_at_fracao e brier medidos no mesmo model.pkl e no mesmo fold de teste (as métricas já registradas foram reproduzidas exatamente), e bloco cv acrescentado, antes de o gate passar a comparar por recall_at_fracao (ADR-016). Modelo, threshold e métricas anteriores inalterados."
 }
