@@ -100,6 +100,15 @@ def verificar_campeao(
             f"campeão foi medido ({registrado}) -- recall_1/f1_1 registrados deixariam de "
             "descrever o que roda em produção"
         )
+    # A regra de decisão do campeão (bloco `decisao`, gravado pelo gate) é a
+    # que o job D-2 aplica a ele -- não o `decision.modo` de params.yaml, que
+    # descreve o próximo desafiante. Aqui, só a coerência interna do registro.
+    regra = campeao.get("decisao")
+    if regra is not None and float(regra.get("threshold", registrado)) != registrado:
+        raise ModeloNaoCampeao(
+            f"champion_metrics.json incoerente: decisao.threshold ({regra.get('threshold')}) "
+            f"diverge de decision_threshold ({registrado})"
+        )
     return obtido
 
 

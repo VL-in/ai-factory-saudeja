@@ -245,3 +245,80 @@ def test_explicar_lote_de_uma_linha_bate_com_explicar(explicacao_real):
     _, explainer, X = explicacao_real
 
     assert explain.explicar_lote(explainer, X)[0] == explain.explicar(explainer, X)
+
+
+# --- todos os tipos de modelo (src/modelo.py) -------------------------------
+@pytest.fixture(scope="module")
+def X_y_sintetico():
+    import preprocess
+    from test_modelo import dataset_sintetico
+
+    X, y, _ = preprocess.preprocessar(dataset_sintetico())
+    return X, y
+
+
+def _ajustar(X, y, tipo, balanceamento, calibracao):
+    import modelo
+    import preprocess
+    from test_modelo import _config
+
+    return modelo.ajustar(
+        X, y, _config(tipo, balanceamento, calibracao), preprocess.COLUNAS_CATEGORICAS
+    )
+
+
+@pytest.mark.parametrize(
+    ("tipo", "balanceamento", "calibracao"),
+    [
+        ("lightgbm", "smotenc", "none"),
+        ("lightgbm", "class_weight", "sigmoid"),
+        ("logistica", "class_weight", "none"),
+        ("logistica", "class_weight", "sigmoid"),
+        ("logistica", "smotenc", "none"),
+    ],
+)
+def test_aditividade_em_todo_tipo_de_modelo(X_y_sintetico, tipo, balanceamento, calibracao):
+    """soma(SHAP) + valor esperado = log-odds da probabilidade ENTREGUE, também
+    na logística (one-hot somado de volta na feature) e no modelo calibrado
+    (contribuições escaladas pela sigmoide)."""
+    import modelo
+
+    X, y = X_y_sintetico
+    ajustado = _ajustar(X, y, tipo, balanceamento, calibracao)
+    explicador = explain.construir_explicador(ajustado)
+
+    valores, esperado = explain._valores_classe_positiva(explicador, X)
+    assert np.asarray(valores).shape == X.shape
+    np.testing.assert_allclose(
+        np.asarray(valores).sum(axis=1) + float(esperado), modelo.margem(ajustado, X), atol=1e-6
+    )
+    # e o lote devolve uma contribuição por feature de origem
+    lote = explain.explicar_lote(explicador, X.iloc[:3])
+    assert all({c["feature"] for c in linha} == set(X.columns) for linha in lote)
+
+
+def test_explicador_linear_e_o_shap_linear_intervencional(X_y_sintetico):
+    """O SHAP linear calculado à mão é o mesmo do `shap.LinearExplainer`
+    (fundo = dado de treino transformado), somado por feature de origem."""
+    import shap
+
+    X, y = X_y_sintetico
+    pipeline = _ajustar(X, y, "logistica", "class_weight", "none")
+    nosso = explain.ExplicadorLinear(pipeline)
+
+    transformar = pipeline.named_steps["transformar"]
+    Z = transformar.transform(X)
+    fundo = shap.maskers.Independent(Z, max_samples=len(Z))
+    referencia = shap.LinearExplainer(pipeline.named_steps["modelo"], fundo)
+    por_coluna = referencia.shap_values(Z)
+    agregado = por_coluna @ nosso._agregar
+
+    np.testing.assert_allclose(nosso.shap_values(X), agregado, atol=1e-8)
+    assert nosso.expected_value == pytest.approx(float(np.ravel(referencia.expected_value)[0]))
+
+
+def test_campeao_lightgbm_continua_com_o_tree_explainer():
+    import shap
+
+    model, _ = inference.carregar_modelo("data/model.pkl")
+    assert isinstance(explain.construir_explicador(model), shap.TreeExplainer)

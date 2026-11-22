@@ -1,17 +1,72 @@
+# Classificador (src/modelo.py, a mesma fabrica do train.py e do
+# scripts/avaliar_cv.py). Os valores abaixo descrevem o PROXIMO desafiante, nao
+# o campeao em producao (esse esta' em data/champion_metrics.json): desde a
+# promocao unica do ADR-016, regressao logistica + class_weight + calibracao
+# sigmoide, no lugar do LightGBM + SMOTE-NC sem calibracao. Trocar qualquer um
+# muda o modelo do proximo re-treino, que ainda passa pelo gate. Em
+# experimento, troque com `dvc exp run -S`, nunca editando este arquivo.
+# - tipo: lightgbm | logistica (one-hot + padronizacao, num Pipeline salvo no
+#   model.pkl; SHAP linear exato em src/explain.py).
+# - calibracao: none | sigmoid (Platt com CV interna de 5 folds, so' com
+#   balancing.strategy class_weight ou none). Com class_weight, sem calibrar a
+#   probabilidade fica centrada em 0,5 e o threshold perde o sentido.
+# - min_child_samples, reg_lambda, subsample, subsample_freq, colsample_bytree:
+#   regularizacao do LightGBM; null = default da biblioteca (como antes). Ponto
+#   de partida medido na validacao cruzada: num_leaves 8, max_depth 3,
+#   min_child_samples 20, reg_lambda 5, subsample 0.8 (subsample_freq 1).
+# - logistica.C: inverso da regularizacao L2 da logistica (0.3, medido).
 model:
+  tipo: logistica
+  calibracao: sigmoid
   n_estimators: 120
   learning_rate: 0.02
   max_depth: 6
   num_leaves: 32
+  min_child_samples: null
+  reg_lambda: null
+  subsample: null
+  subsample_freq: null
+  colsample_bytree: null
+  logistica:
+    C: 0.3
 
 balancing:
-  k_neighbors: 3         # SMOTE-NC (ver ADR-003) -- único método usado
+  strategy: class_weight # smotenc | class_weight | none (ADR-003 e emenda)
+  k_neighbors: 3         # SMOTE-NC: vizinhos da interpolacao
 
+# Regra de decisao do lembrete pago (src/decisao.py).
+# - modo: threshold | top_fracao. threshold avisa quem passa de `threshold`;
+#   top_fracao avisa os ceil(fracao_da_fila x fila) de maior probabilidade da
+#   fila do job (o orcamento do BRIEFING), com as duas valvulas abaixo.
+# - threshold: corte da API /predict nos dois modos, e o ponto em que
+#   recall_1/f1_1 sao medidos (informativos no gate).
+# - fracao_da_fila: 0.30 = "cortar 70% do custo de mensageria". Tambem e' a
+#   fracao do recall_at_fracao que o validate.py loga e o gate compara.
+# - probabilidade_minima / probabilidade_certa (null = desligada), so' no
+#   top_fracao e na escala da probabilidade -- so' tem sentido com modelo
+#   calibrado (model.calibracao: sigmoid). Abaixo da minima nao avisa nem com
+#   orcamento sobrando; acima da certa avisa mesmo estourando a fracao. Na
+#   logistica calibrada (validacao cruzada da semente), 0.15 barra ~2% da fila
+#   e 0.50 forca ~1%; a mediana e' 0.26 e a taxa base 0.27.
+# O job D-2 decide cada modelo pela regra registrada junto dele
+# (champion_metrics.json / canario.json, bloco `decisao`, gravado pelo gate a
+# partir deste bloco). Campeao registrado antes da regra decide pelo
+# `threshold` daqui, conferido contra o registrado. Trocar o modo aqui muda o
+# PROXIMO desafiante, que ainda passa pelo gate e pelo canario.
 decision:
   threshold: 0.6         # corte de probabilidade para classificar como no-show (classe 1)
+  modo: top_fracao
+  fracao_da_fila: 0.30
+  probabilidade_minima: 0.15
+  probabilidade_certa: 0.50
 
 features:
   temporais: true       # true | false -- inclui dia_de_semana e horario
+  # true troca o horario cru (~10 niveis) por periodo (manha | inicio de tarde |
+  # fim de tarde), fim_expediente_sexta e fim_de_semana; exige temporais. O
+  # serving le esta flag: so' muda junto com um model.pkl treinado com ela
+  # (inference.verificar_assinatura barra a carga se divergir).
+  periodo_do_dia: false
 
 # Gate de promoção do re-treino mensal (src/retrain_gate.py).
 # Tolerância de REGRESSÃO relativa ao campeão (data/champion_metrics.json),
@@ -25,21 +80,29 @@ features:
 # contínua e não sofre desse salto. Revisar quando o dataset crescer
 # com desfechos reais: com >=50 positivos no fold cai para 0.02 -- o gate avisa
 # quando esse ponto chegar.
+#
+# Criterio (regra de decisao por orcamento, ADR-016): recall_at_fracao (recall
+# avisando decision.fracao_da_fila do fold, contagem -> mesma regra 1/positivos)
+# e roc_auc. recall_1 e f1_1 sao medidos no threshold e ficam so' INFORMATIVOS
+# (na tabela do resumo, sem bloquear): calibrado, um desafiante quase nunca
+# passa de 0.6 e seria barrado por construcao, nao por merito.
 gate:
   tolerancia:
-    recall_1: 0.05
-    f1_1: 0.05
+    recall_at_fracao: 0.05
     roc_auc: 0.02
+    recall_1: 0.05    # informativa
+    f1_1: 0.05        # informativa
   # Piso ABSOLUTO, alem da comparacao relativa: sem ele, cada
   # promocao pode regredir ate' a tolerancia em relacao ao campeao da vez e,
   # somadas, as regressoes pequenas levam o modelo para perto do acaso (efeito
   # catraca). 0.60 e' decisao da autora; o campeao vigente mede 0.643.
   piso:
     roc_auc: 0.60
-  # Fracao do fold de teste que o desafiante mandaria para lembrete pago no
-  # threshold vigente. So' NOTIFICA acima disto, nao bloqueia (decisao da
-  # autora): 0.30 e' o "cortar 70% do custo de mensageria" do BRIEFING. O
-  # campeao vigente marca 22 de 76 (29%).
+  # Fracao do fold de teste que o desafiante mandaria para lembrete pago pela
+  # regra de decisao vigente. So' NOTIFICA acima disto, nao bloqueia (decisao
+  # da autora): 0.30 e' o "cortar 70% do custo de mensageria" do BRIEFING. O
+  # campeao vigente marca 22 de 76 (29%); no top_fracao, 23 de 76 (30,3%) e'
+  # o orcamento arredondado para cima. Tambem e' o limite do aviso do job D-2.
   taxa_disparo_alerta: 0.30
 
 # Contrato de dados (src/contrato_features.py e src/validate_data.py).
@@ -71,6 +134,39 @@ dados:
   # PSI por feature (producao x semente) acima disto vira ALERTA no resumo do
   # re-treino, sem bloquear. 0.2 e' o corte usual de "mudanca relevante".
   psi_alerta: 0.2
+  # Dataset externo de desfecho real (ADR-014): Kaggle noshowappointments,
+  # CC BY-NC-SA 4.0, origem `externa`, arquivos em data/externo/ (DVC).
+  # DESLIGADO ate' a emenda do ADR-014 que libera o uso no treino oficial:
+  # com `habilitada: false`, nenhuma linha externa entra em
+  # data/consultas-treino.csv (tests/test_dataset_externo_dados.py trava).
+  # n_amostra: linhas da amostra de treino (consultas-externas.csv) -- passa
+  # dos limiares de 200 e 600 linhas reais da regra de peso da semente e da'
+  # ~85 positivos no fold de teste. random_state: sorteio das features
+  # imputadas, do teste reservado e da amostra (gravado no manifesto).
+  # razao_sinal_sexta: sinal DECLARADO (emenda do ADR-014) -- o horario imputado
+  # das consultas de sexta e' trocado entre elas para que a falta em 17h-18h
+  # fique 1,25x a do resto do pool (~36% contra ~28%). Hipotese herdada que o
+  # Kaggle nao testa (nao tem hora); desfecho, data e dia da semana sao os reais.
+  externa:
+    habilitada: false
+    n_amostra: 1500
+    random_state: 42
+    razao_sinal_sexta: 1.25
+  # Regras para quando o desfecho real chega (src/regras_dado_real.py). Hoje o
+  # validate_data so' REPORTA o que elas recomendariam; aplica-las no treino e'
+  # decisao com ADR proprio. Desfecho real = producao + externa (a externa conta,
+  # porque o objetivo e' tirar peso do sintetico).
+  # - peso_semente: abaixo de limiar_reduzir linhas reais, a semente pesa 1; a
+  #   partir dele, peso_reduzido; a partir de limiar_retirar, 0 (sai do treino).
+  # - split.dias_producao_cronologico: com mais dias que isto entre a primeira e
+  #   a ultima consulta de PRODUCAO (externa nao conta), o fold de teste passa a
+  #   ser cronologico.
+  peso_semente:
+    limiar_reduzir: 200
+    limiar_retirar: 600
+    peso_reduzido: 0.3
+  split:
+    dias_producao_cronologico: 60
 
 # Canario do modelo (ADR-008, src/canario.py). O desafiante que
 # passa no gate nao substitui o campeao de uma vez: decide `fracao` da fila do
@@ -86,8 +182,13 @@ dados:
 # poucos dias com varias clinicas. Com o volume de uma clinica so' (~10
 # agendamentos/dia no canario) a evidencia nao fecha em 21 dias e o canario e'
 # revertido por prazo: o comportamento seguro, mas que congela o modelo.
+#
+# `habilitado: false` so' durante a promocao unica do ADR-016 (logistica
+# calibrada + top_fracao), por decisao da autora: sem dado real, o canario nao
+# teria predicao para decidir e travaria o re-treino (codigo 4). Volta a true
+# no proprio PR de promocao, antes do merge; rollback pelo docs/OPERACAO.md.
 canario:
-  habilitado: true          # false = promocao direta pelo gate (comportamento anterior)
+  habilitado: false         # false = promocao direta pelo gate (comportamento anterior)
   fracao: 0.20              # parte da fila decidida pelo canario
   dias_minimos: 7           # cobre um ciclo semanal completo da agenda
   dias_maximos: 21          # menor que o intervalo do re-treino mensal

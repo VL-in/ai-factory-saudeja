@@ -7,9 +7,20 @@ recupera sozinha um dia em que o cron não rodou), aplica o contrato de
 features (`src/contrato_features.py`), roda a predição+
 explicação reaproveitando `src/inference.py`/`src/explain.py` -- os mesmos
 módulos que a API usa, sem lógica de predição duplicada --, grava
-o resultado em `predicoes` e decide o disparo de lembrete pago conforme o
-threshold de `params.yaml`, sempre registrando a decisão (enviado ou não)
-em `mensagens_disparadas` para auditoria (`docs/LGPD/LGPD.md` §5).
+o resultado em `predicoes` e decide o disparo de lembrete pago pela regra de
+decisão registrada junto de cada modelo (`src/decisao.py`), sempre registrando
+a decisão (enviado ou não) em `mensagens_disparadas` para auditoria
+(`docs/LGPD/LGPD.md` §5).
+
+**Decisão sobre a fila inteira.** A fila é processada em duas passadas: primeiro
+todos os agendamentos são preditos (e explicados); depois cada braço decide sobre
+as probabilidades dele de uma vez -- no modo `top_fracao`, só vendo a fila toda dá
+para saber quem está entre os K de maior risco. A regra de cada braço é a que foi
+medida e aprovada com aquele modelo: o bloco `decisao` de `champion_metrics.json`
+(campeão) e de `canario.json` (canário). Campeão registrado antes dessa regra
+decide pelo `decision.threshold` de `params.yaml`, que a pré-checagem confere
+contra o registrado. Assim, mudar o `decision.modo` de `params.yaml` muda o
+próximo desafiante, nunca o modelo que já está em produção.
 
 Importa o modelo em processo (decisão do ADR-005 b), não via HTTP à API. Roda
 no runner do GitHub Actions (`.github/workflows/job_d2.yml`), não
@@ -54,6 +65,7 @@ import canario  # noqa: E402
 import contrato_features  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import db.repositorio_treino as repositorio_treino  # noqa: E402
+import decisao  # noqa: E402
 import inference  # noqa: E402
 import observabilidade  # noqa: E402
 import pseudonimo  # noqa: E402
@@ -200,14 +212,52 @@ class _Braco:
         mapa_especialidade: dict[str, Any],
         explainer: Any,
         model_version: str,
-        threshold: float,
+        regra: decisao.ConfigDecisao,
     ) -> None:
         self.nome = nome
         self.model = model
         self.mapa_especialidade = mapa_especialidade
         self.explainer = explainer
         self.model_version = model_version
-        self.threshold = threshold
+        self.regra = regra
+
+
+class _Predito:
+    """Um agendamento já predito na primeira passada, à espera da decisão da
+    fila do braço dele."""
+
+    def __init__(
+        self,
+        agendamento: dict[str, Any],
+        braco: _Braco,
+        probabilidade: float,
+        contribuicoes: Any,
+        fora_do_dominio: bool,
+    ) -> None:
+        self.agendamento = agendamento
+        self.braco = braco
+        self.probabilidade = probabilidade
+        self.contribuicoes = contribuicoes
+        self.fora_do_dominio = fora_do_dominio
+
+
+def regra_do_campeao() -> decisao.ConfigDecisao:
+    """A regra com que o campeão foi aprovado (`champion_metrics.json`, bloco
+    `decisao`). Campeão registrado antes dela, ou sem o arquivo (a aba de dev
+    no Space), decide pelo `decision.threshold` de `params.yaml` -- o
+    comportamento de antes, que a pré-checagem do caminho agendado confere
+    contra o threshold registrado. Nunca pelo `decision.modo` de
+    `params.yaml`: ele descreve o próximo desafiante."""
+    try:
+        registro = campeao.carregar_campeao()
+    except FileNotFoundError:
+        registro = {}
+    if registro.get("decisao"):
+        return decisao.config_registrada(registro)
+    return decisao.ConfigDecisao(
+        modo=decisao.MODO_THRESHOLD,
+        threshold=float(inference.PARAMS["decision"]["threshold"]),
+    )
 
 
 def _canal_do_provedor() -> str:
@@ -304,7 +354,7 @@ def _processar_fila(
             mapa_especialidade,
             construir_explicador(model),
             model_version,
-            float(inference.PARAMS["decision"]["threshold"]),
+            regra_do_campeao(),
         )
     }
     if contexto_canario is not None:
@@ -314,7 +364,7 @@ def _processar_fila(
             contexto_canario.mapa_especialidade,
             contexto_canario.explainer,
             contexto_canario.model_version,
-            contexto_canario.threshold,
+            contexto_canario.regra,
         )
         resultado["por_braco"] = {
             nome: {
@@ -327,6 +377,9 @@ def _processar_fila(
         }
     cliente = cliente_mensageria or obter_cliente_mensageria()
 
+    # Primeira passada: predizer e explicar a fila inteira. A decisão de
+    # lembrete precisa ver todas as probabilidades do braço (top_fracao).
+    preditos: list[_Predito] = []
     for agendamento in pendentes:
         braco = bracos["campeao"]
         if contexto_canario is not None and contexto_canario.decide(
@@ -357,7 +410,8 @@ def _processar_fila(
             # Quarentena: QUALQUER falha ao predizer uma linha (regra de
             # negócio do contrato, especialidade fora do mapa, nulo inesperado)
             # fica restrita àquela linha. Antes só KeyError/Especialidade eram
-            # capturadas, e um TypeError abortava o resto da fila.
+            # capturadas, e um TypeError abortava o resto da fila. Fica fora da
+            # ordenação por risco: recebe o lembrete sem predição já aqui.
             _registrar_quarentena(agendamento, exc, braco.model_version, resultado)
             telemetria.contar(
                 "saudeja_job_d2_agendamentos_total",
@@ -368,8 +422,6 @@ def _processar_fila(
             _enviar_lembrete(agendamento, cliente, resultado, STATUS_ENVIADO_SEM_PREDICAO)
             continue
 
-        threshold = braco.threshold
-        classe_prevista = int(probabilidade >= threshold)
         # Mede só o trecho de modelo (features + predição + SHAP), o mesmo que
         # a rota /predict executa -- a gravação no banco e o envio de SMS que
         # vêm a seguir são custo do job, não da predição.
@@ -387,24 +439,48 @@ def _processar_fila(
             probabilidade,
             {"model_version": braco.model_version, "braco": braco.nome},
         )
+        preditos.append(
+            _Predito(agendamento, braco, probabilidade, contribuicoes, linha.fora_do_dominio)
+        )
 
-        with telemetria.span("gravar", identificadores=identificadores):
+    # Segunda passada: cada braço decide sobre a fila dele, com a regra dele
+    # (no canário, a fração do top_fracao vale sobre a parte da fila que ele
+    # decide). A ordem de gravação e envio continua a da fila.
+    decisoes: dict[int, tuple[bool, int, float, str]] = {}
+    for braco in bracos.values():
+        do_braco = [i for i, p in enumerate(preditos) if p.braco is braco]
+        fila = decisao.decidir_fila([preditos[i].probabilidade for i in do_braco], braco.regra)
+        if fila.k is not None:
+            # O orçamento do top_fracao arredonda para cima: numa fila de 7,
+            # 30% são 3 lembretes (43%). A pós-checagem não avisa por isso.
+            resultado["orcamento_por_risco"] = resultado.get("orcamento_por_risco", 0) + fila.k
+        for j, i in enumerate(do_braco):
+            decisoes[i] = (fila.avisar[j], fila.posicao[j], fila.corte, fila.modo)
+
+    for i, predito in enumerate(preditos):
+        agendamento, braco = predito.agendamento, predito.braco
+        avisar, posicao, corte, modo = decisoes[i]
+        classe_prevista = int(avisar)
+        contadores = resultado.get("por_braco", {}).get(braco.nome)
+        with telemetria.span("gravar", identificadores={"id_agendamento": agendamento.get("id")}):
             repositories.gravar_predicao(
                 id_agendamento=agendamento["id"],
-                probabilidade=probabilidade,
+                probabilidade=predito.probabilidade,
                 classe_prevista=classe_prevista,
-                threshold_usado=threshold,
-                explicacao_shap=contribuicoes,
+                threshold_usado=corte,
+                explicacao_shap=predito.contribuicoes,
                 model_version=braco.model_version,
-                fora_do_dominio=linha.fora_do_dominio,
+                fora_do_dominio=predito.fora_do_dominio,
+                posicao_na_fila=posicao,
+                modo_decisao=modo,
             )
         resultado["predicoes_gravadas"] += 1
-        resultado["fora_do_dominio"] += int(linha.fora_do_dominio)
+        resultado["fora_do_dominio"] += int(predito.fora_do_dominio)
         # Exclusivos: predito dentro do domínio do treino, ou fora dele.
         telemetria.contar(
             "saudeja_job_d2_agendamentos_total",
             {
-                "resultado": "fora_do_dominio" if linha.fora_do_dominio else "predito",
+                "resultado": "fora_do_dominio" if predito.fora_do_dominio else "predito",
                 "braco": braco.nome,
             },
         )
@@ -722,7 +798,10 @@ def pos_checagem(resultado: dict[str, Any]) -> tuple[list[str], list[str]]:
 
     por_risco = resultado["mensagens_disparadas"] - resultado["lembretes_sem_predicao"]
     limite = taxa_de_disparo_alerta()
-    if preditos and por_risco / preditos > limite:
+    # No top_fracao, até o orçamento (K arredondado para cima) é o esperado;
+    # acima dele só a probabilidade_certa leva -- aí o aviso vale.
+    dentro_do_orcamento = por_risco <= resultado.get("orcamento_por_risco", -1)
+    if preditos and por_risco / preditos > limite and not dentro_do_orcamento:
         avisos.append(
             f"taxa de disparo por risco {por_risco / preditos:.0%} ({por_risco} de "
             f"{preditos}) acima de {limite:.0%}"

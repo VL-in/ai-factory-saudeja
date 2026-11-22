@@ -1,7 +1,7 @@
 # ADR-003: Melhoria do F1 por meio de ____
 
 ## Status
-Aceito - 2026-09-08
+Aceito - 2026-09-08. Emendado em 2026-11-21: a conclusão foi medida num único split e não se sustenta na validação cruzada repetida (ver a Emenda no fim deste documento).
 
 ## Contexto
 Melhoria da métrica F1 da classe positiva, que é a métrica de interesse do projeto. Atualmente, o modelo tem F1 = 0.65, e queremos melhorar isso. As proppostas de melhoria incluem comparação entre método SMOTE e balanceamento de classe (class_weight=balaced).
@@ -100,3 +100,26 @@ O SMOTE clássico e as suas outras variações foram consideradas:
 - SMOTEN (só categóricas): não serve, porque a maioria das features aqui é numérica.
 - K-Means SMOTE: agrupa antes de gerar sintéticos; com poucas dezenas de positivos por grupo, os clusters ficam instáveis e pouco confiáveis.
 - SVMSMOTE: tende a instabilidade em amostras pequenas.
+
+## Emenda (2026-11-21): reavaliação com validação cruzada repetida
+
+As conclusões acima foram medidas num único split 80/20 (`random_state=42`), com 76 linhas e 21 positivos no fold de teste. Nesse tamanho, um paciente move `recall_1` em cerca de 0,048, e trocar só a semente do split leva o `roc_auc` do mesmo pipeline de 0,51 a 0,68. A diferença de `f1_1` entre SMOTE-NC e baseline (0,387 contra 0,261) cabe dentro dessa variação.
+
+A mesma comparação foi refeita com `scripts/avaliar_cv.py`: `RepeatedStratifiedKFold` (5 folds × 5 repetições) sobre as 380 linhas de `data/consultas-treino.csv`, com o pré-processamento do pipeline, os hiperparâmetros de `params.yaml`, o balanceamento dentro de cada fold e o threshold vigente (0,6). Média ± desvio-padrão dos 25 folds e intervalo de 95% com a correção de Nadeau-Bengio (os folds não são independentes):
+
+| Configuração | roc_auc | IC 95% | pr_auc | f1_1 @0,6 | recall_1 @0,6 | recall com 30% da fila avisada |
+|---|---|---|---|---|---|---|
+| LightGBM + SMOTE-NC (vigente) | 0,555 ± 0,060 | 0,488 a 0,622 | 0,351 | 0,263 | 0,234 | 0,340 |
+| LightGBM + `class_weight="balanced"` | 0,548 ± 0,071 | 0,469 a 0,628 | 0,334 | 0,237 | 0,210 | 0,348 |
+| LightGBM sem balanceamento | 0,552 ± 0,072 | 0,472 a 0,632 | 0,341 | 0,033 | 0,019 | 0,360 |
+
+Referências do acaso: `roc_auc` 0,5, `pr_auc` 0,274 (a prevalência) e recall de 0,30 avisando 30% da fila ao sorteio.
+
+O que muda na leitura desta decisão:
+
+- **O SMOTE-NC não supera o `class_weight`.** As três condições têm a mesma capacidade de ordenar pacientes por risco (`roc_auc` e `pr_auc` iguais dentro do desvio). O balanceamento só desloca as probabilidades para cima, o que muda quantos passam do threshold. O ganho de `f1_1` e `recall_1` registrado em 2026-09-08 é o efeito desse deslocamento somado à sorte do split, e o `class_weight` obtém o mesmo deslocamento sem gerar linhas sintéticas.
+- **O intervalo do `roc_auc` vigente inclui 0,5.** Na semente sintética atual, não há evidência estatística de que o modelo ordene melhor que o sorteio.
+- **Nenhuma das três condições tem Brier melhor que o modelo que responde sempre a taxa base (0,199).** As probabilidades não estão calibradas, o que precisa ser resolvido antes de qualquer decisão por custo que use a probabilidade.
+
+O SMOTE-NC continua em produção até que um desafiante o substitua pelo fluxo normal (gate e, se a família do modelo mudar, ADR próprio). A partir desta emenda, comparação entre configurações de modelo usa `scripts/avaliar_cv.py`, e o fold de teste isolado (`dvc exp run`) fica para registrar o número oficial da configuração escolhida.
+

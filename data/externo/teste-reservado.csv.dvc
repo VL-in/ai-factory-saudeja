@@ -1,0 +1,5 @@
+outs:
+- md5: 79ccd8fbcec2b0e5fe868735ef0f5697
+  size: 1225362
+  hash: md5
+  path: teste-reservado.csv

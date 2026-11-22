@@ -94,3 +94,24 @@ def test_direcao_do_historico_contraria_so_avisa(monkeypatch):
 
     assert any("histórico de faltas" in a for a in resultado.avisos)
     assert not any("histórico" in f for f in resultado.falhas)
+
+
+def test_logistica_calibrada_passa_na_suite_de_sanidade(tmp_path):
+    """O desafiante de outra família passa pela mesma suíte que o campeão:
+    assinatura, saída, aditividade do SHAP e casos limítrofes."""
+    import joblib
+
+    import modelo
+    import preprocess
+    from test_modelo import _config, dataset_sintetico
+
+    X, y, mapa = preprocess.preprocessar(dataset_sintetico())
+    ajustado = modelo.ajustar(
+        X, y, _config("logistica", "class_weight", "sigmoid"), preprocess.COLUNAS_CATEGORICAS
+    )
+    caminho = tmp_path / "model.pkl"
+    joblib.dump({"model": ajustado, "mapa_especialidade": mapa}, caminho)
+
+    resultado = sanidade_modelo.verificar_modelo(str(caminho))
+
+    assert resultado.aprovado, resultado.falhas

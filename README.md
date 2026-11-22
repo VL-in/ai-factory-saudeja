@@ -76,7 +76,7 @@ flowchart LR
 
 1. O paciente se cadastra e agenda a consulta pela interface. Os dados vão para o Supabase.
 2. Todo dia às 08h17 (horário de São Paulo), o Supabase dispara o job D-2 no GitHub Actions (`pg_cron`); o cron do próprio GitHub fica de reserva. O job busca os agendamentos dos próximos dois dias ainda sem predição, calcula a probabilidade de no-show e grava o resultado com a explicação SHAP. Rodar duas vezes no mesmo dia não manda SMS em dobro.
-3. Pacientes acima do threshold (`decision.threshold` em [`params.yaml`](params.yaml)) recebem SMS via Infobip, só com data e hora da consulta. Toda decisão, enviada ou não, fica registrada para auditoria por 90 dias.
+3. Os pacientes que a regra de decisão do modelo seleciona recebem SMS via Infobip, só com data e hora da consulta. A regra é a registrada com o modelo campeão: hoje, quem passa do threshold (`decision.threshold` em [`params.yaml`](params.yaml)); no modo por orçamento ([ADR-016](docs/adr/adr-016-regra-de-decisao-por-orcamento.md)), os 30% de maior risco da fila. Toda decisão, enviada ou não, fica registrada para auditoria por 90 dias.
 4. A equipe consulta a "Fila do dia", ordenada pelo risco da avaliação mais recente, com a explicação de cada paciente.
 
 ### Componentes

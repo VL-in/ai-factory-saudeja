@@ -6,6 +6,7 @@ mensagem; o caminho feliz roda sobre um dataset no formato da semente. O
 `main()` é exercitado com caminhos em `tmp_path`: o selo (dependência do
 `preprocess` no dvc.yaml) só pode existir quando o dataset passou.
 """
+
 import json
 
 import numpy as np
@@ -218,3 +219,76 @@ def test_main_com_data_ilegivel_na_producao_escreve_o_relatorio(tmp_path, monkey
     conteudo = json.loads(relatorio.read_text(encoding="utf-8"))
     assert conteudo["aprovado"] is False
     assert "ontem às três" not in json.dumps(conteudo, ensure_ascii=False)
+
+
+# --- contagem por origem (ADR-014) ----------------------------------------------
+
+
+def _com_origem(df, origem):
+    return df.assign(origem=origem)
+
+
+def test_linha_externa_nunca_conta_como_producao():
+    semente = _dataset()
+    externa = _dataset(n=300, inicio_id=50_000).assign(
+        id_consulta=lambda d: "K-" + d["id_consulta"].astype(str)
+    )
+    df = pd.concat(
+        [_com_origem(semente, "semente"), _com_origem(externa, "externa")], ignore_index=True
+    )
+
+    relatorio = validate_data.validar(df, semente=semente)
+
+    assert relatorio.resumo["linhas_de_producao"] == 0
+    assert relatorio.resumo["linhas_externas"] == 300
+    assert relatorio.resumo["linhas_com_desfecho_real"] == 300
+    assert relatorio.resumo["psi"] is None  # PSI de produção: não há produção
+    assert relatorio.resumo["psi_externa"] is not None
+    regras = relatorio.resumo["regras_dado_real"]
+    assert regras["peso_da_semente"] == 0.3  # 300 reais: entre 200 e 600
+    assert regras["modo_de_split"] == "por_grupo"
+    assert regras["positivos_de_producao_no_fold"] == 0
+
+
+def test_psi_de_producao_e_de_externa_saem_separados():
+    semente = _dataset()
+    producao = _dataset(n=60, inicio_id=10_000).assign(distancia_km=45.0)
+    externa = _dataset(n=60, inicio_id=20_000)
+    df = pd.concat(
+        [
+            _com_origem(semente, "semente"),
+            _com_origem(producao, "producao"),
+            _com_origem(externa, "externa"),
+        ],
+        ignore_index=True,
+    )
+
+    relatorio = validate_data.validar(df, semente=semente)
+
+    assert relatorio.resumo["psi"]["distancia_km"] > 0.2
+    assert relatorio.resumo["psi_externa"]["distancia_km"] < 0.2
+    assert any("produção x semente" in a for a in relatorio.alertas)
+    assert not any("externa x semente" in a and "distancia_km" in a for a in relatorio.alertas)
+
+
+def test_dataset_sem_coluna_origem_avisa_e_usa_a_regra_antiga():
+    semente = _dataset()
+    df = pd.concat([semente, _dataset(n=60, inicio_id=10_000)], ignore_index=True)
+    relatorio = validate_data.validar(df, semente=semente)
+    assert relatorio.resumo["linhas_de_producao"] == 60
+    assert relatorio.resumo["linhas_externas"] == 0
+    assert any("sem a coluna origem" in a for a in relatorio.alertas)
+
+
+def test_positivos_de_producao_no_fold_contam_so_a_producao():
+    semente = _dataset()
+    producao = _dataset(n=200, taxa_positivos=0.5, inicio_id=10_000)
+    df = pd.concat(
+        [_com_origem(semente, "semente"), _com_origem(producao, "producao")], ignore_index=True
+    )
+    relatorio = validate_data.validar(df, semente=semente)
+    regras = relatorio.resumo["regras_dado_real"]
+    assert (
+        0 < regras["positivos_de_producao_no_fold"] < relatorio.resumo["positivos_no_fold_de_teste"]
+    )
+    assert regras["peso_da_semente"] == 0.3

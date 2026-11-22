@@ -50,3 +50,13 @@ docs/playbook/
 guia
 docs/Planos/
 docs/controle/
+
+
+# Stratification
+subgrupos.csv
+
+# Dataset externo (Kaggle noshowappointments, CC BY-NC-SA 4.0): bruto e
+# derivados ficam fora do git -- versionados por DVC (ADR-014). O bruto vai
+# como pasta (data/externo/raw.dvc), porque um .dvc dentro da pasta ignorada
+# nao entraria no git. LICENCA-E-ORIGEM.md fica no git: atribuicao, sem dado.
+data/externo/raw/
