@@ -44,6 +44,19 @@ Extensões para o teste de sinal do dataset externo (ADR-014):
   desfecho, antes da CV (as amostras extras do teste de robustez).
 - Run com dado de origem `externa` leva a tag MLflow `dados_externos=true`.
 
+Curva de custo por fração da fila (`--curva`, regra `top_fracao` do ADR-016):
+- usa as probabilidades fora da amostra (out-of-fold) da própria CV: em cada
+  repetição, toda linha recebe a probabilidade do fold em que foi validação;
+- para cada fração f (`--fracoes`), avisa os ceil(f x n) de maior
+  probabilidade de cada repetição e mede recall, precisão e lift (média das
+  repetições), com a mesma conta de `decisao.recall_na_fracao`;
+- converte em reais por 1.000 consultas com premissas declaradas: custo do
+  lembrete = `--segmentos` x `custo.sms_unitario_usd` x `custo.cambio_usd_brl`
+  do params.yaml; faltas evitadas = 1.000 x prevalência x recall x `--eficacia`
+  (eficácia do lembrete, ASSUMIDA); receita = faltas evitadas x
+  `--custo-falta`. Inclui a linha do sorteio (avisar `--fracao` ao acaso).
+  É a tabela do SLA §4.1.
+
 Uso (na raiz do repo):
     python scripts/avaliar_cv.py                                   # vigente
     python scripts/avaliar_cv.py --balanceamento class_weight
@@ -51,6 +64,8 @@ Uso (na raiz do repo):
     python scripts/avaliar_cv.py --modelo logistica --balanceamento class_weight \
         --calibracao sigmoid
     python scripts/avaliar_cv.py --sem-mlflow                      # só imprime
+    python scripts/avaliar_cv.py --modelo logistica --balanceamento class_weight \
+        --calibracao sigmoid --curva --sem-mlflow                  # SLA §4.1
     python scripts/avaliar_cv.py --dados data/externo/consultas-externas.csv \
         --grupo id_paciente --modelo logistica --balanceamento class_weight \
         --features idade sexo dias_entre_agendamento_consulta historico_noshow \
@@ -124,6 +139,14 @@ METRICAS = (
     "recall_at_fracao",
     "lift_at_fracao",
 )
+
+
+# Curva de custo (--curva): frações avaliadas e premissas padrão do SLA §4.1.
+FRACOES_DA_CURVA = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 1.0)
+EFICACIA_LEMBRETE = 0.30  # ASSUMIDA: 30% de quem ia faltar e foi avisado comparece
+CUSTO_FALTA_BRL = 180.0  # BRIEFING
+SEGMENTOS_DO_LEMBRETE = 2  # o texto acentuado tem 72 caracteres (2 segmentos de 70)
+CONSULTAS_DA_CURVA = 1000
 
 
 # --------------------------------------------------------------------------
@@ -231,9 +254,14 @@ def avaliar(
     random_state=RANDOM_STATE,
     grupos=None,
     calibracao="none",
+    guardar_oof=False,
 ):
     """Roda a CV repetida e devolve {"folds": {métrica: [valores]},
-    "resumo": {métrica: {media, desvio, ic95_inf, ic95_sup}}, "referencia": {...}}."""
+    "resumo": {métrica: {media, desvio, ic95_inf, ic95_sup}}, "referencia": {...}}.
+
+    Com `guardar_oof`, devolve também "oof": matriz (repetições x linhas) com a
+    probabilidade que cada linha recebeu quando estava no fold de validação --
+    os mesmos ajustes das métricas, sem treinar de novo (base da `--curva`)."""
     if modelo not in MODELOS:
         raise ValueError(f"modelo deve ser um de {MODELOS}")
     if balanceamento not in BALANCEAMENTOS:
@@ -241,17 +269,23 @@ def avaliar(
     threshold = PARAMS["decision"]["threshold"] if threshold is None else threshold
 
     folds = {m: [] for m in METRICAS}
-    for idx_treino, idx_validacao in divisoes(X, y, grupos, n_splits, n_repeats, random_state):
+    oof = np.full((n_repeats, len(y)), np.nan)
+    divisao = divisoes(X, y, grupos, n_splits, n_repeats, random_state)
+    for i, (idx_treino, idx_validacao) in enumerate(divisao):
         estimador = ajustar_no_fold(
             X.iloc[idx_treino], y.iloc[idx_treino], modelo, balanceamento, calibracao
         )
         X_val, y_val = X.iloc[idx_validacao], y.iloc[idx_validacao]
         y_proba = estimador.predict_proba(X_val)[:, 1]
+        # as duas divisões entregam os n_splits folds de cada repetição em sequência
+        oof[i // n_splits, idx_validacao] = y_proba
         for nome, valor in metricas_do_fold(y_val, y_proba, threshold, fracao).items():
             folds[nome].append(valor)
 
     prevalencia = float(np.mean(y))
+    extras = {"oof": oof} if guardar_oof else {}
     return {
+        **extras,
         "folds": folds,
         "resumo": {m: resumir(v, n_splits) for m, v in folds.items()},
         "referencia": {
@@ -262,6 +296,57 @@ def avaliar(
             "lift_acaso": 1.0,
         },
     }
+
+
+def premissas_de_custo(
+    eficacia=EFICACIA_LEMBRETE, custo_falta=CUSTO_FALTA_BRL, segmentos=SEGMENTOS_DO_LEMBRETE
+):
+    """Premissas da curva, com o preço do SMS e o câmbio lidos do params.yaml
+    (`custo`, a mesma fonte do job D-2 e do painel de custo)."""
+    custo = PARAMS.get("custo") or {}
+    sms_brl = segmentos * float(custo["sms_unitario_usd"]) * float(custo["cambio_usd_brl"])
+    return {
+        "eficacia": float(eficacia),
+        "custo_falta_brl": float(custo_falta),
+        "segmentos": int(segmentos),
+        "custo_lembrete_brl": sms_brl,
+    }
+
+
+def curva_por_fracao(y, oof, fracoes, premissas, fracao_sorteio=FRACAO_DA_FILA):
+    """Uma linha por fração avisada, com médias entre as repetições do `oof`
+    e valores por `CONSULTAS_DA_CURVA` consultas. A última linha é o sorteio:
+    avisar `fracao_sorteio` da fila ao acaso pega, em média, essa mesma fração
+    dos faltosos (recall = fração, precisão = prevalência, lift 1)."""
+    y = np.asarray(y)
+    n = CONSULTAS_DA_CURVA
+    prevalencia = float(y.mean())
+    sms = premissas["custo_lembrete_brl"]
+
+    def _linha(nome, fracao, recall, precisao):
+        evitadas = n * prevalencia * recall * premissas["eficacia"]
+        return {
+            "linha": nome,
+            "fracao": float(fracao),
+            "recall": float(recall),
+            "precisao": float(precisao),
+            "lift": float(recall / fracao),
+            "custo_sms_brl": float(fracao * n * sms),
+            "faltas_evitadas": float(evitadas),
+            "receita_preservada_brl": float(evitadas * premissas["custo_falta_brl"]),
+        }
+
+    linhas = []
+    for fracao in fracoes:
+        recalls, precisoes = [], []
+        for probs in oof:
+            recall, fracao_avisada = recall_na_fracao(y, probs, fracao)
+            k = fracao_avisada * len(y)
+            recalls.append(recall)
+            precisoes.append(recall * y.sum() / k)
+        linhas.append(_linha("modelo", fracao, np.mean(recalls), np.mean(precisoes)))
+    linhas.append(_linha("sorteio", fracao_sorteio, fracao_sorteio, prevalencia))
+    return linhas
 
 
 def _roc_auc_medio(X, y, modelo, balanceamento, grupos, n_splits, random_state):
@@ -404,6 +489,25 @@ def imprimir(resultado, args, n_linhas):
     )
 
 
+def imprimir_curva(curva, premissas):
+    print(
+        f"\n[curva] por {CONSULTAS_DA_CURVA} consultas | lembrete R$ "
+        f"{premissas['custo_lembrete_brl']:.3f} ({premissas['segmentos']} segmentos), "
+        f"falta R$ {premissas['custo_falta_brl']:.0f}, eficacia do lembrete "
+        f"{premissas['eficacia']:.0%} (ASSUMIDA)"
+    )
+    print(
+        f"{'linha':<8} {'fracao':>6} {'recall':>6} {'precisao':>8} {'lift':>5} "
+        f"{'custo R$':>9} {'evitadas':>9} {'receita R$':>11}"
+    )
+    for c in curva:
+        print(
+            f"{c['linha']:<8} {c['fracao']:6.0%} {c['recall']:6.2f} {c['precisao']:8.2f} "
+            f"{c['lift']:5.2f} {c['custo_sms_brl']:9.0f} {c['faltas_evitadas']:9.1f} "
+            f"{c['receita_preservada_brl']:11.0f}"
+        )
+
+
 def imprimir_permutacao(perm):
     print(
         f"\n[permutacao] roc_auc real (5x1) {perm['roc_auc_real']:.3f} | nula: media "
@@ -418,7 +522,9 @@ def imprimir_univariada(univariada):
         print(f"{nome:<34} {r['auc']:6.3f}   [{r['ic95_inf']:6.3f}, {r['ic95_sup']:6.3f}]")
 
 
-def logar_mlflow(resultado, args, n_linhas, dados_externos=False, extras=None):
+def logar_mlflow(
+    resultado, args, n_linhas, dados_externos=False, extras=None, params_extras=None
+):
     import mlflow
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
@@ -434,6 +540,8 @@ def logar_mlflow(resultado, args, n_linhas, dados_externos=False, extras=None):
             mlflow.log_param("features", ",".join(args.features))
         for nome, valor in (extras or {}).items():
             mlflow.log_metric(nome, valor)
+        if params_extras:
+            mlflow.log_params(params_extras)
         mlflow.log_params(
             {
                 "modelo": args.modelo,
@@ -485,6 +593,17 @@ def _parser():
     p.add_argument("--excluir-pacientes-de", default=None, help="CSV cujos pacientes saem do dado")
     p.add_argument("--amostra", type=int, default=None, help="sorteia N linhas estratificadas")
     p.add_argument("--semente-amostra", type=int, default=RANDOM_STATE)
+    p.add_argument(
+        "--curva",
+        action="store_true",
+        help="curva de custo por fração da fila (top_fracao), a tabela do SLA §4.1",
+    )
+    p.add_argument("--fracoes", type=float, nargs="+", default=list(FRACOES_DA_CURVA))
+    p.add_argument(
+        "--eficacia", type=float, default=EFICACIA_LEMBRETE, help="eficácia do lembrete"
+    )
+    p.add_argument("--custo-falta", type=float, default=CUSTO_FALTA_BRL)
+    p.add_argument("--segmentos", type=int, default=SEGMENTOS_DO_LEMBRETE)
     return p
 
 
@@ -506,9 +625,25 @@ def main(argv=None):
         n_repeats=args.n_repeats,
         grupos=grupos,
         calibracao=args.calibracao,
+        guardar_oof=args.curva,
     )
     imprimir(resultado, args, len(X))
     extras = {}
+    params_extras = {}
+    if args.curva:
+        premissas = premissas_de_custo(args.eficacia, args.custo_falta, args.segmentos)
+        resultado["curva"] = curva_por_fracao(
+            y, resultado.pop("oof"), args.fracoes, premissas, args.fracao
+        )
+        resultado["premissas_curva"] = premissas
+        imprimir_curva(resultado["curva"], premissas)
+        for c in resultado["curva"]:
+            if c["linha"] == "modelo":
+                pct = round(c["fracao"] * 100)
+                extras[f"curva_recall_{pct}"] = c["recall"]
+                extras[f"curva_lift_{pct}"] = c["lift"]
+                extras[f"curva_receita_{pct}"] = c["receita_preservada_brl"]
+        params_extras = {f"curva_{k}": v for k, v in premissas.items()}
     if args.permutacoes:
         resultado["permutacao"] = teste_de_permutacao(
             X, y, args.permutacoes, args.modelo, args.balanceamento, grupos, args.n_splits
@@ -519,7 +654,7 @@ def main(argv=None):
         resultado["univariada"] = auc_univariada(X, y)
         imprimir_univariada(resultado["univariada"])
     if not args.sem_mlflow:
-        logar_mlflow(resultado, args, len(X), tem_dado_externo(df), extras)
+        logar_mlflow(resultado, args, len(X), tem_dado_externo(df), extras, params_extras)
         print(f"[ok] run logada no MLflow ({PIPELINE_TAG_KEY}={PIPELINE_TAG_VALUE})")
     return resultado
 

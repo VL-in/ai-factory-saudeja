@@ -47,7 +47,7 @@ Leitura:
 
 - Com o critério novo, o campeão comparado com ele mesmo passa: o critério não bloqueia o que está em produção. O desafiante calibrado passa por mérito (+0,19 em `recall_at_fracao`, +0,064 em `roc_auc` no fold oficial). Pelo critério antigo, seria bloqueado pelo `recall_1` em zero.
 - Na validação cruzada, o lift do campeão tem intervalo que inclui 1 (avisar ao acaso). O da logística calibrada não inclui.
-- A curva de custo por fração da fila, com a premissa de eficácia do lembrete, está no [SLA §4.1](../SLA.md#41-curva-de-custo-por-fração-da-fila).
+- A curva de custo por fração da fila, com a premissa de eficácia do lembrete, está no [SLA §4.1](../SLA.md#41-curva-de-custo-por-fração-da-fila) e é gerada por `scripts/avaliar_cv.py --curva`.
 
 ## Consequências
 Positivas:

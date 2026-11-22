@@ -351,3 +351,100 @@ def test_tem_dado_externo_so_com_a_origem_externa():
     assert not avaliar_cv.tem_dado_externo(pd.DataFrame({"x": [1]}))
     assert not avaliar_cv.tem_dado_externo(pd.DataFrame({"origem": ["semente"]}))
     assert avaliar_cv.tem_dado_externo(pd.DataFrame({"origem": ["semente", "externa"]}))
+
+
+# --------------------------------------------------------------------------
+# Curva de custo por fração da fila (--curva, SLA §4.1)
+# --------------------------------------------------------------------------
+PREMISSAS = {"eficacia": 0.3, "custo_falta_brl": 180.0, "segmentos": 2, "custo_lembrete_brl": 0.3}
+
+
+def test_oof_cobre_cada_linha_uma_vez_por_repeticao(X_y):
+    X, y = X_y
+    resultado = avaliar_cv.avaliar(
+        X, y, "logistica", "class_weight", n_splits=3, n_repeats=2, guardar_oof=True
+    )
+    assert resultado["oof"].shape == (2, len(y))
+    assert not np.isnan(resultado["oof"]).any()
+    assert ((resultado["oof"] >= 0) & (resultado["oof"] <= 1)).all()
+
+
+def test_oof_por_grupo_tambem_cobre_todas_as_linhas(X_y_grupos):
+    X, y, grupos = X_y_grupos
+    resultado = avaliar_cv.avaliar(
+        X, y, "logistica", "class_weight", n_splits=3, n_repeats=2, grupos=grupos,
+        guardar_oof=True,
+    )
+    assert not np.isnan(resultado["oof"]).any()
+
+
+def test_sem_guardar_oof_o_resultado_nao_muda_de_forma(X_y):
+    X, y = X_y
+    resultado = avaliar_cv.avaliar(X, y, "logistica", "class_weight", n_splits=3, n_repeats=1)
+    assert "oof" not in resultado
+
+
+def test_curva_conta_recall_precisao_lift_e_dinheiro_a_mao():
+    # 10 linhas, 3 faltosos; o modelo põe 2 deles no topo
+    y = [1, 0, 1, 0, 0, 0, 0, 0, 0, 1]
+    oof = np.array([[0.9, 0.8, 0.7, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.05]])
+
+    modelo, sorteio = avaliar_cv.curva_por_fracao(y, oof, [0.3], PREMISSAS, 0.3)
+
+    assert modelo["recall"] == pytest.approx(2 / 3)
+    assert modelo["precisao"] == pytest.approx(2 / 3)  # 2 faltosos entre 3 avisados
+    assert modelo["lift"] == pytest.approx((2 / 3) / 0.3)
+    assert modelo["custo_sms_brl"] == pytest.approx(0.3 * 1000 * 0.3)
+    evitadas = 1000 * 0.3 * (2 / 3) * 0.3  # consultas x prevalência x recall x eficácia
+    assert modelo["faltas_evitadas"] == pytest.approx(evitadas)
+    assert modelo["receita_preservada_brl"] == pytest.approx(evitadas * 180)
+    assert sorteio["linha"] == "sorteio"
+    assert sorteio["recall"] == 0.3 and sorteio["lift"] == 1.0
+    assert sorteio["precisao"] == pytest.approx(0.3)
+
+
+def test_curva_faz_a_media_entre_as_repeticoes():
+    y = [1, 0, 0, 0]
+    oof = np.array([[0.9, 0.1, 0.1, 0.1], [0.1, 0.9, 0.2, 0.3]])  # acerta numa, erra noutra
+    modelo, _ = avaliar_cv.curva_por_fracao(y, oof, [0.25], PREMISSAS)
+    assert modelo["recall"] == pytest.approx(0.5)
+
+
+def test_avisar_todos_tem_recall_1_e_lift_1():
+    y = [1, 0, 1, 0, 0]
+    oof = np.array([[0.2, 0.4, 0.1, 0.9, 0.3]])
+    modelo, _ = avaliar_cv.curva_por_fracao(y, oof, [1.0], PREMISSAS)
+    assert modelo["recall"] == 1.0 and modelo["lift"] == 1.0
+
+
+def test_premissas_leem_preco_e_cambio_do_params():
+    custo = avaliar_cv.PARAMS["custo"]
+    premissas = avaliar_cv.premissas_de_custo(segmentos=2)
+    esperado = 2 * custo["sms_unitario_usd"] * custo["cambio_usd_brl"]
+    assert premissas["custo_lembrete_brl"] == pytest.approx(esperado)
+
+
+def test_main_com_curva_imprime_e_loga_a_curva(
+    df_consultas_smote, tmp_path, monkeypatch, logging_da_raiz_preservado, capsys
+):
+    import mlflow
+
+    csv = tmp_path / "consultas.csv"
+    df_consultas_smote.to_csv(csv, index=False)
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow-curva.db'}"
+    monkeypatch.setattr(avaliar_cv, "MLFLOW_TRACKING_URI", tracking_uri)
+    monkeypatch.setattr(avaliar_cv, "MLFLOW_EXPERIMENT_NAME", "teste-curva")
+
+    resultado = avaliar_cv.main(
+        ["--dados", str(csv), "--n-splits", "3", "--n-repeats", "1",
+         "--balanceamento", "class_weight", "--curva", "--fracoes", "0.3", "1.0"]
+    )
+
+    assert "oof" not in resultado
+    assert [c["fracao"] for c in resultado["curva"]] == [0.3, 1.0, 0.3]
+    assert "[curva]" in capsys.readouterr().out
+    mlflow.set_tracking_uri(tracking_uri)
+    experimento = mlflow.get_experiment_by_name("teste-curva")
+    run = mlflow.search_runs(experiment_ids=[experimento.experiment_id]).iloc[0]
+    assert "metrics.curva_recall_30" in run.index and "metrics.curva_lift_100" in run.index
+    assert run["params.curva_eficacia"] == "0.3"

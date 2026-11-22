@@ -55,6 +55,14 @@ Leitura:
 - **Com o mesmo orçamento (30%), o modelo evita cerca de 50% mais faltas que um sorteio** (37 contra 25 por 1.000 consultas). É o número a mostrar: o lift, não o F1.
 - **O ganho por fração cai depois de 30%.** O lift sai de cerca de 1,5 até 30% e desce para 1,2 em 60%: a partir daí o modelo separa pouco os pacientes que restam.
 
+**Como reproduzir (e refazer com outras premissas):**
+
+```bash
+python scripts/avaliar_cv.py --modelo logistica --balanceamento class_weight     --calibracao sigmoid --curva --sem-mlflow
+```
+
+O script usa as probabilidades fora da amostra da própria validação cruzada. Em cada uma das 5 repetições, avisa os ⌈f × n⌉ pacientes de maior probabilidade, mede recall e precisão, e tira a média entre as repetições. O preço do SMS e o câmbio vêm do bloco `custo` do `params.yaml`. As premissas mudam por opção: `--eficacia`, `--custo-falta`, `--segmentos` e `--fracoes`, e `--dados` troca o conjunto (por exemplo, a amostra do dataset externo, com `--grupo id_paciente`). Sem `--sem-mlflow`, a curva vai para a run (`curva_recall_30`, `curva_lift_30`, `curva_receita_30`…).
+
 Revisar esta seção quando a eficácia do lembrete for medida ou quando o modelo for re-treinado com desfecho real.
 
 ## 5. Continuidade e re-treino
