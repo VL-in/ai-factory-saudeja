@@ -32,6 +32,7 @@ bootstrap e com o canário desligado. Os testes do canário o religam.
 
 import json
 import math
+from pathlib import Path
 
 import joblib
 import mlflow
@@ -621,8 +622,23 @@ def test_modelo_ja_revertido_num_canario_e_bloqueado(com_canario):
 
 
 def test_params_do_repositorio_habilitam_o_canario():
-    assert canario.habilitado(gate.PARAMS)
+    """O canário só pode estar desligado durante a promoção única do ADR-016:
+    enquanto o campeão registrado ainda é o anterior à regra por orçamento
+    (sem bloco `decisao`, ou com ele em `threshold`). Promovido o modelo em
+    `top_fracao`, esta trava exige `canario.habilitado: true` -- é ela que
+    faz o CI do PR de promoção falhar se a chave não voltar."""
     assert 0 < canario.ler_config(gate.PARAMS)["fracao"] < 1
+    if canario.habilitado(gate.PARAMS):
+        return
+    champion = gate.carregar_champion(
+        str(Path(__file__).resolve().parents[1] / "data" / "champion_metrics.json")
+    )
+    assert champion is not None
+    regra = champion.get("decisao") or {}
+    assert regra.get("modo", "threshold") == "threshold", (
+        "canario.habilitado: false com o campeão já promovido em top_fracao -- "
+        "volte a chave para true (params.yaml)"
+    )
 
 
 # --------------------------------------------------------------------------

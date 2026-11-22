@@ -108,13 +108,17 @@ def test_taxa_de_disparo_no_top_fracao_e_a_fracao_configurada():
 # --------------------------------------------------------------------------
 # configuração
 # --------------------------------------------------------------------------
-def test_params_do_repositorio_sao_uma_regra_valida_em_modo_threshold():
-    """O campeão em produção decide por threshold: trocar o modo é a promoção
-    de um desafiante, não uma edição deste arquivo."""
+def test_params_do_repositorio_sao_uma_regra_valida_em_modo_top_fracao():
+    """Desde a promoção única do ADR-016, o `params.yaml` descreve o desafiante
+    em `top_fracao`, com as duas válvulas. O campeão decide pela regra
+    registrada junto dele, não por este bloco (ver `config_registrada`)."""
     config = decisao.config_de_params(carregar_params())
-    assert config.modo == decisao.MODO_THRESHOLD
+    decisao.validar(config)
+    assert config.modo == decisao.MODO_TOP_FRACAO
     assert config.threshold == 0.6
     assert config.fracao_da_fila == 0.3
+    assert config.probabilidade_minima == 0.15
+    assert config.probabilidade_certa == 0.50
 
 
 def test_params_sem_modo_e_threshold():

@@ -1,8 +1,10 @@
 # Classificador (src/modelo.py, a mesma fabrica do train.py e do
-# scripts/avaliar_cv.py). Os valores abaixo sao os do campeao em producao
-# (LightGBM + SMOTE-NC, sem calibracao): trocar qualquer um muda o modelo do
-# proximo re-treino, que ainda passa pelo gate. Em experimento, troque com
-# `dvc exp run -S`, nunca editando este arquivo.
+# scripts/avaliar_cv.py). Os valores abaixo descrevem o PROXIMO desafiante, nao
+# o campeao em producao (esse esta' em data/champion_metrics.json): desde a
+# promocao unica do ADR-016, regressao logistica + class_weight + calibracao
+# sigmoide, no lugar do LightGBM + SMOTE-NC sem calibracao. Trocar qualquer um
+# muda o modelo do proximo re-treino, que ainda passa pelo gate. Em
+# experimento, troque com `dvc exp run -S`, nunca editando este arquivo.
 # - tipo: lightgbm | logistica (one-hot + padronizacao, num Pipeline salvo no
 #   model.pkl; SHAP linear exato em src/explain.py).
 # - calibracao: none | sigmoid (Platt com CV interna de 5 folds, so' com
@@ -14,8 +16,8 @@
 #   min_child_samples 20, reg_lambda 5, subsample 0.8 (subsample_freq 1).
 # - logistica.C: inverso da regularizacao L2 da logistica (0.3, medido).
 model:
-  tipo: lightgbm
-  calibracao: none
+  tipo: logistica
+  calibracao: sigmoid
   n_estimators: 120
   learning_rate: 0.02
   max_depth: 6
@@ -29,7 +31,7 @@ model:
     C: 0.3
 
 balancing:
-  strategy: smotenc      # smotenc | class_weight | none (ADR-003 e emenda)
+  strategy: class_weight # smotenc | class_weight | none (ADR-003 e emenda)
   k_neighbors: 3         # SMOTE-NC: vizinhos da interpolacao
 
 # Regra de decisao do lembrete pago (src/decisao.py).
@@ -53,7 +55,7 @@ balancing:
 # PROXIMO desafiante, que ainda passa pelo gate e pelo canario.
 decision:
   threshold: 0.6         # corte de probabilidade para classificar como no-show (classe 1)
-  modo: threshold
+  modo: top_fracao
   fracao_da_fila: 0.30
   probabilidade_minima: 0.15
   probabilidade_certa: 0.50
@@ -180,8 +182,13 @@ dados:
 # poucos dias com varias clinicas. Com o volume de uma clinica so' (~10
 # agendamentos/dia no canario) a evidencia nao fecha em 21 dias e o canario e'
 # revertido por prazo: o comportamento seguro, mas que congela o modelo.
+#
+# `habilitado: false` so' durante a promocao unica do ADR-016 (logistica
+# calibrada + top_fracao), por decisao da autora: sem dado real, o canario nao
+# teria predicao para decidir e travaria o re-treino (codigo 4). Volta a true
+# no proprio PR de promocao, antes do merge; rollback pelo docs/OPERACAO.md.
 canario:
-  habilitado: true          # false = promocao direta pelo gate (comportamento anterior)
+  habilitado: false         # false = promocao direta pelo gate (comportamento anterior)
   fracao: 0.20              # parte da fila decidida pelo canario
   dias_minimos: 7           # cobre um ciclo semanal completo da agenda
   dias_maximos: 21          # menor que o intervalo do re-treino mensal
