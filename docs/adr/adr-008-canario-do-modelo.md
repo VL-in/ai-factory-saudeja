@@ -59,3 +59,10 @@ Cons:
 - **Sombra** (o desafiante prediz tudo sem decidir nada): sem risco para o paciente, e mede taxa de disparo e quarentena. Mas não mede a falta não avisada, que exige o modelo decidir. Exigiria ainda mudar o schema, porque uma linha de sombra em `predicoes` faria o agendamento contar como "já predito" e entraria no `max()` da fila. Fica como etapa anterior possível, não como substituto.
 - **Canário por clínica** em vez de por paciente: limita o impacto a clientes específicos e facilita a comunicação com a controladora. Ficou para depois por dois motivos. O schema ainda não tem a entidade clínica. E a comparação entre clínicas diferentes mistura o efeito do modelo com o perfil de cada clínica. Com o sorteio por paciente, os dois braços têm o mesmo perfil. `canario.braco()` recebe a unidade como texto, então a troca fica localizada.
 - **Rollback só por PR**, com o job sem estado no banco: descartado. Entre a violação e o merge, o canário continuaria decidindo a fração dele por dias. A tabela `canarios_revertidos` é o que faz o rollback agir na execução seguinte.
+
+## Emenda (2026-11-22): regra de decisão por orçamento
+O [ADR-016](adr-016-regra-de-decisao-por-orcamento.md) introduziu a regra `top_fracao`: avisar os K de maior risco da fila, com K = ⌈0,30 × fila⌉. Duas mudanças no canário:
+
+- **Cada braço decide pela regra com que foi aprovado.** O gate grava a regra no `canario.json` (bloco `decisao`), e o job a aplica à parte da fila do canário. O campeão segue com a regra do `champion_metrics.json`. Na promoção, a regra do canário vai para o campeão.
+- **Com o canário em `top_fracao`, `taxa_disparo` passa a ser informativa.** A fração avisada é da regra, não do modelo, e aparece no resumo com a situação `informativo`, sem reverter nem segurar a promoção. A decisão fica com `falta_nao_avisada` e `quarentena`. Ressalva: a falta não avisada favorece o braço que avisa mais. Com o campeão no threshold (16% a 29% da fila) e o canário em 30%, a comparação pende para o canário. Com o canário em `threshold`, nada muda.
+

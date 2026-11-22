@@ -88,3 +88,4 @@ Negativas e riscos aceitos:
 
 ## Changelog
 - 2026-11-22: aberto como Proposto, com a evidência em validação cruzada, no fold oficial e no teste reservado.
+- 2026-11-22: a regra de decisão por orçamento (`decision.modo: top_fracao`) existe, no [ADR-016](adr-016-regra-de-decisao-por-orcamento.md), e com ela o gate passa a decidir por `recall_at_fracao` e `roc_auc`. A recomendação passa a ser uma promoção só, com os itens 1 e 2 juntos: logística, `class_weight`, `model.calibracao: sigmoid` e `decision.modo: top_fracao`. No fold oficial, essa configuração tem `recall_at_fracao` 0,619 contra 0,429 do campeão.

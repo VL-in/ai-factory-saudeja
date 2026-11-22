@@ -12,7 +12,7 @@ Está **fora de escopo**: disponibilidade dos provedores externos de WhatsApp/SM
 
 ## 2. Disponibilidade do serviço
 
-- **A fila de amanhã até daqui a dois dias é processada todo dia até as 09h** (predição gravada, e lembrete pago para quem cruzou o threshold), ver [SLO §1](SLO.md#1-processamento-da-fila-d-2-batch). Revisado em 2026-09-30: a solução é de inferência em **batch**, e a API de predição saiu do compromisso de produção — o que a clínica percebe é a fila processada a tempo, não a resposta de uma chamada.
+- **A fila de amanhã até daqui a dois dias é processada todo dia até as 09h** (predição gravada, e lembrete pago para quem a regra de decisão do modelo seleciona: quem cruzou o threshold ou, no modo por orçamento, os 30% de maior risco da fila), ver [SLO §1](SLO.md#1-processamento-da-fila-d-2-batch). Revisado em 2026-09-30: a solução é de inferência em **batch**, e a API de predição saiu do compromisso de produção — o que a clínica percebe é a fila processada a tempo, não a resposta de uma chamada.
 - A interface (fila do dia, cadastro) estará disponível **≥ 99.0% do tempo**, medido mensalmente (ver [SLO §1.1](SLO.md#11-disponibilidade-da-interface)).
 - Em caso de indisponibilidade, a clínica pode continuar a operação manual (fila não priorizada) sem bloqueio do fluxo de agendamento — o serviço de no-show é um **complemento**, não uma dependência crítica do core do sistema (BRIEFING.md: o produto principal já existe e funciona sem o classificador).
 
@@ -25,6 +25,37 @@ Está **fora de escopo**: disponibilidade dos provedores externos de WhatsApp/SM
 - O modelo em produção deve manter, a cada ciclo de re-treino mensal, **recall da classe "no-show" ≥ 0.75** (ver [SLO §3](SLO.md#3-qualidade-do-modelo-re-treino-mensal)) — ou seja, no mínimo 75% dos pacientes que de fato faltariam devem ser corretamente sinalizados como alto risco, para que a lógica de threshold (BRIEFING.md item 3) não deixe de acionar lembrete para quem faltaria.
 - Nenhum re-treino mensal pode ser promovido a produção se suas métricas de qualidade regredirem em relação ao modelo vigente (gate de rollback, ver [SLO §3](SLO.md#3-qualidade-do-modelo-re-treino-mensal)).
 - Toda predição exibida à clínica deve vir acompanhada de explicação (SHAP ou equivalente) — compromisso direto com a exigência da diretoria médica registrada nas notas herdadas da Camila, ver [SLO §4](SLO.md#4-explicabilidade).
+
+### 4.1 Curva de custo por fração da fila
+
+O lembrete pago pode ir para uma **fração fixa da fila**, os pacientes de maior risco ([ADR-016](adr/adr-016-regra-de-decisao-por-orcamento.md)), em vez de quem passa de um corte de probabilidade. A tabela abaixo mostra, para cada fração avisada, quanto custa e quantas faltas o lembrete evitaria a cada 1.000 consultas. É o checkpoint do risco de recall: com que fração o recall do modelo se paga.
+
+**Premissas declaradas** (mudar qualquer uma muda a tabela):
+
+- **Eficácia do lembrete: 30%**, ou seja, 30% de quem ia faltar e recebe o lembrete comparece. É **assumida**, não medida. A medição está prevista quando houver produção: comparar os pacientes de risco parecido avisados e não avisados no canário.
+- Uma falta custa **R$ 180** (BRIEFING).
+- Um lembrete custa **R$ 0,30**: 2 segmentos de SMS (o texto acentuado tem 72 caracteres) × US$ 0,0291 × R$ 5,07 (`params.yaml`, bloco `custo`).
+- Prevalência de faltas de **27,4%** (semente).
+- O modelo é a **regressão logística com `class_weight` e calibração**, a configuração recomendada para a próxima promoção. O recall vem de probabilidades fora da amostra, em validação cruzada 5 × 5 na semente sintética de 380 linhas. Os números servem para **ilustrar a forma da curva**, não para prometer resultado: o dado é sintético, e no dado real o sinal é mais fraco ([ADR-014](adr/adr-014-dataset-externo-desfecho-real.md)).
+
+| Fração da fila avisada | Recall | Precisão | Lift | Custo de SMS (R$ / 1.000 consultas) | Faltas evitadas / 1.000 | Receita preservada (R$ / 1.000) |
+|---|---|---|---|---|---|---|
+| 10% | 0,14 | 0,39 | 1,44 | 30 | 11,8 | 2.132 |
+| 20% | 0,30 | 0,41 | 1,48 | 59 | 24,3 | 4.377 |
+| **30% (vigente no modo por orçamento)** | **0,45** | **0,41** | **1,51** | **89** | **37,1** | **6.679** |
+| 40% | 0,53 | 0,36 | 1,33 | 118 | 43,7 | 7.873 |
+| 50% | 0,63 | 0,34 | 1,26 | 148 | 51,6 | 9.294 |
+| 60% | 0,71 | 0,32 | 1,18 | 177 | 57,9 | 10.431 |
+| 100% (avisar todos, sem modelo) | 1,00 | 0,27 | 1,00 | 295 | 82,1 | 14.779 |
+| 30% sorteados (sem modelo) | 0,30 | 0,27 | 1,00 | 89 | 24,6 | 4.434 |
+
+Leitura:
+
+- **Pelo valor esperado, avisar todos ainda é o máximo de receita.** Cada SMS custa cerca de R$ 0,30, e cada falta evitada vale R$ 180. A fração de 30% existe por causa do orçamento do BRIEFING, não por ser o ponto ótimo de custo.
+- **Com o mesmo orçamento (30%), o modelo evita cerca de 50% mais faltas que um sorteio** (37 contra 25 por 1.000 consultas). É o número a mostrar: o lift, não o F1.
+- **O ganho por fração cai depois de 30%.** O lift sai de cerca de 1,5 até 30% e desce para 1,2 em 60%: a partir daí o modelo separa pouco os pacientes que restam.
+
+Revisar esta seção quando a eficácia do lembrete for medida ou quando o modelo for re-treinado com desfecho real.
 
 ## 5. Continuidade e re-treino
 
@@ -49,4 +80,4 @@ Estes limites devem ser comunicados explicitamente às partes interessadas — n
 
 Este SLA será apresentado, com números validados e riscos de LGPD explicitados, no pitch ao Conselho de Investidores na Semana 16 (BRIEFING.md, item 4). Deve ser revisado sempre que o [SLO.md](SLO.md) ou a arquitetura (`architecture.md`) mudarem.
 
-Última geração: 2026-09-07; última revisão: 2026-09-30 (itens 2 e 3, compromisso do batch no lugar da API); revisão anterior: 2026-09-27 (item 6, escopo da PII em log e papéis controlador/operador).
+Última geração: 2026-09-07; última revisão: 2026-11-22 (item 2 e §4.1, regra de decisão por orçamento e curva de custo por fração da fila); revisão anterior: 2026-09-30 (itens 2 e 3, compromisso do batch no lugar da API); revisão anterior: 2026-09-27 (item 6, escopo da PII em log e papéis controlador/operador).
