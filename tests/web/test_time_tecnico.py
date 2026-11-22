@@ -85,8 +85,9 @@ async def test_observabilidade_sem_supabase_avisa_sem_derrubar_a_tela(usuario):
 
 
 async def test_observabilidade_com_numeros_acusa_violacao_de_slo(usuario, monkeypatch):
-    """T5. p95 acima de 2 s e predição sem explicação são as duas violações
-    que o painel tem de gritar."""
+    """T5. Predição sem explicação é a violação que o painel tem de gritar
+    (SLO §4). O p95 acima de 2 s só avisa: a predição avulsa saiu do
+    compromisso de produção na revisão de 2026-09-30 (SLO §2)."""
     resumo = {
         "janela_horas": 24,
         "predicoes": 40,
@@ -105,8 +106,10 @@ async def test_observabilidade_com_numeros_acusa_violacao_de_slo(usuario, monkey
     assert textos(usuario, marker="metrica-p95-de-latência") == ["2500 ms"]
     assert textos(usuario, marker="metrica-Cobertura-de-explicação-(SLO-§4)") == ["97%"]
     erros = " ".join(textos(usuario, marker="aviso-erro"))
-    assert "SLO §2" in erros and "SLO §4" in erros
-    assert any("truncada" in t for t in textos(usuario, marker="aviso-aviso"))
+    assert "SLO §4" in erros and "p95" not in erros
+    avisos = textos(usuario, marker="aviso-aviso")
+    assert any("referência de 2000 ms" in t for t in avisos)
+    assert any("truncada" in t for t in avisos)
 
 
 async def test_aba_dev_dispara_job_e_mostra_erro_amigavel_sem_supabase(usuario, monkeypatch):
@@ -149,6 +152,14 @@ async def test_formulario_produz_predicao_e_explicacao(usuario):
     assert 0.0 <= resultado.probabilidade <= 1.0
     assert resultado.explicacao  # SLO §4
     await usuario.should_see(marker="metrica-Probabilidade-de-no-show", retries=20)
+    # A tela lê o lembrete pela regra do job D-2, não pelo threshold do /predict.
+    regra = logic.regra_de_decisao()
+    esperado = logic.ler_lembrete(resultado.probabilidade, regra).rotulo
+    assert textos(usuario, marker="metrica-Lembrete-pago") == [esperado]
+    assert textos(usuario, marker="metrica-Regra-do-lembrete") == [
+        logic.descrever_regra(regra)[0]
+    ]
+    await usuario.should_not_see("Threshold de decisão")
 
 
 async def test_explicabilidade_mostra_fatores_em_portugues_na_mesma_acao(usuario):

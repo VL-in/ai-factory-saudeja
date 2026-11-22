@@ -21,6 +21,7 @@ from supabase_auth.errors import AuthApiError, AuthRetryableError
 
 import contrato_features
 import db.repositories as repositories
+import decisao
 import inference
 import observabilidade
 from api.main import app
@@ -1529,3 +1530,71 @@ def test_aba_de_observabilidade_le_so_os_tipos_do_slo(monkeypatch):
 
     assert chamadas == [observabilidade.TIPOS_DO_SLO]
     assert observabilidade.TIPO_ACAO_UI not in observabilidade.TIPOS_DO_SLO
+
+
+# --- Leitura do lembrete pela regra de decisão (ADR-016) ---------------------
+
+
+REGRA_TOP = decisao.ConfigDecisao(
+    modo=decisao.MODO_TOP_FRACAO,
+    threshold=0.6,
+    fracao_da_fila=0.3,
+    probabilidade_minima=0.15,
+    probabilidade_certa=0.5,
+)
+
+
+@pytest.mark.parametrize(
+    ("probabilidade", "situacao"),
+    [
+        (0.10, logic.LEMBRETE_NAO),
+        (0.15, logic.LEMBRETE_DEPENDE_DA_FILA),  # a mínima já entra no orçamento
+        (0.30, logic.LEMBRETE_DEPENDE_DA_FILA),
+        (0.50, logic.LEMBRETE_SIM),  # a certa avisa em qualquer fila
+        (0.70, logic.LEMBRETE_SIM),
+    ],
+)
+def test_ler_lembrete_no_top_fracao_segue_as_valvulas(probabilidade, situacao):
+    """Numa predição avulsa só as válvulas decidem; no meio, depende da fila --
+    a mesma fronteira de `decisao.decidir_fila` (>= certa avisa, < mínima não)."""
+    assert logic.ler_lembrete(probabilidade, REGRA_TOP).situacao == situacao
+
+
+def test_ler_lembrete_coerente_com_decidir_fila_nas_valvulas():
+    """Sim/Não da tela batem com o job para qualquer fila: a linha avisada pela
+    certa é avisada mesmo no fundo da fila, e a barrada pela mínima não é
+    avisada nem no topo."""
+    fila_de_um = [0.12]
+    assert decisao.decidir_fila(fila_de_um, REGRA_TOP).avisar == [False]
+    fila_cheia = [0.9, 0.8, 0.7, 0.55]
+    assert decisao.decidir_fila(fila_cheia, REGRA_TOP).avisar[-1] is True
+
+
+def test_ler_lembrete_no_modo_threshold():
+    regra = decisao.ConfigDecisao(modo=decisao.MODO_THRESHOLD, threshold=0.6)
+    assert logic.ler_lembrete(0.6, regra).situacao == logic.LEMBRETE_SIM
+    assert logic.ler_lembrete(0.59, regra).situacao == logic.LEMBRETE_NAO
+
+
+def test_descrever_regra_cita_orcamento_e_valvulas():
+    curto, frase = logic.descrever_regra(REGRA_TOP)
+    assert curto == "30% da fila"
+    assert "30% de maior risco" in frase and "15%" in frase and "50%" in frase
+    regra = decisao.ConfigDecisao(modo=decisao.MODO_THRESHOLD, threshold=0.6)
+    assert logic.descrever_regra(regra)[0] == "≥ 60%"
+
+
+def test_regra_de_decisao_e_a_do_campeao(monkeypatch, tmp_path):
+    """Com o registro do campeão por perto, a tela usa a regra dele (a do job
+    agendado); sem ele (imagem do Space), a do params.yaml."""
+    monkeypatch.setenv("CHAMPION_METRICS_PATH", str(tmp_path / "nao_existe.json"))
+    assert logic.regra_de_decisao() == decisao.config_de_params(inference.PARAMS)
+
+    registro = tmp_path / "champion.json"
+    registro.write_text(
+        '{"decisao": {"modo": "threshold", "threshold": 0.4}}', encoding="utf-8"
+    )
+    monkeypatch.setenv("CHAMPION_METRICS_PATH", str(registro))
+    assert logic.regra_de_decisao() == decisao.ConfigDecisao(
+        modo=decisao.MODO_THRESHOLD, threshold=0.4
+    )

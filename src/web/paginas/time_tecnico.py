@@ -33,7 +33,9 @@ SUBABA_DEV = "Dev: disparo manual"
 SUBABAS = (SUBABA_OBSERVABILIDADE, SUBABA_TESTAR, SUBABA_EXPLICABILIDADE)
 
 JANELAS_OBSERVABILIDADE = {"Últimas 24h": 24, "Últimos 7 dias": 24 * 7, "Últimos 30 dias": 24 * 30}
-SLO_P95_MS = 2000  # SLO §2: p95 de uma predição já aquecida < 2s
+# SLO §2: o p95 da predição avulsa saiu do compromisso de produção (revisão de
+# 2026-09-30); 2 s segue como referência de desenvolvimento.
+REFERENCIA_P95_MS = 2000
 
 COLUNAS_SHAP: list[dict] = [
     {"name": "feature", "label": "feature", "field": "feature", "align": "left"},
@@ -84,8 +86,9 @@ class TimeTecnico:
     async def _observabilidade(self) -> None:
         ui.label("Observabilidade").classes("text-xl font-semibold")
         ui.label(
-            "Números do SLO medidos em produção, lidos da tabela eventos_app (ADR-006). Uptime "
-            "(§1) e execução dos jobs agendados (§5) são medidos de fora, por sonda externa e "
+            "Indicadores medidos em produção, lidos da tabela eventos_app (ADR-006). Uptime "
+            "(SLO §1.1) e execução dos jobs agendados (§1 e §5) são medidos de fora, por sonda "
+            "externa e "
             "dead-man's-switch, porque um coletor que mora dentro do Space some junto com ele "
             "quando hiberna, inclusive a evidência de que caiu."
         ).classes("text-sm sj-suave")
@@ -131,15 +134,22 @@ class TimeTecnico:
         with ui.row().classes("w-full gap-4"):
             tema.cartao_metrica(
                 "p95 de latência", f"{p95:.0f} ms" if p95 is not None else "—", "speed", "teal",
-                f"SLO §2: < {SLO_P95_MS} ms numa predição já aquecida.",
+                f"Indicador de desenvolvimento, fora do compromisso de produção (SLO §2): "
+                f"referência < {REFERENCIA_P95_MS} ms numa predição já aquecida.",
             )
             tema.cartao_metrica("Predições servidas", resumo["predicoes"], "query_stats", "teal")
             tema.cartao_metrica(
                 "Eventos com erro", resumo["erros"], "report", "red",
                 "Predição que falhou ou agendamento malformado no job D-2.",
             )
-        if p95 is not None and p95 > SLO_P95_MS:
-            tema.aviso(f"p95 acima do alvo do SLO §2 ({SLO_P95_MS} ms).", "erro")
+        if p95 is not None and p95 > REFERENCIA_P95_MS:
+            # Aviso, não erro: desde a revisão de 2026-09-30 o p95 do /predict e
+            # desta aba saiu do SLO (a solução é batch); segue como referência.
+            tema.aviso(
+                f"p95 acima da referência de {REFERENCIA_P95_MS} ms. Não viola o SLO §2: "
+                "a predição avulsa é indicador de desenvolvimento.",
+                "aviso",
+            )
         with ui.row().classes("w-full gap-4"):
             tema.cartao_metrica(
                 "Cobertura de explicação (SLO §4)",
@@ -153,7 +163,7 @@ class TimeTecnico:
                 resumo["ultimo_job_d2"].strftime("%d/%m %H:%M") if resumo["ultimo_job_d2"] else "—",
                 "schedule", "slate",
                 "Visão de dentro. A prova de que o job agendado não deixou de rodar vem do "
-                "dead-man's-switch externo (SLO §5), que alerta pelo silêncio.",
+                "dead-man's-switch externo (SLO §1), que alerta pelo silêncio.",
             )
         if cobertura["percentual"] is not None and cobertura["percentual"] < 1:
             tema.aviso(
@@ -269,26 +279,26 @@ class TimeTecnico:
             if resultado is None:
                 tema.aviso("Preencha o formulário e clique em Prever no-show.", "info")
                 return
+            # A decisão do lembrete é a do job D-2 (regra por orçamento, ADR-016),
+            # não o `classe_prevista` do /predict: no modelo calibrado ele quase
+            # sempre é 0, porque a probabilidade raramente passa do threshold.
+            regra = logic.regra_de_decisao()
+            leitura = logic.ler_lembrete(resultado.probabilidade, regra)
+            valor_da_regra, frase_da_regra = logic.descrever_regra(regra)
+            cor, tipo_do_aviso = {
+                logic.LEMBRETE_SIM: ("red", "erro"),
+                logic.LEMBRETE_NAO: ("teal", "ok"),
+                logic.LEMBRETE_DEPENDE_DA_FILA: ("amber", "info"),
+            }[leitura.situacao]
             with ui.row().classes("w-full gap-4"):
                 tema.cartao_metrica(
                     "Probabilidade de no-show", f"{resultado.probabilidade:.1%}", "percent", "teal"
                 )
                 tema.cartao_metrica(
-                    "Threshold de decisão", f"{resultado.threshold_usado:.2f}", "tune", "slate"
+                    "Regra do lembrete", valor_da_regra, "tune", "slate", frase_da_regra
                 )
-                tema.cartao_metrica(
-                    "Classe prevista",
-                    "Alto risco" if resultado.classe_prevista else "Baixo risco",
-                    "flag", "red" if resultado.classe_prevista else "teal",
-                )
-            if resultado.classe_prevista:
-                tema.aviso(
-                    "Acima do threshold: o job diário dispararia lembrete pago para este "
-                    "agendamento.",
-                    "erro",
-                )
-            else:
-                tema.aviso("Abaixo do threshold: nenhum lembrete pago seria disparado.", "ok")
+                tema.cartao_metrica("Lembrete pago", leitura.rotulo, "sms", cor)
+            tema.aviso(leitura.explicacao, tipo_do_aviso)
             if resultado.fora_do_dominio:
                 campos = ", ".join(
                     logic.ROTULOS_FEATURES.get(c, c) for c in resultado.campos_fora_do_dominio
@@ -300,8 +310,10 @@ class TimeTecnico:
                     "aviso",
                 )
             ui.label(
-                f"modelo {resultado.model_version} · threshold de params.yaml "
-                f"(decision.threshold) · predição via backend {logic.backend_ativo()}"
+                f"modelo {resultado.model_version} · regra {regra.modo} · /predict: "
+                f"classe_prevista {resultado.classe_prevista} no threshold "
+                f"{resultado.threshold_usado:.2f} (informativo) · predição via backend "
+                f"{logic.backend_ativo()}"
             ).classes("text-xs sj-suave font-mono")
 
     # --- Explicabilidade ------------------------------------------------------

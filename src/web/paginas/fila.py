@@ -238,7 +238,8 @@ class FilaDoDia:
                 )
                 tema.cartao_metrica(
                     "Alto risco", resumo["alto_risco"], "warning", "red",
-                    "Pacientes com maior chance de faltar: são os priorizados para o lembrete.",
+                    "Os escolhidos para o lembrete pago. "
+                    + logic.descrever_regra(logic.regra_de_decisao())[1],
                 )
                 tema.cartao_metrica(
                     "Sem predição", resumo["sem_predicao"], "hourglass_empty", "slate",

@@ -41,11 +41,13 @@ import httpx  # noqa: E402
 from supabase_auth.errors import AuthApiError  # noqa: E402
 
 import agenda_clinica  # noqa: E402
+import campeao  # noqa: E402
 import consentimento  # noqa: E402
 import contrato_features  # noqa: E402
 import db.client as db_client  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import db.repositorio_treino as repositorio_treino  # noqa: E402
+import decisao  # noqa: E402
 import id_paciente  # noqa: E402
 import inference  # noqa: E402
 import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
@@ -117,6 +119,98 @@ class ResultadoPredicao:
     @property
     def fora_do_dominio(self) -> bool:
         return bool(self.campos_fora_do_dominio)
+
+
+# Leitura de uma predição avulsa pela regra do lembrete. Três situações porque,
+# no modo top_fracao, a decisão é sobre a fila inteira (src/decisao.py): só as
+# válvulas de probabilidade decidem uma linha sozinha.
+LEMBRETE_SIM = "sim"
+LEMBRETE_NAO = "nao"
+LEMBRETE_DEPENDE_DA_FILA = "depende_da_fila"
+
+
+@dataclass(frozen=True)
+class LeituraDoLembrete:
+    situacao: str
+    rotulo: str
+    explicacao: str
+
+
+def regra_de_decisao() -> decisao.ConfigDecisao:
+    """A regra que decide o lembrete pago, para a tela explicar uma predição.
+
+    A do campeão (`champion_metrics.json`, bloco `decisao`), que é a que o job
+    D-2 agendado usa. O registro não vai para a imagem do Space, e lá a regra
+    vem do bloco `decision` de `params.yaml` -- o gate grava o bloco `decisao`
+    a partir dele, então os dois só divergem entre um re-treino que mudou a
+    regra e a promoção do desafiante."""
+    try:
+        registro = campeao.carregar_campeao()
+    except (FileNotFoundError, ValueError):
+        registro = {}
+    if registro.get("decisao"):
+        return decisao.config_registrada(registro)
+    return decisao.config_de_params(inference.PARAMS)
+
+
+def _pct(valor: float) -> str:
+    return f"{valor:.0%}"
+
+
+def descrever_regra(config: decisao.ConfigDecisao) -> tuple[str, str]:
+    """(valor curto para o cartão, frase completa para a ajuda)."""
+    if config.modo == decisao.MODO_THRESHOLD:
+        return (
+            f"≥ {_pct(config.threshold)}",
+            f"Recebe lembrete pago quem tem probabilidade de falta a partir de "
+            f"{_pct(config.threshold)}.",
+        )
+    fracao = _pct(float(config.fracao_da_fila or 0.0))
+    frase = f"Recebem lembrete pago os {fracao} de maior risco da fila do dia"
+    valvulas = []
+    if config.probabilidade_minima is not None:
+        valvulas.append(f"ninguém abaixo de {_pct(config.probabilidade_minima)}")
+    if config.probabilidade_certa is not None:
+        valvulas.append(f"todos a partir de {_pct(config.probabilidade_certa)}")
+    if valvulas:
+        frase += " (" + "; ".join(valvulas) + ")"
+    return f"{fracao} da fila", frase + "."
+
+
+def ler_lembrete(probabilidade: float, config: decisao.ConfigDecisao) -> LeituraDoLembrete:
+    """O que o job D-2 faria com esta probabilidade, sem conhecer a fila."""
+    if config.modo == decisao.MODO_THRESHOLD:
+        corte = _pct(config.threshold)
+        if probabilidade >= config.threshold:
+            return LeituraDoLembrete(
+                LEMBRETE_SIM, "Sim",
+                f"Acima do corte de {corte}: o job D-2 dispararia lembrete pago para este "
+                "agendamento.",
+            )
+        return LeituraDoLembrete(
+            LEMBRETE_NAO, "Não",
+            f"Abaixo do corte de {corte}: nenhum lembrete pago seria disparado.",
+        )
+    fracao = _pct(float(config.fracao_da_fila or 0.0))
+    certa, minima = config.probabilidade_certa, config.probabilidade_minima
+    if certa is not None and probabilidade >= certa:
+        return LeituraDoLembrete(
+            LEMBRETE_SIM, "Sim",
+            f"A partir de {_pct(certa)} o lembrete pago sai em qualquer fila, mesmo que "
+            f"passe dos {fracao} do orçamento.",
+        )
+    if minima is not None and probabilidade < minima:
+        return LeituraDoLembrete(
+            LEMBRETE_NAO, "Não",
+            f"Abaixo de {_pct(minima)} o lembrete pago não sai, nem com orçamento sobrando "
+            "na fila.",
+        )
+    return LeituraDoLembrete(
+        LEMBRETE_DEPENDE_DA_FILA, "Depende da fila",
+        f"O job D-2 avisa os {fracao} de maior risco da fila do dia: este agendamento "
+        "recebe lembrete pago se ficar entre eles. Uma predição avulsa não tem fila com "
+        "que se comparar.",
+    )
 
 
 def montar_payload(
