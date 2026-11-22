@@ -122,6 +122,7 @@ def main():
         mlflow.set_tag(PIPELINE_TAG_KEY, PIPELINE_TAG_VALUE)
         if tem_origem_externa(dados_treino):
             mlflow.set_tag(TAG_DADOS_EXTERNOS, "true")
+        mlflow.log_param("split_modo", dados_treino.get("modo_split", "aleatorio"))
         mlflow.log_param("features_temporais", PARAMS.get("features", {}).get("temporais", False))
         mlflow.log_param(
             "features_periodo_do_dia", PARAMS.get("features", {}).get("periodo_do_dia", False)

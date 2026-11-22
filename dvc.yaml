@@ -53,12 +53,14 @@ stages:
       - src/preprocess.py
       - src/features.py
       - src/contrato_features.py
+      - src/regras_dado_real.py
       - src/agenda_clinica.py
       - src/config_projeto.py
       - data/consultas-treino.csv
       - data/interim/dados_validados.json
     params:
       - features
+      - dados.split
     outs:
       - data/interim/train_raw.pkl
       - data/interim/test.pkl
