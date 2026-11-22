@@ -1,7 +1,7 @@
 # ADR-015: Família do modelo, balanceamento e calibração
 
 ## Status
-Proposto - 2026-11-22. A troca dos valores do `params.yaml` depende da decisão da autora (ver "Decisão proposta"). O código que torna a troca possível já está no repositório, com os valores do campeão como padrão.
+Aceito - 2026-11-22. A configuração recomendada (logística, `class_weight`, calibração sigmoide) foi promovida junto com a regra por orçamento do [ADR-016](adr-016-regra-de-decisao-por-orcamento.md): é o campeão `07bcfede25ea`, da v3.3.1. A promoção foi direta, sem canário, por decisão da autora (ver "Changelog").
 
 As palavras-chave **DEVE**, **NÃO DEVE** e **PODE** seguem o sentido da [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119).
 
@@ -55,7 +55,9 @@ Leitura:
 - **O período do dia não traz ganho real.** Na semente, o ganho (0,619 → 0,638) vem todo da flag de sexta no fim do expediente: sem ela, o resultado cai para 0,606, abaixo de só as features reais (0,617). É o padrão "sexta 17h" que o script de horários injetou. No dado externo, o horário é sorteado e só carrega o sinal declarado da sexta (decisão 6 do ADR-014), então qualquer ganho de horário ou período ali é sintético por construção.
 - **Nenhuma configuração passa do piso de 0,60 no dado real**, confirmando o ADR-014: o gargalo continua sendo as features, não o modelo.
 
-## Decisão proposta
+## Decisão
+O texto abaixo é o da proposta. Os itens 1 e 2 foram aplicados juntos, numa promoção só, como recomenda o "Changelog"; o item 4 foi cumprido sem o canário.
+
 1. **Família e balanceamento:** trocar para `model.tipo: logistica` com `balancing.strategy: class_weight` (`C` 0,3). Ganha na semente, empata no dado real, tem menor variância e coeficientes legíveis.
 2. **Calibração:** `model.calibracao` **DEVE** continuar `none` enquanto a decisão for pelo threshold fixo. Ela **DEVE** ser ligada no mesmo passo que trocar a regra de decisão para "avisar a fração da fila que o orçamento permite" (top-K), porque o top-K não depende da escala da probabilidade e a probabilidade calibrada passa a ter sentido para quem a lê.
 3. **Período do dia:** `features.periodo_do_dia` **DEVE** continuar `false`. O ganho medido é o padrão fabricado. Também **NÃO DEVE** ser ligada sem um `model.pkl` treinado com ela, porque o serving lê a flag do `params.yaml` (a carga do modelo falha).
@@ -89,3 +91,4 @@ Negativas e riscos aceitos:
 ## Changelog
 - 2026-11-22: aberto como Proposto, com a evidência em validação cruzada, no fold oficial e no teste reservado.
 - 2026-11-22: a regra de decisão por orçamento (`decision.modo: top_fracao`) existe, no [ADR-016](adr-016-regra-de-decisao-por-orcamento.md), e com ela o gate passa a decidir por `recall_at_fracao` e `roc_auc`. A recomendação passa a ser uma promoção só, com os itens 1 e 2 juntos: logística, `class_weight`, `model.calibracao: sigmoid` e `decision.modo: top_fracao`. No fold oficial, essa configuração tem `recall_at_fracao` 0,619 contra 0,429 do campeão.
+- 2026-11-22: aceito e promovido (v3.3.1, campeão `07bcfede25ea`). O re-treino mensal treinou com os 10 primeiros desfechos de produção, que passaram o split para por paciente: no fold novo (65 consultas, 18 faltas), o desafiante mediu `roc_auc` 0,648, `recall_at_fracao` 0,389 e Brier 0,199, e o gate aprovou com código 0. Os números do campeão anterior (0,643 e 0,429) eram do fold aleatório antigo, então a comparação não foi entre folds iguais. O canário foi desligado só nessa promoção, por decisão da autora: sem desfecho real suficiente, ele não teria predições para decidir e seria revertido por prazo. Voltou a valer no próprio PR de promoção. O risco "probabilidade não calibrada" das Consequências deixou de valer, porque a calibração entrou junto.

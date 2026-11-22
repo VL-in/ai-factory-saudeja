@@ -320,7 +320,9 @@ async def test_detalhe_mostra_os_fatores_em_portugues_e_sem_log_odds(usuario, mo
 
     await usuario.should_see(marker="motivo", retries=20)
     assert textos(usuario, marker="motivo") == ["Faltas anteriores: aumenta o risco de falta"]
-    await usuario.should_see("Detalhes técnicos")
+    await usuario.should_see(marker="codigo-agendamento")
+    await usuario.should_not_see("identificador interno")
+    await usuario.should_not_see("Detalhes técnicos")
     await usuario.should_not_see("historico_noshow")
 
 

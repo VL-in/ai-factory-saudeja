@@ -22,44 +22,48 @@ Está **fora de escopo**: disponibilidade dos provedores externos de WhatsApp/SM
 
 ## 4. Qualidade da priorização
 
-- O modelo em produção deve manter, a cada ciclo de re-treino mensal, **recall da classe "no-show" ≥ 0.75** (ver [SLO §3](SLO.md#3-qualidade-do-modelo-re-treino-mensal)) — ou seja, no mínimo 75% dos pacientes que de fato faltariam devem ser corretamente sinalizados como alto risco, para que a lógica de threshold (BRIEFING.md item 3) não deixe de acionar lembrete para quem faltaria.
+- O modelo em produção deve, a cada ciclo de re-treino mensal, **priorizar melhor que o sorteio**: avisando os 30% de maior risco da fila, capturar pelo menos 30% a mais de faltosos que avisando 30% ao acaso (lift ≥ 1,3), com `roc_auc` ≥ 0,60 e probabilidade não pior que a taxa base (ver [SLO §3](SLO.md#3-qualidade-do-modelo-re-treino-mensal)). Revisado em 2026-11-22: o compromisso anterior, recall da classe "no-show" ≥ 0,75 no threshold, vinha de um desempenho herdado que não se reproduziu ([ADR-003](adr/adr-003-SMOTE-NC.md)) e deixou de ter sentido com a regra por orçamento ([ADR-016](adr/adr-016-regra-de-decisao-por-orcamento.md)), em que a fração avisada é fixa e o modelo só escolhe quem entra nela.
 - Nenhum re-treino mensal pode ser promovido a produção se suas métricas de qualidade regredirem em relação ao modelo vigente (gate de rollback, ver [SLO §3](SLO.md#3-qualidade-do-modelo-re-treino-mensal)).
 - Toda predição exibida à clínica deve vir acompanhada de explicação (SHAP ou equivalente) — compromisso direto com a exigência da diretoria médica registrada nas notas herdadas da Camila, ver [SLO §4](SLO.md#4-explicabilidade).
 
 ### 4.1 Curva de custo por fração da fila
 
-O lembrete pago pode ir para uma **fração fixa da fila**, os pacientes de maior risco ([ADR-016](adr/adr-016-regra-de-decisao-por-orcamento.md)), em vez de quem passa de um corte de probabilidade. A tabela abaixo mostra, para cada fração avisada, quanto custa e quantas faltas o lembrete evitaria a cada 1.000 consultas. É o checkpoint do risco de recall: com que fração o recall do modelo se paga.
+O lembrete pago vai para uma **fração fixa da fila**, os pacientes de maior risco ([ADR-016](adr/adr-016-regra-de-decisao-por-orcamento.md); regra do campeão desde a v3.3.1), em vez de quem passa de um corte de probabilidade. A tabela abaixo mostra, para cada fração avisada, quanto custa e quantas faltas o lembrete evitaria a cada 1.000 consultas. É o checkpoint do risco de recall: com que fração o recall do modelo se paga.
 
 **Premissas declaradas** (mudar qualquer uma muda a tabela):
 
 - **Eficácia do lembrete: 30%**, ou seja, 30% de quem ia faltar e recebe o lembrete comparece. É **assumida**, não medida. A medição está prevista quando houver produção: comparar os pacientes de risco parecido avisados e não avisados no canário.
 - Uma falta custa **R$ 180** (BRIEFING).
-- Um lembrete custa **R$ 0,30**: 2 segmentos de SMS (o texto acentuado tem 72 caracteres) × US$ 0,0291 × R$ 5,07 (`params.yaml`, bloco `custo`).
-- Prevalência de faltas de **27,4%** (semente).
-- O modelo é a **regressão logística com `class_weight` e calibração**, a configuração recomendada para a próxima promoção. O recall vem de probabilidades fora da amostra, em validação cruzada 5 × 5 na semente sintética de 380 linhas. Os números servem para **ilustrar a forma da curva**, não para prometer resultado: o dado é sintético, e no dado real o sinal é mais fraco ([ADR-014](adr/adr-014-dataset-externo-desfecho-real.md)).
+- Um lembrete custa **R$ 0,44**: 3 segmentos de SMS (o texto atual tem 177 caracteres com acento, enviado em UCS-2) × US$ 0,0291 × R$ 5,07 (`params.yaml`, bloco `custo`).
+- Prevalência de faltas de **27,2%** (dataset de treino de 2026-11-22).
+- O modelo é a **regressão logística com `class_weight` e calibração sigmoide**, a do campeão vigente. O recall vem de probabilidades fora da amostra, em validação cruzada 5 × 5 sobre o dataset de treino de 2026-11-22: 390 linhas, as 380 da semente sintética e 10 desfechos de produção. Os números servem para **ilustrar a forma da curva**, não para prometer resultado: o dado é sintético, e no dado real o sinal é mais fraco ([ADR-014](adr/adr-014-dataset-externo-desfecho-real.md)).
 
 | Fração da fila avisada | Recall | Precisão | Lift | Custo de SMS (R$ / 1.000 consultas) | Faltas evitadas / 1.000 | Receita preservada (R$ / 1.000) |
 |---|---|---|---|---|---|---|
-| 10% | 0,14 | 0,39 | 1,44 | 30 | 11,8 | 2.132 |
-| 20% | 0,30 | 0,41 | 1,48 | 59 | 24,3 | 4.377 |
-| **30% (vigente no modo por orçamento)** | **0,45** | **0,41** | **1,51** | **89** | **37,1** | **6.679** |
-| 40% | 0,53 | 0,36 | 1,33 | 118 | 43,7 | 7.873 |
-| 50% | 0,63 | 0,34 | 1,26 | 148 | 51,6 | 9.294 |
-| 60% | 0,71 | 0,32 | 1,18 | 177 | 57,9 | 10.431 |
-| 100% (avisar todos, sem modelo) | 1,00 | 0,27 | 1,00 | 295 | 82,1 | 14.779 |
-| 30% sorteados (sem modelo) | 0,30 | 0,27 | 1,00 | 89 | 24,6 | 4.434 |
+| 10% | 0,15 | 0,41 | 1,51 | 44 | 12,3 | 2.215 |
+| 20% | 0,31 | 0,42 | 1,56 | 89 | 25,4 | 4.569 |
+| **30% (regra vigente)** | **0,42** | **0,38** | **1,40** | **133** | **34,3** | **6.175** |
+| 40% | 0,52 | 0,35 | 1,30 | 177 | 42,3 | 7.615 |
+| 50% | 0,62 | 0,34 | 1,24 | 221 | 50,5 | 9.083 |
+| 60% | 0,70 | 0,32 | 1,16 | 266 | 56,9 | 10.246 |
+| 100% (avisar todos, sem modelo) | 1,00 | 0,27 | 1,00 | 443 | 81,5 | 14.677 |
+| 30% sorteados (sem modelo) | 0,30 | 0,27 | 1,00 | 133 | 24,5 | 4.403 |
 
 Leitura:
 
-- **Pelo valor esperado, avisar todos ainda é o máximo de receita.** Cada SMS custa cerca de R$ 0,30, e cada falta evitada vale R$ 180. A fração de 30% existe por causa do orçamento do BRIEFING, não por ser o ponto ótimo de custo.
-- **Com o mesmo orçamento (30%), o modelo evita cerca de 50% mais faltas que um sorteio** (37 contra 25 por 1.000 consultas). É o número a mostrar: o lift, não o F1.
-- **O ganho por fração cai depois de 30%.** O lift sai de cerca de 1,5 até 30% e desce para 1,2 em 60%: a partir daí o modelo separa pouco os pacientes que restam.
+- **Pelo valor esperado, avisar todos ainda é o máximo de receita.** Cada SMS custa cerca de R$ 0,44, e cada falta evitada vale R$ 180. A fração de 30% existe por causa do orçamento do BRIEFING, não por ser o ponto ótimo de custo: entre 30% e 60%, cada real extra em SMS ainda volta cerca de 30 vezes em receita preservada.
+- **Com o mesmo orçamento (30%), o modelo evita cerca de 40% mais faltas que um sorteio** (34 contra 25 por 1.000 consultas). É o número a mostrar: o lift, não o F1.
+- **O ganho por fração cai depois de 20%.** O lift fica perto de 1,5 até 20%, cai para 1,4 em 30% e para 1,2 em 60%: a partir daí o modelo separa pouco os pacientes que restam.
+
+Na versão anterior desta seção (2 segmentos, R$ 0,30, semente de 380 linhas), a linha de 30% mostrava recall 0,45, lift 1,51 e 37,1 faltas evitadas. A diferença de custo vem só do texto novo do SMS; a de recall e lift vem do dataset (10 linhas de produção) e cabe no intervalo da validação cruzada (`recall_at_fracao` 0,44 [0,33; 0,55]).
 
 **Como reproduzir (e refazer com outras premissas):**
 
 ```bash
 python scripts/avaliar_cv.py --modelo logistica --balanceamento class_weight     --calibracao sigmoid --curva --sem-mlflow
 ```
+
+O padrão de `--segmentos` é 3, o tamanho do texto atual do lembrete; um teste falha se o texto do job D-2 mudar de número de segmentos sem o padrão acompanhar.
 
 O script usa as probabilidades fora da amostra da própria validação cruzada. Em cada uma das 5 repetições, avisa os ⌈f × n⌉ pacientes de maior probabilidade, mede recall e precisão, e tira a média entre as repetições. O preço do SMS e o câmbio vêm do bloco `custo` do `params.yaml`. As premissas mudam por opção: `--eficacia`, `--custo-falta`, `--segmentos` e `--fracoes`, e `--dados` troca o conjunto (por exemplo, a amostra do dataset externo, com `--grupo id_paciente`). Sem `--sem-mlflow`, a curva vai para a run (`curva_recall_30`, `curva_lift_30`, `curva_receita_30`…).
 

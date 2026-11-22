@@ -145,7 +145,9 @@ METRICAS = (
 FRACOES_DA_CURVA = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 1.0)
 EFICACIA_LEMBRETE = 0.30  # ASSUMIDA: 30% de quem ia faltar e foi avisado comparece
 CUSTO_FALTA_BRL = 180.0  # BRIEFING
-SEGMENTOS_DO_LEMBRETE = 2  # o texto acentuado tem 72 caracteres (2 segmentos de 70)
+# O texto do lembrete do job D-2 tem 177 caracteres com acento, em UCS-2: 3
+# segmentos de 67. tests/test_avaliar_cv.py confere contra o texto real.
+SEGMENTOS_DO_LEMBRETE = 3
 CONSULTAS_DA_CURVA = 1000
 
 

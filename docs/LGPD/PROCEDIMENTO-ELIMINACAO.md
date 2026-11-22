@@ -19,7 +19,7 @@ Os dados do paciente ficam em dois lugares, com controladores diferentes. Cada p
 
 ## 2 Dados da clínica
 
-1. Na "Fila do dia", abra um agendamento do paciente e copie o código em "Detalhes técnicos".
+1. Na "Fila do dia", abra um agendamento do paciente e copie o "Código do agendamento", no fim do detalhe do paciente.
 2. Na aba "Pedidos do titular", registre o pedido com esse código e o tipo "Eliminação do cadastro".
 3. Se o paciente também pedir a eliminação dos dados de aprimoramento, marque a caixa e informe o CPF. O pedido é encaminhado à SaúdeJá. A tela não diz se havia dado de aprimoramento, para não revelar a quem digitasse um CPF alheio se aquela pessoa autorizou o treino.
 4. Confirme o pedido em "Pedidos em aberto". O workflow de purga (`.github/workflows/lgpd.yml`, diário) apaga o paciente, e o cascade leva agendamentos, predições e registros de lembrete. O pedido executado perde o vínculo com o paciente e guarda só tipo, situação e datas.
