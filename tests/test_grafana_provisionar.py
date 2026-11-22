@@ -226,6 +226,24 @@ def test_paineis_so_usam_as_fontes_do_ambiente_e_filtram_o_ambiente():
                 assert 'deployment_environment="${AMBIENTE}"' in alvo["expr"], arquivo.name
 
 
+def test_painel_de_mimir_ou_loki_diz_o_que_mostrar_sem_dado():
+    """Série que nunca recebeu ponto não existe no Mimir, e a consulta volta
+    vazia: sem `noValue`, o painel mostra "No data", que não diferencia "não
+    houve" de "não chegou". Percentil e razão nunca mostram 0 no vazio: 0 ms
+    de latência ou 0% de erro sem nenhuma medição seriam números falsos."""
+    for arquivo in sorted(gp.DIR_PAINEIS.glob("*.json")):
+        for p in json.loads(arquivo.read_text(encoding="utf-8"))["panels"]:
+            alvos = p.get("targets", [])
+            if not any(a["datasource"]["uid"] in ("${DS_MIMIR}", "${DS_LOKI}") for a in alvos):
+                continue
+            sem_valor = p.get("fieldConfig", {}).get("defaults", {}).get("noValue")
+            onde = f"{arquivo.name}::{p['title']}"
+            assert sem_valor, f"{onde}: sem noValue"
+            consultas = " ".join(a.get("expr", "") for a in alvos)
+            if "histogram_quantile" in consultas or " / " in consultas:
+                assert sem_valor != "0", f"{onde}: percentil ou razão com 0 no vazio"
+
+
 @pytest.mark.parametrize("ambiente", sorted(gp.AMBIENTES))
 def test_paineis_saem_sem_marcador_e_com_uid_do_ambiente(ambiente):
     paineis = gp.carregar_paineis(_valores(ambiente), gp.AMBIENTES[ambiente])

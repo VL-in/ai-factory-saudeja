@@ -71,7 +71,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms"
+          "unit": "ms",
+          "noValue": "Sem medição no período"
         },
         "overrides": []
       },
@@ -108,7 +109,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "Nenhuma predição do job no último dia"
+        },
         "overrides": []
       },
       "options": {
@@ -155,7 +158,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -190,7 +194,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit"
+          "unit": "percentunit",
+          "noValue": "Sem medição no período"
         },
         "overrides": []
       },
@@ -229,7 +234,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -267,7 +273,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },

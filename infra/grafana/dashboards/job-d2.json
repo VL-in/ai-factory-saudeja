@@ -49,7 +49,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "dateTimeFromNow"
+          "unit": "dateTimeFromNow",
+          "noValue": "Nenhuma execução com sucesso"
         },
         "overrides": []
       },
@@ -95,7 +96,8 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "dateTimeFromNow"
+          "unit": "dateTimeFromNow",
+          "noValue": "Nenhuma execução registrada"
         },
         "overrides": []
       },
@@ -203,7 +205,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "Sem medição no período"
         },
         "overrides": []
       },
@@ -242,7 +245,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -283,7 +287,8 @@
             "stacking": {
               "mode": "normal"
             }
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -323,7 +328,8 @@
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 60
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -372,7 +378,9 @@
         }
       ],
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "noValue": "Nenhuma linha de log no período"
+        },
         "overrides": []
       },
       "options": {

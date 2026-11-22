@@ -73,6 +73,11 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 
   O dado externo conta como desfecho real para o peso da semente, mas não conta para o split cronológico nem para os positivos de produção. O resumo do re-treino mostra as três recomendações.
 - **[ADR-003](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-003-SMOTE-NC.md) emendado.** Refeita em validação cruzada repetida, a comparação de 2026-09-08 não se sustenta: o SMOTE-NC não supera o `class_weight`, as três condições ordenam os pacientes igualmente mal, e nenhuma tem Brier melhor que o modelo que responde sempre a taxa base. O SMOTE-NC continua em produção até um desafiante o substituir pelo fluxo normal, e as comparações entre configurações passam a usar o `scripts/avaliar_cv.py`.
+- **Texto novo do lembrete SMS.** No lugar de "Poderá comparecer?", o lembrete pede para chegar com 15 minutos de antecedência e para procurar a clínica em caso de cancelamento ou reagendamento. A especialidade continua fora do texto. Com o "á" de "Olá", a mensagem vai em UCS-2 e passa de 2 para 3 segmentos por lembrete, o que aumenta o custo de cada envio.
+
+### Corrigido
+- **Painéis do Grafana mostram 0, e não "No data", em dia sem movimento.** Os contadores do job D-2 (agendamentos por resultado e braço, lembretes por status e, com o SMS de verdade e preço preenchido, o custo) só passavam a existir no primeiro agendamento processado. Com a fila vazia, os painéis de job, mensageria e custo ficavam em "No data", que não diferencia "não houve" de "não chegou". Agora toda execução registra essas séries valendo 0, e as regras de alerta com `increase()` passam a contar também o primeiro incremento de uma série. O custo continua de fora com o stub ou sem preço, para não aparecer um 0 enganoso.
+- **Cada painel diz o que mostrar quando a consulta volta vazia.** Contagens mostram 0. Percentis, taxa de erro, cobertura e disponibilidade mostram "Sem medição no período", e nunca 0, porque 0 ms ou 0% sem medição seriam números falsos. Logs e tabelas dizem que não há linha ou registro. O painel Interface passa a abrir nos últimos 7 dias, e não em 24 horas, porque com o uso de uma clínica um dia quase nunca tem ação suficiente para uma taxa.
 
 ## [v3.2.0] (Vanessa + Claude) - 2026-11-08
 
