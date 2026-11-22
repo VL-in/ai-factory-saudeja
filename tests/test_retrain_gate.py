@@ -705,10 +705,18 @@ def test_criterio_novo_reproduz_o_campeao_e_aprova_o_desafiante_por_merito():
     assert delta["recall_at_fracao"] > 0.15 and delta["roc_auc"] > 0.05
 
 
-def test_champion_do_repositorio_tem_o_bloco_cv_do_campeao():
-    cv = gate.carregar_champion()["cv"]["metricas"]
-    assert cv["roc_auc"]["media"] == pytest.approx(0.555, abs=0.001)
+def test_bloco_cv_do_champion_do_repositorio_quando_existe_e_completo():
+    """O bloco `cv` é referência medida à mão (`scripts/avaliar_cv.py`) e o
+    gate não o recalcula: uma promoção grava o campeão novo sem ele, até a
+    Etapa 4 levar a CV para dentro do gate. Presente, precisa estar completo."""
+    champion = gate.carregar_champion()
+    assert champion is not None
+    if "cv" not in champion:
+        return
+    cv = champion["cv"]["metricas"]
     assert {"roc_auc", "pr_auc", "brier", "recall_at_fracao", "lift_at_fracao"} <= set(cv)
+    for metrica in cv.values():
+        assert metrica["ic95_inf"] <= metrica["media"] <= metrica["ic95_sup"]
 
 
 def test_promocao_registra_a_regra_de_decisao_do_params(ambiente, monkeypatch):
