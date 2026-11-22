@@ -11,7 +11,7 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 ## [v3.3.1] (github-actions) - 2026-11-22
 
 ### Modificado
-- Modelo `07bcfede25ea` promovido pelo re-treino mensal.
+- **Modelo `07bcfede25ea` promovido pelo re-treino mensal: regressão logística com `class_weight` e calibração sigmoide, no lugar do LightGBM com SMOTE-NC.** O lembrete pago passa a ir para os 30% de maior risco da fila de cada dia (`decision.modo: top_fracao`), e não mais para quem passa de 0,6 de probabilidade: abaixo de 0,15 ninguém é avisado e acima de 0,50 o aviso sai mesmo estourando os 30%. A probabilidade mostrada na "Fila do dia" e devolvida pelo `/predict` agora é calibrada (perto da taxa real de falta, em torno de 27%), por isso quase nunca passa de 0,6 e a `classe_prevista` da API fica quase sempre 0. Promoção direta, sem canário, por decisão da autora: sem dado real suficiente, o canário não teria predições para decidir. O canário volta a valer para os próximos re-treinos.
 
 ## [v3.3.0] (Vanessa + Claude) - 2026-11-22
 

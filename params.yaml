@@ -182,13 +182,8 @@ dados:
 # poucos dias com varias clinicas. Com o volume de uma clinica so' (~10
 # agendamentos/dia no canario) a evidencia nao fecha em 21 dias e o canario e'
 # revertido por prazo: o comportamento seguro, mas que congela o modelo.
-#
-# `habilitado: false` so' durante a promocao unica do ADR-016 (logistica
-# calibrada + top_fracao), por decisao da autora: sem dado real, o canario nao
-# teria predicao para decidir e travaria o re-treino (codigo 4). Volta a true
-# no proprio PR de promocao, antes do merge; rollback pelo docs/OPERACAO.md.
 canario:
-  habilitado: false         # false = promocao direta pelo gate (comportamento anterior)
+  habilitado: true          # false = promocao direta pelo gate (comportamento anterior)
   fracao: 0.20              # parte da fila decidida pelo canario
   dias_minimos: 7           # cobre um ciclo semanal completo da agenda
   dias_maximos: 21          # menor que o intervalo do re-treino mensal
