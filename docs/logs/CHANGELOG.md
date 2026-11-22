@@ -8,6 +8,11 @@ bugs, mudanças de API/interface/esquema de banco e avisos de descontinuação. 
 interno sem efeito observável (testes, lint, refatoração, verificação de release) fica
 nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-in/ai-factory-saudeja/tree/main/docs/adr).
 
+## [v3.3.1] (github-actions) - 2026-11-22
+
+### Modificado
+- Modelo `07bcfede25ea` promovido pelo re-treino mensal.
+
 ## [v3.3.0] (Vanessa + Claude) - 2026-11-22
 
 ### Adicionado

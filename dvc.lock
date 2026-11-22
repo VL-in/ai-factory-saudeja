@@ -14,52 +14,68 @@ stages:
       size: 126
     - path: data/interim/train_raw.pkl
       hash: md5
-      md5: b790d4fbbc4e3c0b58dc99ab8a2e6fcb
-      size: 31132
+      md5: 568b31bef6db55ac09ff3288dced8b80
+      size: 40468
     - path: docker-compose.yml
       hash: md5
-      md5: d3fe8cc7bfa164e1a348a7e63980c075
-      size: 3668
+      md5: e32c5edd3d4ff8a313bda6efcbe7e35a
+      size: 3889
     - path: dockerfile
       hash: md5
-      md5: cb09473e637096045fcc78fea529be08
-      size: 561
+      md5: 7d5bd4c2bdb690be1c5b2807f00a85c9
+      size: 522
     - path: requirements/base.txt
       hash: md5
-      md5: 24b9f3a8b902d9067b6e30d39e3429d3
-      size: 612
+      md5: 5ef02bcac2b3188c758975f849f23c1c
+      size: 522
     - path: requirements/train.txt
       hash: md5
       md5: 4b62798e08ad85a30e4561ad36a001b7
       size: 229
     - path: src/config_projeto.py
       hash: md5
-      md5: 07d0d3c0fd4c78ba5ac3e96af56c777f
-      size: 5108
+      md5: 6b7f376cf5db668dfe24b37a203621d2
+      size: 6748
+    - path: src/modelo.py
+      hash: md5
+      md5: 98a91b5b9b2c7d6e90af2a427621b60e
+      size: 16007
     - path: src/preprocess.py
       hash: md5
-      md5: 141286ccb64a46b5c8f2fd1271ae441c
-      size: 4485
+      md5: 79356a9e3c2cfd72dd50971ef721ac1e
+      size: 8244
     - path: src/train.py
       hash: md5
-      md5: b23dae96e565ff072dd6fdd85656fa97
-      size: 4454
+      md5: c529b6d53feecaacdaf5b17dd85d731f
+      size: 6157
     params:
       params.yaml:
-        balancing.k_neighbors: 3
-        model.learning_rate: 0.02
-        model.max_depth: 6
-        model.n_estimators: 120
-        model.num_leaves: 32
+        balancing:
+          strategy: class_weight
+          k_neighbors: 3
+        model:
+          tipo: logistica
+          calibracao: sigmoid
+          n_estimators: 120
+          learning_rate: 0.02
+          max_depth: 6
+          num_leaves: 32
+          min_child_samples:
+          reg_lambda:
+          subsample:
+          subsample_freq:
+          colsample_bytree:
+          logistica:
+            C: 0.3
     outs:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 4c74901b185be57e23544d832d6f98b6
+      md5: 09322df770bf1d787bbbe16be392218c
       size: 32
     - path: data/model.pkl
       hash: md5
-      md5: e0ae48310683b6791fcf5790b8fcb16a
-      size: 225550
+      md5: 912a4c945c810594de3ff85d630276ef
+      size: 6579
   preprocess:
     cmd: docker compose run --rm --build -T -e 
       DATA_PATH=/app/data/consultas-treino.csv -e 
@@ -70,51 +86,59 @@ stages:
     deps:
     - path: data/consultas-treino.csv
       hash: md5
-      md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
-      size: 22841
+      md5: 79844de23e2be63210fe1ebd67a9dbe0
+      size: 27805
     - path: data/interim/dados_validados.json
       hash: md5
-      md5: c6da6f5845f3bec01d1e69c98e20afa0
+      md5: 11765898f462e8d3e5f62db24f55eaa6
       size: 93
     - path: docker-compose.yml
       hash: md5
-      md5: d3fe8cc7bfa164e1a348a7e63980c075
-      size: 3668
+      md5: e32c5edd3d4ff8a313bda6efcbe7e35a
+      size: 3889
     - path: dockerfile
       hash: md5
-      md5: cb09473e637096045fcc78fea529be08
-      size: 561
+      md5: 7d5bd4c2bdb690be1c5b2807f00a85c9
+      size: 522
     - path: requirements/base.txt
       hash: md5
-      md5: 24b9f3a8b902d9067b6e30d39e3429d3
-      size: 612
+      md5: 5ef02bcac2b3188c758975f849f23c1c
+      size: 522
     - path: requirements/train.txt
       hash: md5
       md5: 4b62798e08ad85a30e4561ad36a001b7
       size: 229
     - path: src/agenda_clinica.py
       hash: md5
-      md5: 589eb0955aaebb2c8e71cb449ee2dcf1
-      size: 3108
+      md5: 2d4afddf8b806859c8483898f45e535e
+      size: 3076
     - path: src/config_projeto.py
       hash: md5
-      md5: 07d0d3c0fd4c78ba5ac3e96af56c777f
-      size: 5108
+      md5: 6b7f376cf5db668dfe24b37a203621d2
+      size: 6748
     - path: src/contrato_features.py
       hash: md5
-      md5: 6f662512187e4a2b32a61108452c80da
-      size: 11295
+      md5: 3421aa6cf73455006b70c04c14a9c72d
+      size: 12483
     - path: src/features.py
       hash: md5
-      md5: 06d5980149eb17edf6386f33606929ad
-      size: 1943
+      md5: 9a2ec4e2fe5de234007defa650dbbcfb
+      size: 3861
     - path: src/preprocess.py
       hash: md5
-      md5: 141286ccb64a46b5c8f2fd1271ae441c
-      size: 4485
+      md5: 79356a9e3c2cfd72dd50971ef721ac1e
+      size: 8244
+    - path: src/regras_dado_real.py
+      hash: md5
+      md5: bbcab76d66a13ec6f9ccd05dfa30dda7
+      size: 7346
     params:
       params.yaml:
-        features.temporais: true
+        dados.split:
+          dias_producao_cronologico: 60
+        features:
+          temporais: true
+          periodo_do_dia: false
     outs:
     - path: data/interim/mapa_especialidade.json
       hash: md5
@@ -122,12 +146,12 @@ stages:
       size: 126
     - path: data/interim/test.pkl
       hash: md5
-      md5: 73bdeff28cd4299479b00e91970bdeae
-      size: 9243
+      md5: 92550ba7ac7dc61ed48c125c14c68cf4
+      size: 10297
     - path: data/interim/train_raw.pkl
       hash: md5
-      md5: b790d4fbbc4e3c0b58dc99ab8a2e6fcb
-      size: 31132
+      md5: 568b31bef6db55ac09ff3288dced8b80
+      size: 40468
   validate:
     cmd: docker compose up -d --wait mlflow-server && docker compose run --rm 
       --build -T -e TEST_PATH=/app/data/interim/test.pkl -e 
@@ -137,42 +161,51 @@ stages:
     deps:
     - path: data/interim/mlflow_run_id.txt
       hash: md5
-      md5: 4c74901b185be57e23544d832d6f98b6
+      md5: 09322df770bf1d787bbbe16be392218c
       size: 32
     - path: data/interim/test.pkl
       hash: md5
-      md5: 73bdeff28cd4299479b00e91970bdeae
-      size: 9243
+      md5: 92550ba7ac7dc61ed48c125c14c68cf4
+      size: 10297
     - path: data/model.pkl
       hash: md5
-      md5: e0ae48310683b6791fcf5790b8fcb16a
-      size: 225550
+      md5: 912a4c945c810594de3ff85d630276ef
+      size: 6579
     - path: docker-compose.yml
       hash: md5
-      md5: d3fe8cc7bfa164e1a348a7e63980c075
-      size: 3668
+      md5: e32c5edd3d4ff8a313bda6efcbe7e35a
+      size: 3889
     - path: dockerfile
       hash: md5
-      md5: cb09473e637096045fcc78fea529be08
-      size: 561
+      md5: 7d5bd4c2bdb690be1c5b2807f00a85c9
+      size: 522
     - path: requirements/base.txt
       hash: md5
-      md5: 24b9f3a8b902d9067b6e30d39e3429d3
-      size: 612
+      md5: 5ef02bcac2b3188c758975f849f23c1c
+      size: 522
     - path: requirements/train.txt
       hash: md5
       md5: 4b62798e08ad85a30e4561ad36a001b7
       size: 229
     - path: src/config_projeto.py
       hash: md5
-      md5: 07d0d3c0fd4c78ba5ac3e96af56c777f
-      size: 5108
+      md5: 6b7f376cf5db668dfe24b37a203621d2
+      size: 6748
+    - path: src/decisao.py
+      hash: md5
+      md5: 1d5a2d810b98588c5dc6f23efc525107
+      size: 9391
+    - path: src/modelo.py
+      hash: md5
+      md5: 98a91b5b9b2c7d6e90af2a427621b60e
+      size: 16007
     - path: src/validate.py
       hash: md5
-      md5: 7b45329c527918e21bd4fa7a0819560b
-      size: 5390
+      md5: 9c28cbfd681b45e1d5e16f022624b2d5
+      size: 6384
     params:
       params.yaml:
+        decision.fracao_da_fila: 0.3
         decision.threshold: 0.6
   validate_data:
     cmd: docker compose run --rm --build -T -e 
@@ -188,48 +221,52 @@ stages:
       size: 22841
     - path: data/consultas-treino.csv
       hash: md5
-      md5: 9024cbcd0c3dcba3bdcbb35c8b7f4667
-      size: 22841
+      md5: 79844de23e2be63210fe1ebd67a9dbe0
+      size: 27805
     - path: docker-compose.yml
       hash: md5
-      md5: d3fe8cc7bfa164e1a348a7e63980c075
-      size: 3668
+      md5: e32c5edd3d4ff8a313bda6efcbe7e35a
+      size: 3889
     - path: dockerfile
       hash: md5
-      md5: cb09473e637096045fcc78fea529be08
-      size: 561
+      md5: 7d5bd4c2bdb690be1c5b2807f00a85c9
+      size: 522
     - path: requirements/base.txt
       hash: md5
-      md5: 24b9f3a8b902d9067b6e30d39e3429d3
-      size: 612
+      md5: 5ef02bcac2b3188c758975f849f23c1c
+      size: 522
     - path: requirements/train.txt
       hash: md5
       md5: 4b62798e08ad85a30e4561ad36a001b7
       size: 229
     - path: src/agenda_clinica.py
       hash: md5
-      md5: 589eb0955aaebb2c8e71cb449ee2dcf1
-      size: 3108
+      md5: 2d4afddf8b806859c8483898f45e535e
+      size: 3076
     - path: src/config_projeto.py
       hash: md5
-      md5: 07d0d3c0fd4c78ba5ac3e96af56c777f
-      size: 5108
+      md5: 6b7f376cf5db668dfe24b37a203621d2
+      size: 6748
     - path: src/contrato_features.py
       hash: md5
-      md5: 6f662512187e4a2b32a61108452c80da
-      size: 11295
+      md5: 3421aa6cf73455006b70c04c14a9c72d
+      size: 12483
     - path: src/features.py
       hash: md5
-      md5: 06d5980149eb17edf6386f33606929ad
-      size: 1943
+      md5: 9a2ec4e2fe5de234007defa650dbbcfb
+      size: 3861
     - path: src/preprocess.py
       hash: md5
-      md5: 141286ccb64a46b5c8f2fd1271ae441c
-      size: 4485
+      md5: 79356a9e3c2cfd72dd50971ef721ac1e
+      size: 8244
+    - path: src/regras_dado_real.py
+      hash: md5
+      md5: bbcab76d66a13ec6f9ccd05dfa30dda7
+      size: 7346
     - path: src/validate_data.py
       hash: md5
-      md5: 472dcb1c5904fb2fa7c93e36ba2b0941
-      size: 13900
+      md5: 4dee89c2b4c86aa82290f8d75c2555a0
+      size: 18320
     params:
       params.yaml:
         cadastro.especialidades:
@@ -245,16 +282,28 @@ stages:
             minimo: 0.1
             maximo: 0.5
           psi_alerta: 0.2
+          externa:
+            habilitada: false
+            n_amostra: 1500
+            random_state: 42
+            razao_sinal_sexta: 1.25
+          peso_semente:
+            limiar_reduzir: 200
+            limiar_retirar: 600
+            peso_reduzido: 0.3
+          split:
+            dias_producao_cronologico: 60
         gate.tolerancia:
+          recall_at_fracao: 0.05
+          roc_auc: 0.02
           recall_1: 0.05
           f1_1: 0.05
-          roc_auc: 0.02
     outs:
     - path: data/interim/dados_validados.json
       hash: md5
-      md5: c6da6f5845f3bec01d1e69c98e20afa0
+      md5: 11765898f462e8d3e5f62db24f55eaa6
       size: 93
     - path: data/interim/relatorio_dados.json
       hash: md5
-      md5: a0ecdf6bb5d2871711eb6c649576101c
-      size: 310
+      md5: d163a3ee71e0bc6c7e1f885466d3451f
+      size: 1118
