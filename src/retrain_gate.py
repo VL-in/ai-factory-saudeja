@@ -430,10 +430,11 @@ def montar_champion(
         "dataset": _info_dataset(),
         "metricas": {k: float(v) for k, v in sorted(metricas.items())},
         "excecao_slo_documentada": (
-            "recall_1/f1_1 abaixo dos alvos absolutos do SLO §3 (0.75/0.65). O gate "
-            "protege contra regressão relativa; o gap absoluto é limite do dataset "
-            "(ADR-003) e será decidido na validação final para o pitch -- não é "
-            "critério de promoção (SLO §3.1)."
+            "recall_1/f1_1 são informativas desde o ADR-016: medidas no threshold, "
+            "que a probabilidade calibrada quase nunca alcança. Os alvos do SLO §3 "
+            "(roc_auc >= 0.60, lift com 30% da fila >= 1.3, Brier <= taxa base) são "
+            "medidos em validação cruzada e não são critério de promoção; o gate "
+            "protege contra regressão relativa (SLO §3.1)."
         ),
     }
 

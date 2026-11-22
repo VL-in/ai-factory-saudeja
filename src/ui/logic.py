@@ -46,6 +46,7 @@ import contrato_features  # noqa: E402
 import db.client as db_client  # noqa: E402
 import db.repositories as repositories  # noqa: E402
 import db.repositorio_treino as repositorio_treino  # noqa: E402
+import decisao  # noqa: E402
 import id_paciente  # noqa: E402
 import inference  # noqa: E402
 import jobs.inferencia_diaria as job_inferencia_diaria  # noqa: E402
@@ -117,6 +118,87 @@ class ResultadoPredicao:
     @property
     def fora_do_dominio(self) -> bool:
         return bool(self.campos_fora_do_dominio)
+
+
+# Leitura de uma predição avulsa pela regra do lembrete. Três situações porque,
+# no modo top_fracao, a decisão é sobre a fila inteira (src/decisao.py): só as
+# válvulas de probabilidade decidem uma linha sozinha.
+LEMBRETE_SIM = "sim"
+LEMBRETE_NAO = "nao"
+LEMBRETE_DEPENDE_DA_FILA = "depende_da_fila"
+
+
+@dataclass(frozen=True)
+class LeituraDoLembrete:
+    situacao: str
+    rotulo: str
+    explicacao: str
+
+
+def regra_de_decisao() -> decisao.ConfigDecisao:
+    """A regra que decide o lembrete pago, para a tela explicar uma predição:
+    a mesma do braço campeão do job D-2 (ver `regra_do_campeao`)."""
+    return job_inferencia_diaria.regra_do_campeao()
+
+
+def _pct(valor: float) -> str:
+    return f"{valor:.0%}"
+
+
+def descrever_regra(config: decisao.ConfigDecisao) -> tuple[str, str]:
+    """(valor curto para o cartão, frase completa para a ajuda)."""
+    if config.modo == decisao.MODO_THRESHOLD:
+        return (
+            f"≥ {_pct(config.threshold)}",
+            f"Recebe lembrete pago quem tem probabilidade de falta a partir de "
+            f"{_pct(config.threshold)}.",
+        )
+    fracao = _pct(float(config.fracao_da_fila or 0.0))
+    frase = f"Recebem lembrete pago os {fracao} de maior risco da fila do dia"
+    valvulas = []
+    if config.probabilidade_minima is not None:
+        valvulas.append(f"ninguém abaixo de {_pct(config.probabilidade_minima)}")
+    if config.probabilidade_certa is not None:
+        valvulas.append(f"todos a partir de {_pct(config.probabilidade_certa)}")
+    if valvulas:
+        frase += " (" + "; ".join(valvulas) + ")"
+    return f"{fracao} da fila", frase + "."
+
+
+def ler_lembrete(probabilidade: float, config: decisao.ConfigDecisao) -> LeituraDoLembrete:
+    """O que o job D-2 faria com esta probabilidade, sem conhecer a fila."""
+    if config.modo == decisao.MODO_THRESHOLD:
+        corte = _pct(config.threshold)
+        if probabilidade >= config.threshold:
+            return LeituraDoLembrete(
+                LEMBRETE_SIM, "Sim",
+                f"Acima do corte de {corte}: o job D-2 dispararia lembrete pago para este "
+                "agendamento.",
+            )
+        return LeituraDoLembrete(
+            LEMBRETE_NAO, "Não",
+            f"Abaixo do corte de {corte}: nenhum lembrete pago seria disparado.",
+        )
+    fracao = _pct(float(config.fracao_da_fila or 0.0))
+    certa, minima = config.probabilidade_certa, config.probabilidade_minima
+    if certa is not None and probabilidade >= certa:
+        return LeituraDoLembrete(
+            LEMBRETE_SIM, "Sim",
+            f"A partir de {_pct(certa)} o lembrete pago sai em qualquer fila, mesmo que "
+            f"passe dos {fracao} do orçamento.",
+        )
+    if minima is not None and probabilidade < minima:
+        return LeituraDoLembrete(
+            LEMBRETE_NAO, "Não",
+            f"Abaixo de {_pct(minima)} o lembrete pago não sai, nem com orçamento sobrando "
+            "na fila.",
+        )
+    return LeituraDoLembrete(
+        LEMBRETE_DEPENDE_DA_FILA, "Depende da fila",
+        f"O job D-2 avisa os {fracao} de maior risco da fila do dia: este agendamento "
+        "recebe lembrete pago se ficar entre eles. Uma predição avulsa não tem fila com "
+        "que se comparar.",
+    )
 
 
 def montar_payload(
@@ -779,21 +861,21 @@ def validar_cadastro(
 
     if nome_completo is not None and not nome_valido(nome_completo):
         problemas.append(
-            f"Nome inválido -- informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
+            f"Nome inválido: informe entre {NOME_MINIMO} e {NOME_MAXIMO} caracteres."
         )
     if not cpf_valido(cpf):
-        problemas.append("CPF inválido -- confira os números digitados.")
+        problemas.append("CPF inválido: confira os números digitados.")
     if not telefone_valido(telefone):
-        problemas.append("Telefone inválido -- informe DDD + número (ex. (11) 98765-4321).")
+        problemas.append("Telefone inválido: informe DDD + número (ex. (11) 98765-4321).")
     if data_nascimento is None:
         problemas.append("Informe a data de nascimento.")
     elif not data_nascimento_valida(data_nascimento, data_consulta, hoje):
         problemas.append(
-            "Data de nascimento inválida -- informe uma data até hoje, de quem terá no "
+            "Data de nascimento inválida: informe uma data até hoje, de quem terá no "
             f"máximo {IDADE_MAXIMA} anos na data da consulta."
         )
     if sexo not in contrato_features.SEXOS_VALIDOS:
-        problemas.append("Sexo inválido -- escolha uma das opções da lista.")
+        problemas.append("Sexo inválido: escolha uma das opções da lista.")
 
     # Antes, sem lista de especialidades, o formulário caía em texto livre e
     # gravava qualquer coisa -- o erro só aparecia no job D-2, dias depois,
@@ -805,7 +887,7 @@ def validar_cadastro(
             "está configurada. Tente mais tarde ou fale com a clínica."
         )
     elif especialidade not in especialidades:
-        problemas.append("Especialidade inválida -- escolha uma das opções da lista.")
+        problemas.append("Especialidade inválida: escolha uma das opções da lista.")
 
     # Vazio é erro, nunca 0 km: a distância é feature do modelo, e um zero
     # inventado vira predição sobre quem mora na porta da clínica.
@@ -813,12 +895,12 @@ def validar_cadastro(
         problemas.append("Informe a distância até a clínica, em km.")
     elif not _distancia_valida(distancia_km):
         problemas.append(
-            f"Distância inválida -- informe um valor entre 0 e {DISTANCIA_MAXIMA_KM:g} km."
+            f"Distância inválida: informe um valor entre 0 e {DISTANCIA_MAXIMA_KM:g} km."
         )
 
     if not agenda_clinica.data_de_consulta_valida(data_consulta, hoje):
         problemas.append(
-            "Data da consulta inválida -- escolha entre hoje e "
+            "Data da consulta inválida: escolha entre hoje e "
             f"{agenda_clinica.PRAZO_MAXIMO_AGENDAMENTO_DIAS} dias à frente."
         )
     if hora_consulta is None:
@@ -846,7 +928,7 @@ def validar_cadastro(
         )
         if violacao is not None:
             rotulo = ROTULOS_FEATURES.get(violacao.campo, violacao.campo)
-            problemas.append(f"{rotulo}: valor não aceito -- confira o campo.")
+            problemas.append(f"{rotulo}: valor não aceito. Confira o campo.")
 
     return problemas
 
@@ -1084,7 +1166,9 @@ def registrar_pedido_da_clinica(codigo_agendamento: str, tipo: str) -> None:
     confirma em seguida, depois de conferir a identidade de quem pede."""
     codigo = (codigo_agendamento or "").strip()
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", codigo):
-        raise ErroPedido("Código do agendamento inválido -- copie-o de \"Detalhes técnicos\".")
+        raise ErroPedido(
+            "Código do agendamento inválido. Copie-o do detalhe do paciente, na Fila do dia."
+        )
     try:
         id_paciente = repositories.paciente_do_agendamento(codigo)
         if id_paciente is None:
@@ -1106,7 +1190,7 @@ def encaminhar_pedido_ao_treino(cpf: str) -> None:
     aprimoramento: diria a quem digitasse um CPF alheio se aquela pessoa
     autorizou o treino."""
     if not cpf_valido(cpf):
-        raise ErroPedido("CPF inválido -- confira os números digitados.")
+        raise ErroPedido("CPF inválido: confira os números digitados.")
     try:
         repositorio_treino.registrar_pedido(pseudonimo.id_titular(cpf), "eliminacao", "clinica")
     except Exception as exc:

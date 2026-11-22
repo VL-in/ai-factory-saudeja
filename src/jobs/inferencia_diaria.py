@@ -243,15 +243,23 @@ class _Predito:
 
 def regra_do_campeao() -> decisao.ConfigDecisao:
     """A regra com que o campeão foi aprovado (`champion_metrics.json`, bloco
-    `decisao`). Campeão registrado antes dela, ou sem o arquivo (a aba de dev
-    no Space), decide pelo `decision.threshold` de `params.yaml` -- o
-    comportamento de antes, que a pré-checagem do caminho agendado confere
-    contra o threshold registrado. Nunca pelo `decision.modo` de
-    `params.yaml`: ele descreve o próximo desafiante."""
+    `decisao`).
+
+    - Campeão registrado antes dela decide pelo `decision.threshold` de
+      `params.yaml` -- o comportamento de antes, que a pré-checagem do caminho
+      agendado confere contra o threshold registrado. Aqui, nunca pelo
+      `decision.modo`: ele descreve o próximo desafiante.
+    - Sem o arquivo (imagem do Space, que não leva o registro: aba de dev e
+      tela "Testar predição"), a regra inteira do bloco `decision` de
+      `params.yaml`. É de onde o gate grava o bloco `decisao` do campeão, então
+      os dois só divergem entre um re-treino que mudou a regra e a promoção
+      dele; cair no threshold, ao contrário, faria um modelo calibrado não
+      avisar ninguém. O caminho agendado nunca chega aqui sem o arquivo: a
+      pré-checagem exige o campeão registrado."""
     try:
         registro = campeao.carregar_campeao()
     except FileNotFoundError:
-        registro = {}
+        return decisao.config_de_params(inference.PARAMS)
     if registro.get("decisao"):
         return decisao.config_registrada(registro)
     return decisao.ConfigDecisao(

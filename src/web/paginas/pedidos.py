@@ -65,7 +65,7 @@ class PedidosDoTitular:
             ui.input("Código do agendamento")
             .props("outlined dense")
             .classes("w-full")
-            .tooltip('Em "Detalhes técnicos" da linha, na Fila do dia.')
+            .tooltip("Na Fila do dia, abra o paciente: o código fica no fim do detalhe.")
             .mark("pedido-codigo")
         )
         self._tipo = (

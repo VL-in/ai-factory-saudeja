@@ -448,3 +448,15 @@ def test_main_com_curva_imprime_e_loga_a_curva(
     run = mlflow.search_runs(experiment_ids=[experimento.experiment_id]).iloc[0]
     assert "metrics.curva_recall_30" in run.index and "metrics.curva_lift_100" in run.index
     assert run["params.curva_eficacia"] == "0.3"
+
+
+def test_segmentos_padrao_da_curva_batem_com_o_texto_real_do_lembrete():
+    # O padrão de --segmentos precifica a curva do SLA §4.1. Se o texto do SMS
+    # do job D-2 mudar de tamanho, o custo da curva fica errado sem aviso.
+    from jobs import inferencia_diaria
+    from messaging.client import segmentos_sms
+
+    mensagem = inferencia_diaria._mensagem_de_lembrete(
+        {"data_hora_agendada": "2026-11-24T14:00:00+00:00"}
+    )
+    assert segmentos_sms(mensagem) == avaliar_cv.SEGMENTOS_DO_LEMBRETE
