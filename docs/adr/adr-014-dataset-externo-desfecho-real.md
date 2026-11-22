@@ -54,7 +54,13 @@ Adotamos o *Medical Appointment No Shows* como uma **terceira origem de dado, `e
    - Um teste reservado de ~10 mil linhas, com pacientes disjuntos, serve só para a avaliação final.
    - A amostra de treino tem **1.500 linhas** (`dados.externa.n_amostra`): passa dos limiares de 200 e 600 linhas reais da regra de peso da semente, dá cerca de 85 positivos no fold de teste e fica na ordem do teto de 90 dias de uma clínica.
 5. **Parâmetro desligado.** `dados.externa.habilitada` **DEVE** ser `false` até a emenda que libera o uso no treino oficial. Com ele desligado, nenhuma linha externa **PODE** estar em `data/consultas-treino.csv`.
-6. **Rastreio.** Todo run do MLflow que usar a origem externa **DEVE** ter a tag `dados_externos=true`. Os derivados ficam em `data/externo/`, fora do git, versionados por DVC, com `LICENCA-E-ORIGEM.md` e um manifesto (sha256 do bruto, remoções por filtro, contagens, `random_state`).
+6. **Sinal declarado da sexta no fim do expediente** (emenda de 2026-11-21). A hipótese herdada de que a sexta das 17h às 18h tem mais falta não é testável no Kaggle, que não tem hora, e o projeto não terá horário real de produção para testá-la. Por decisão de produto, ela entra no dado externo como **sinal sintético declarado, de intensidade moderada**: depois da imputação, o horário das consultas de sexta é trocado entre elas até que a falta em 17h-18h fique `dados.externa.razao_sinal_sexta` = **1,25** vezes a do resto do pool. Cada troca leva uma falta de sexta de outro horário para 17h-18h e um comparecimento de 17h-18h para o horário dela. Assim:
+   - **NÃO DEVEM** mudar o desfecho, a data e o dia da semana, que continuam os reais (a sexta como um todo segue com a taxa real), nem o conjunto de horários de sexta (o PSI do horário contra a semente não muda);
+   - a independência do horário imputado é conferida **fora da sexta**, e a razão do sinal é conferida no pool, com tolerância de 0,03 (`verificar_sinal_sexta`);
+   - o manifesto registra a razão antes e depois e o número de trocas.
+
+   A intensidade é a da hipótese, não a da semente: a semente tem 61,5% contra cerca de 25% (2,2 vezes, efeito de 15% das faltas injetadas), forte o bastante para inflar a AUC do dia da semana.
+7. **Rastreio.** Todo run do MLflow que usar a origem externa **DEVE** ter a tag `dados_externos=true`. Os derivados ficam em `data/externo/`, fora do git, versionados por DVC, com `LICENCA-E-ORIGEM.md` e um manifesto (sha256 do bruto, remoções por filtro, contagens, `random_state`).
 
 Quais origens contam em cada regra:
 
@@ -158,7 +164,7 @@ Positivas:
 - O teste de sinal e a escolha de modelo passam a ser feitos com desfecho real, e não sobre um padrão que a própria autora fabricou.
 - As regras de peso da semente, de positivos reais no fold, de split por paciente e de features por paciente passam a ter dado com que ser testadas.
 - A curva de aprendizado dá o número que faltava para discutir a janela de 90 dias com dado, e não com estimativa.
-- O padrão fabricado da semente ("sexta, 17h-18h") fica diluído quando o dado externo entrar no treino.
+- O padrão fabricado da semente ("sexta, 17h-18h"), de 2,2 vezes, cai para o sinal declarado de 1,25 vezes quando o dado externo entrar no treino: a hipótese continua no dado, numa intensidade que não domina o modelo.
 
 Negativas e riscos aceitos:
 
@@ -168,6 +174,7 @@ Negativas e riscos aceitos:
 - **O SMS do Kaggle não mede o lembrete do SaúdeJá.** Outro mecanismo de envio, outra época, outra rede. Ele **NÃO DEVE** ser usado para calibrar a eficácia do lembrete.
 - **A regra de split cronológico (mais de 60 dias de produção) não é testável com este dado.** As consultas cobrem cerca de 6 semanas, e reescrever as datas para esticar o período seria falsificar o dado. Essa regra é testada com fixture.
 - **Campeão e desafiante deixam de ser comparáveis** se um for medido com dado externo e o outro não. Antes do primeiro gate com `habilitada: true`, o campeão **DEVE** ser medido de novo no dataset novo.
+- **O horário de sexta do dado externo é sintético com sinal.** Qualquer medida de horário ou de "sexta 17h" no dado externo mostra o sinal declarado, **não** evidência de que a hipótese é verdadeira. O sinal é calibrado no pool (razão 1,251); nos recortes ele oscila com o sorteio das trocas: 1,46 no teste reservado (462 consultas no recorte) e 1,33 na amostra de treino (59 consultas). Os resultados do teste de sinal e da simulação não mudam, porque o horário não está entre as features reais avaliadas. A análise exploratória, na seção 4, mostra o recorte de antes do sinal.
 - **O pipeline ganha uma coluna de origem.** `export_treino.py` e `validate_data.py` passam a contar por origem, em vez de por "não está na semente".
 - **Uso no treino oficial: não recomendado por ora** (2026-11-21). Ligar `dados.externa.habilitada` trocaria o dataset do re-treino sem ganho medido: o sinal das features reais não passou no critério, e a mistura da semente com dado real não mudou o desempenho no teste reservado. Se a emenda vier, o campeão **DEVE** ser medido de novo no dataset novo antes do gate, os runs levam a tag `dados_externos=true`, e o `retrain.yml` precisa baixar `data/externo/consultas-externas.csv` antes do export.
 
@@ -194,3 +201,4 @@ Negativas e riscos aceitos:
 - 2026-11-21: resultado da simulação (Passo 6): curva de aprendizado satura abaixo de 0,60, de 90 dias para 12 meses o ganho é de 0,006 a 0,025; o pipeline recupera 93-99% de um sinal conhecido; a semente não atrapalha nem ajuda, e os limiares 200/600/0,3 ficam.
 - 2026-11-21: coluna `origem` no export e contagem por origem no `validate_data`, com as regras da tabela acima em `src/regras_dado_real.py` (só reportadas, não aplicadas no treino). O split cronológico é testado com dado fictício: as datas do Kaggle cobrem 6 semanas e não são reescritas.
 - 2026-11-21: status passa a Aceito (critérios de aceite cumpridos); uso no treino oficial não recomendado por ora; link para a análise exploratória.
+- 2026-11-21: emenda (decisão 6): sinal sintético declarado da sexta 17h-18h no dado externo, com razão de 1,25 (`dados.externa.razao_sinal_sexta`), trocando só o horário entre consultas de sexta. Pool regerado (script 1.1): mesmas consultas, mesmos pacientes e mesma partição; 161 trocas, razão de 1,062 para 1,251 (35,3% de falta no recorte contra 28,3% no resto).

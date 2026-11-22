@@ -88,6 +88,8 @@ O que o dado real mostra e a semente não mostrava:
 
 **A metade "sexta" é testável e não se confirma:** no dado real, a sexta falta 1,1 ponto acima dos outros dias, contra 16 pontos na semente. **A metade "17h-18h" não é testável:** o Kaggle não tem a hora da consulta, e o horário externo foi sorteado da semente sem olhar o desfecho, então os 30,3% são, por construção, a taxa base. O recorte forte da semente continua sendo o que o diagnóstico do modelo já dizia: um padrão injetado pelo script de timestamp sintético.
 
+> **Depois desta análise**, o dado externo passou a ter um sinal sintético declarado em sexta 17h-18h, de 1,25 vezes a falta do resto ([ADR-014](../adr/adr-014-dataset-externo-desfecho-real.md), decisão 6). Os números desta seção são de antes do sinal. Rodar o script de novo mostra cerca de 35% no recorte, e esse número é o sinal declarado, não evidência. A linha "falta na sexta" não muda, porque a troca é só de horário, dentro da própria sexta.
+
 ## 5. SMS e antecedência (risco R6)
 
 No pool, quem recebeu SMS falta 27,7%, e quem não recebeu, 29,5%: uma diferença pequena. Separando por antecedência, o quadro muda:

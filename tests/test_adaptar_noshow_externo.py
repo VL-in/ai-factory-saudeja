@@ -11,6 +11,8 @@ O que se trava:
   valor imputado) e o sábado só recebe slot da manhã;
 - nenhuma coluna descartada nem o PatientId original sobrevivem;
 - o contrato de features vira quarentena contada no manifesto;
+- o sinal declarado da sexta 17h-18h (emenda do ADR-014) chega na razão
+  pedida trocando só a hora entre consultas de sexta;
 - o resultado passa nas regras de `contrato_dataset_externo`."""
 
 import importlib.util
@@ -216,8 +218,97 @@ def test_linha_fora_do_contrato_de_features_vira_quarentena_contada(cenario):
 
 def test_manifesto_bate_com_o_pool(cenario, monkeypatch):
     monkeypatch.setattr(cde, "LINHAS_BRUTO", len(cenario["bruto"]))
-    manifesto = adaptador.montar_manifesto(cenario["pool"], cenario["filtros"], "abc", 42)
-    assert cde.verificar_manifesto(manifesto, "abc", pool=cenario["pool"]) == []
+    pool, sinal = adaptador.injetar_sinal_sexta(cenario["pool"], 1.25, 42)
+    manifesto = adaptador.montar_manifesto(pool, cenario["filtros"], "abc", 42, sinal_sexta=sinal)
+    assert cde.verificar_manifesto(manifesto, "abc", pool=pool) == []
+    # o manifesto de um pool sem o sinal não bate com o pool injetado
+    sem_sinal = adaptador.montar_manifesto(cenario["pool"], cenario["filtros"], "abc", 42)
+    assert any("sinal_sexta" in v for v in cde.verificar_manifesto(sem_sinal, "abc", pool=pool))
+
+
+# --------------------------------------------------------------------------
+# sinal declarado da sexta 17h-18h (emenda do ADR-014)
+# --------------------------------------------------------------------------
+def _pool_grande(n=20_000, seed=7):
+    """Pool fictício só com o que o sinal usa, grande o bastante para a razão
+    não sofrer com arredondamento. Horário independente do desfecho."""
+    rng = np.random.default_rng(seed)
+    dias = list(pd.date_range("2016-05-02", "2016-05-28"))
+    linhas = []
+    for _ in range(n):
+        dia = dias[rng.integers(len(dias))]
+        slots = agenda_clinica.horarios_do_dia(dia.date())
+        if not slots:
+            continue
+        linhas.append(f"{dia.date()} {slots[rng.integers(len(slots))].strftime('%H:%M')}:00")
+    return pd.DataFrame(
+        {
+            "id_consulta": [f"K-{i}" for i in range(len(linhas))],
+            "data_hora_agendada": linhas,
+            "no_show": (rng.random(len(linhas)) < 0.28).astype(int),
+        }
+    )
+
+
+@pytest.mark.parametrize("razao", [1.25, 1.5, 0.8])
+def test_sinal_da_sexta_chega_na_razao_pedida(razao):
+    pool = _pool_grande()
+    injetado, resumo = adaptador.injetar_sinal_sexta(pool, razao, 42)
+    assert abs(cde.razao_sinal_sexta(pool) - 1) < 0.15  # sem sinal antes
+    assert abs(cde.razao_sinal_sexta(injetado) - razao) < 0.01
+    assert cde.verificar_sinal_sexta(injetado, razao) == []
+    assert resumo["razao_depois"] == round(cde.razao_sinal_sexta(injetado), 4)
+    assert (resumo["trocas"] > 0) == (razao > 1)
+
+
+def test_sinal_da_sexta_so_troca_a_hora_entre_consultas_de_sexta():
+    pool = _pool_grande()
+    injetado, _ = adaptador.injetar_sinal_sexta(pool, 1.25, 42)
+    antes = pd.to_datetime(pool["data_hora_agendada"])
+    depois = pd.to_datetime(injetado["data_hora_agendada"])
+    # desfecho, ids e data (logo o dia da semana) intactos
+    pd.testing.assert_series_equal(injetado["no_show"], pool["no_show"])
+    pd.testing.assert_series_equal(injetado["id_consulta"], pool["id_consulta"])
+    assert (antes.dt.normalize() == depois.dt.normalize()).all()
+    # fora da sexta nada muda; na sexta, o mesmo conjunto de horários
+    sexta = antes.dt.dayofweek == cde.DIA_SEXTA
+    assert (antes[~sexta] == depois[~sexta]).all()
+    assert (antes[sexta] != depois[sexta]).any()
+    assert sorted(antes[sexta].dt.strftime("%H:%M")) == sorted(depois[sexta].dt.strftime("%H:%M"))
+    # a taxa de falta da sexta como um todo é a real
+    assert injetado.loc[sexta, "no_show"].mean() == pool.loc[sexta, "no_show"].mean()
+
+
+def test_sinal_da_sexta_e_deterministico_e_nao_mexe_na_imputacao(cenario):
+    um, _ = adaptador.injetar_sinal_sexta(cenario["pool"], 1.25, 42)
+    dois, _ = adaptador.injetar_sinal_sexta(cenario["pool"], 1.25, 42)
+    pd.testing.assert_frame_equal(um, dois)
+    for coluna in ("especialidade", "distancia_km"):
+        assert um[coluna].tolist() == cenario["pool"][coluna].tolist()
+
+
+def test_pool_com_o_sinal_passa_no_contrato(cenario):
+    """A independência do horário é testada fora da sexta: o sinal
+    declarado não vira violação de imputação, e o PSI do horário não muda."""
+    pool, _ = adaptador.injetar_sinal_sexta(cenario["pool"], 1.25, 42)
+    assert cde.verificar_imputadas(pool, cenario["semente"]) == []
+    assert (
+        adaptador.conferir(
+            pool, cenario["bruto"], cenario["semente"], ESPECIALIDADES, cenario["filtros"]
+        )
+        == []
+    )
+
+
+def test_sinal_impossivel_e_recusado():
+    pool = _pool_grande(n=2_000)
+    with pytest.raises(ValueError, match="trocas pedidas"):
+        adaptador.injetar_sinal_sexta(pool, 50.0, 42)
+
+
+def test_pool_sem_o_sinal_declarado_e_acusado():
+    violacoes = cde.verificar_sinal_sexta(_pool_grande(), 1.25)
+    assert any("longe da declarada" in v for v in violacoes), violacoes
 
 
 def test_sal_curto_e_recusado(monkeypatch):

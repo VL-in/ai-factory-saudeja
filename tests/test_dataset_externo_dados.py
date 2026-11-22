@@ -12,7 +12,8 @@ são pulados; as regras em si são provadas sempre por
 |------|---------------------------------|------------------------------------------|
 | 0    | params.yaml (dados.externa)     | bloco do parâmetro; treino oficial limpo |
 | 1    | raw/…csv, LICENCA-E-ORIGEM.md   | schema do bruto; licença                 |
-| 2    | pool-adaptado.csv, manifesto    | schema/negócio, imputação, fidelidade    |
+| 2    | pool-adaptado.csv, manifesto    | schema/negócio, imputação, fidelidade,   |
+|      |                                 | sinal declarado da sexta 17h-18h         |
 | 3    | teste-reservado.csv, consultas- | schema/negócio, imputação, partição,     |
 |      | externas.csv                    | manifesto completo                       |
 
@@ -116,6 +117,12 @@ def test_pool_cumpre_schema_e_regra_de_negocio(pool, semente):
 
 def test_pool_imputacao_independente_do_desfecho_e_com_a_cara_da_semente(pool, semente):
     assert cde.verificar_imputadas(pool, semente) == []
+
+
+def test_pool_tem_o_sinal_declarado_da_sexta_na_razao_do_params(pool, manifesto):
+    razao = float(PARAMS["dados"]["externa"]["razao_sinal_sexta"])
+    assert cde.verificar_sinal_sexta(pool, razao) == []
+    assert manifesto["sinal_sexta"]["razao_alvo"] == razao
 
 
 def test_pool_fiel_ao_bruto(pool, bruto, manifesto):

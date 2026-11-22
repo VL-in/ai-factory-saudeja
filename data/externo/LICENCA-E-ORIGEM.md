@@ -22,6 +22,14 @@
 
 Todo derivado é obra derivada do dataset e herda a CC BY-NC-SA 4.0, com esta mesma atribuição.
 
+## Modificações feitas sobre o original
+
+A licença pede que as mudanças sejam indicadas. Nos derivados:
+
+- só entram consultas de 1 a 90 dias de antecedência e idade de 0 a 85 anos;
+- especialidade, distância e horário **não existem no original**: são sorteados da semente sintética do SaúdeJá;
+- o horário das consultas de sexta foi rearranjado para que 17h-18h tenha 1,25 vezes a falta do resto. É um **sinal sintético declarado** (ADR-014, decisão 6), não um dado de Vitória. Desfecho, data e dia da semana são os originais.
+
 ## Tratamento de dado pessoal
 
 O dataset é público e pseudonimizado, mas não anonimizado. Na adaptação:

@@ -157,6 +157,7 @@ def _manifesto(pool, reservado, amostra, sha="abc", removidas_contrato=0):
             "pacientes": int(reservado["id_paciente"].nunique()),
         },
         "amostra": {"linhas": len(amostra), "positivos": int(amostra["no_show"].sum())},
+        "sinal_sexta": {"razao_depois": round(cde.razao_sinal_sexta(pool), 4)},
     }
 
 
@@ -499,6 +500,7 @@ def test_manifesto_coerente_passa(cenario):
         (lambda m: m["pool"].update(positivos=-1), "pool.positivos"),
         (lambda m: m["amostra"].update(linhas=1), "amostra.linhas"),
         (lambda m: m.update(random_state="42"), "random_state"),
+        (lambda m: m["sinal_sexta"].update(razao_depois=9.0), "sinal_sexta"),
     ],
 )
 def test_manifesto_incoerente_e_acusado(cenario, mutacao, esperado):
@@ -534,9 +536,19 @@ def test_licenca_sem_a_fonte_e_acusada():
         ({"habilitada": False, "n_amostra": "1500", "random_state": 42}, "n_amostra"),
         ({"habilitada": False, "n_amostra": 0, "random_state": 42}, "n_amostra"),
         ({"habilitada": False, "n_amostra": 1500, "random_state": True}, "random_state"),
+        (
+            {"habilitada": False, "n_amostra": 1500, "random_state": 42, "razao_sinal_sexta": 0},
+            "razao_sinal_sexta",
+        ),
+        (
+            {"habilitada": False, "n_amostra": 1500, "random_state": 42, "razao_sinal_sexta": None},
+            "razao_sinal_sexta",
+        ),
     ],
 )
 def test_bloco_externa_do_params(externa, esperado):
+    if externa is not None and esperado != "razao_sinal_sexta":
+        externa = {"razao_sinal_sexta": 1.25, **externa}
     params = {"dados": {} if externa is None else {"externa": externa}}
     violacoes = cde.verificar_params_externa(params)
     if esperado is None:

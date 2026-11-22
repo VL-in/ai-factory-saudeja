@@ -80,10 +80,15 @@ dados:
   # dos limiares de 200 e 600 linhas reais da regra de peso da semente e da'
   # ~85 positivos no fold de teste. random_state: sorteio das features
   # imputadas, do teste reservado e da amostra (gravado no manifesto).
+  # razao_sinal_sexta: sinal DECLARADO (emenda do ADR-014) -- o horario imputado
+  # das consultas de sexta e' trocado entre elas para que a falta em 17h-18h
+  # fique 1,25x a do resto do pool (~36% contra ~28%). Hipotese herdada que o
+  # Kaggle nao testa (nao tem hora); desfecho, data e dia da semana sao os reais.
   externa:
     habilitada: false
     n_amostra: 1500
     random_state: 42
+    razao_sinal_sexta: 1.25
   # Regras para quando o desfecho real chega (src/regras_dado_real.py). Hoje o
   # validate_data so' REPORTA o que elas recomendariam; aplica-las no treino e'
   # decisao com ADR proprio. Desfecho real = producao + externa (a externa conta,

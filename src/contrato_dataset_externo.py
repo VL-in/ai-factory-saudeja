@@ -23,7 +23,10 @@ O dataset entra como a origem `externa`, separada de `semente` e `producao`:
 desfecho real, mas não do SaúdeJá. As três features que o Kaggle não tem
 (`especialidade`, `distancia_km`, horário) são sorteadas da distribuição da
 semente, **independentes do desfecho** -- `verificar_imputadas` confere as
-duas coisas.
+duas coisas. A exceção declarada é o horário das consultas de sexta: depois da
+imputação, ele é rearranjado para que 17h-18h falte `razao_sinal_sexta` vezes
+o resto do pool (emenda do ADR-014). A independência do horário é conferida
+fora da sexta, e o sinal, por `verificar_sinal_sexta`.
 """
 
 import hashlib
@@ -127,6 +130,19 @@ FAIXA_LINHAS_RESERVADO = (8_000, 12_000)
 TOLERANCIA_PREVALENCIA_AMOSTRA = 0.04
 TOLERANCIA_PREVALENCIA_RESERVADO = 0.02
 
+# --- sinal declarado da sexta no fim do expediente (emenda do ADR-014) ------
+# A hipótese herdada ("sexta, 17h-18h falta mais") não é testável no Kaggle,
+# que não tem hora. Por decisão de produto, o horário imputado das consultas de
+# sexta é trocado entre elas para que a falta em 17h-18h fique
+# `dados.externa.razao_sinal_sexta` vezes a do resto do pool. Só a hora muda:
+# desfecho, data e dia da semana continuam os reais, e o conjunto de horários
+# de sexta é o mesmo (o PSI do horário contra a semente não muda).
+DIA_SEXTA = 4
+HORA_INICIO_SINAL_SEXTA = 17  # slots 17:00, 17:30 e 18:00
+# Medido só no pool: na amostra de 1.500 o recorte tem ~70 linhas e a razão
+# oscila demais para ser regra.
+TOLERANCIA_RAZAO_SINAL_SEXTA = 0.03
+
 
 def _faixa_de_dominio(nome: str) -> contrato_features.Faixa:
     for campo in contrato_features.CAMPOS_NUMERICOS:
@@ -227,6 +243,18 @@ def carregar_manifesto(caminho: Path) -> dict[str, Any]:
 
 def _hora(df: pd.DataFrame) -> pd.Series:
     return pd.to_datetime(df["data_hora_agendada"]).dt.hour
+
+
+def mascara_sinal_sexta(df: pd.DataFrame) -> pd.Series:
+    """Consultas de sexta das 17h em diante (o recorte do sinal declarado)."""
+    quando = pd.to_datetime(df["data_hora_agendada"])
+    return (quando.dt.dayofweek == DIA_SEXTA) & (quando.dt.hour >= HORA_INICIO_SINAL_SEXTA)
+
+
+def razao_sinal_sexta(df: pd.DataFrame) -> float:
+    """Taxa de falta de sexta 17h-18h dividida pela do resto do arquivo."""
+    recorte = mascara_sinal_sexta(df)
+    return float(df.loc[recorte, "no_show"].mean()) / float(df.loc[~recorte, "no_show"].mean())
 
 
 def _fora_de(valores: pd.Series, permitidos: Collection[Any]) -> int:
@@ -366,14 +394,21 @@ def verificar_imputadas(
     psi_maximo: float = PSI_MAXIMO_IMPUTADA,
 ) -> list[str]:
     """As features imputadas não podem carregar sinal (independência do
-    desfecho) nem denunciar a origem (mesma distribuição da semente)."""
+    desfecho) nem denunciar a origem (mesma distribuição da semente). O
+    horário é testado fora da sexta, onde mora o sinal declarado
+    (`verificar_sinal_sexta`)."""
     violacoes = []
     if df["no_show"].nunique() < 2:
         return ["imputadas: o arquivo precisa ter as duas classes para testar independência"]
 
     hora = _hora(df)
-    for nome, valores in (("especialidade", df["especialidade"]), ("horario", hora)):
-        tabela = pd.crosstab(valores, df["no_show"])
+    fora_da_sexta = pd.to_datetime(df["data_hora_agendada"]).dt.dayofweek != DIA_SEXTA
+    todas = pd.Series(True, index=df.index)
+    for nome, valores, linhas in (
+        ("especialidade", df["especialidade"], todas),
+        ("horario", hora, fora_da_sexta),
+    ):
+        tabela = pd.crosstab(valores[linhas], df.loc[linhas, "no_show"])
         if tabela.shape[0] < 2:
             violacoes.append(f"imputadas: {nome} com uma categoria só")
             continue
@@ -405,6 +440,24 @@ def verificar_imputadas(
                 "(a distribuição denuncia a origem da linha)"
             )
     return violacoes
+
+
+def verificar_sinal_sexta(
+    df: pd.DataFrame,
+    razao_alvo: float,
+    tolerancia: float = TOLERANCIA_RAZAO_SINAL_SEXTA,
+) -> list[str]:
+    """O pool tem o sinal declarado da sexta 17h-18h na intensidade do
+    params (razão entre a falta no recorte e no resto)."""
+    if not mascara_sinal_sexta(df).any():
+        return ["sinal da sexta: nenhuma consulta de sexta das 17h em diante"]
+    realizada = razao_sinal_sexta(df)
+    if abs(realizada - razao_alvo) > tolerancia:
+        return [
+            f"sinal da sexta: razão {realizada:.3f} longe da declarada {razao_alvo} "
+            f"(tolerância {tolerancia})"
+        ]
+    return []
 
 
 def verificar_fidelidade_ao_bruto(
@@ -542,6 +595,7 @@ CHAVES_MANIFESTO = (
     "pool",
     "reservado",
     "amostra",
+    "sinal_sexta",
 )
 
 
@@ -590,6 +644,10 @@ def verificar_manifesto(
         for campo in campos:
             if manifesto[nome].get(campo) != real[campo]:
                 violacoes.append(f"manifesto: {nome}.{campo} não bate com o arquivo")
+    if pool is not None:
+        registrada = manifesto["sinal_sexta"].get("razao_depois")
+        if registrada is None or abs(float(registrada) - razao_sinal_sexta(pool)) > 0.001:
+            violacoes.append("manifesto: sinal_sexta.razao_depois não bate com o pool")
     return violacoes
 
 
@@ -618,6 +676,9 @@ def verificar_params_externa(params: Mapping[str, Any]) -> list[str]:
     rs = externa.get("random_state")
     if not isinstance(rs, int) or isinstance(rs, bool):
         violacoes.append("params: dados.externa.random_state deve ser inteiro")
+    razao = externa.get("razao_sinal_sexta")
+    if not isinstance(razao, (int, float)) or isinstance(razao, bool) or razao <= 0:
+        violacoes.append("params: dados.externa.razao_sinal_sexta deve ser número positivo")
     return violacoes
 
 

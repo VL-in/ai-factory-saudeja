@@ -23,20 +23,21 @@ nos commits; as decisões de arquitetura ficam nos [ADRs](https://github.com/VL-
 - **Análise exploratória do dataset externo contra a semente herdada** (`scripts/eda_dataset_externo.py` e [`docs/analises/eda-dataset-externo.md`](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/analises/eda-dataset-externo.md)). Compara a amostra de treino externa com a semente: o id de paciente da semente não identifica uma pessoa (76 de 206 ids mudam de idade ou sexo), a população externa é mais jovem e marca com menos antecedência, e o histórico externo é truncado. O dado real contradiz a semente em três pontos: idosos faltam menos, a antecedência tem efeito em U e a sexta-feira não tem efeito. O padrão "sexta, 17h-18h" da semente não se confirma na metade testável. Dentro de cada faixa de antecedência, quem recebeu SMS falta de 3 a 10 pontos a menos, efeito que some no agregado. Só agregados e gráficos de agregados.
 - **[ADR-014](https://github.com/VL-in/ai-factory-saudeja/blob/main/docs/adr/adr-014-dataset-externo-desfecho-real.md) aceito: dataset externo de desfecho real como terceira origem de dado.** Aceito depois de gerados e testados os arquivos e registrado o teste de sinal, que não passou: o sinal das features reais existe, mas é fraco (teto de `roc_auc` 0,58-0,60 mesmo com 60 mil linhas). O uso no treino oficial continua desligado e não é recomendado por ora. O ADR traz a auditoria do *Medical Appointment No Shows*: 70.985 consultas na população do SaúdeJá, com 28,6% de falta, e nenhum SMS para quem marcou com 1 ou 2 dias. Registra as decisões:
   - população de 1 a 90 dias de antecedência;
-  - especialidade, distância e horário sorteados da semente, independentes do desfecho;
+  - especialidade, distância e horário sorteados da semente, independentes do desfecho, com a exceção declarada do sinal da sexta 17h-18h (emenda);
   - amostra de treino de 1.500 linhas e teste reservado separado por paciente;
   - `dados.externa.habilitada` desligado até uma emenda;
   - tag `dados_externos` no MLflow;
   - a tabela de quais origens contam em cada regra do pipeline;
   - os critérios do teste de sinal fixados antes de rodar: limite inferior do intervalo do `roc_auc` acima de 0,60, do lift com 30% da fila acima de 1,3 e permutação com p < 0,01, medidos na amostra de 1.500 linhas, com regressão logística, só as features reais e validação por paciente.
 
-  O `params.yaml` ganha o bloco `dados.externa` (`habilitada: false`, `n_amostra: 1500`, `random_state: 42`), sem efeito no treino enquanto estiver desligado.
+  O `params.yaml` ganha o bloco `dados.externa` (`habilitada: false`, `n_amostra: 1500`, `random_state: 42`, `razao_sinal_sexta: 1.25`), sem efeito no treino enquanto estiver desligado.
 - **Auditoria do bruto do dataset externo** (`scripts/auditar_noshow_externo.py`). Confere o schema e os domínios do arquivo do Kaggle e imprime só agregados, nunca uma linha: linhas, pacientes, faixa de datas, quantas consultas cada filtro de população remove (na mesma ordem e com a mesma função do manifesto da adaptação), taxa de falta e de SMS por faixa de antecedência e pacientes com mais de uma consulta no mesmo dia. O bruto passa a ser versionado no DVC (`data/externo/raw.dvc`), e a atribuição e a licença ficam em `data/externo/LICENCA-E-ORIGEM.md`.
 - **Adaptação do dataset externo para o formato do export de treino** (`scripts/adaptar_noshow_externo.py`). Gera `data/externo/pool-adaptado.csv` (70.985 consultas, 45.209 pacientes, 28,6% de falta) e `data/externo/manifesto.json`, os dois no DVC:
   - só a população que o job D-2 prediz (antecedência de 1 a 90 dias, idade de 0 a 85);
   - `historico_noshow` *point-in-time*: só conta a falta de uma consulta anterior à data do agendamento;
   - paciente com pseudônimo de sal local (variável `EXTERNO_SAL_PSEUDONIMO`, documentada no `.env.example`), sem as colunas de saúde e sem o bairro;
   - especialidade, distância e horário sorteados da semente, sem olhar o desfecho;
+  - um sinal sintético declarado na sexta 17h-18h: o horário das consultas de sexta é trocado entre elas até a falta nesse recorte ficar 1,25 vezes a do resto (`dados.externa.razao_sinal_sexta`), com desfecho, data e dia da semana reais. Fica em 35,3% contra 28,3%, e o manifesto registra a razão e as trocas;
   - a mesma quarentena do contrato de features do export.
 
   O mesmo script separa o **teste reservado** (`data/externo/teste-reservado.csv`, 10.000 consultas de 6.319 pacientes sorteados, todas as consultas de um paciente do mesmo lado, só para a avaliação final) e a **amostra de treino** (`data/externo/consultas-externas.csv`, 1.500 consultas de pacientes fora do reservado, estratificada pelo desfecho), também no DVC.

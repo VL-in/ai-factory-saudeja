@@ -31,6 +31,11 @@ Regras (seções 2, 3.1 e 3.2 do ADR-014), cada uma travada por teste em
 - **Imputação independente do desfecho**: especialidade e distância
   reamostradas da semente; horário sorteado dos slots da semente do mesmo
   tipo de dia (útil ou sábado, que só tem manhã). Nada disso olha `no_show`.
+- **Sinal declarado da sexta** (emenda do ADR-014): DEPOIS da imputação, o
+  horário das consultas de sexta é trocado entre elas até a falta em 17h-18h
+  ficar `dados.externa.razao_sinal_sexta` vezes a do resto do pool. Só a hora
+  muda (desfecho, data e dia da semana são os reais) e o conjunto de horários
+  de sexta é o mesmo. Gerador próprio: a imputação não muda.
 - **Minimização**: colunas de saúde, `Scholarship` e o bairro não saem do
   bruto. `lembrete_enviado` (o SMS) é exportado, mas não é feature.
 - **Contrato de features**: toda linha passa pela mesma quarentena do export
@@ -66,7 +71,7 @@ import contrato_dataset_externo as cde  # noqa: E402
 import contrato_features  # noqa: E402
 from config_projeto import carregar_params  # noqa: E402  (também carrega o .env)
 
-VERSAO_SCRIPT = "1.0"
+VERSAO_SCRIPT = "1.1"
 VARIAVEL_SAL = "EXTERNO_SAL_PSEUDONIMO"
 CAMINHO_SEMENTE = REPO_ROOT / "data" / "consultas-historicas.csv"
 DIA_SABADO = 5
@@ -186,6 +191,53 @@ def adaptar(
     return pool.reset_index(drop=True), filtros
 
 
+def injetar_sinal_sexta(
+    pool: pd.DataFrame, razao: float, random_state: int
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """(pool com o sinal, resumo para o manifesto). Cada troca leva uma falta
+    de sexta de fora do recorte para 17h-18h e um comparecimento do recorte
+    para o horário dela: +1 falta no recorte, -1 no resto, mesmas contagens de
+    linhas e o mesmo conjunto de horários de sexta. O número de trocas k sai
+    de (pos_fim + k) / n_fim = razao * (pos_resto - k) / n_resto. Com k
+    negativo, a troca é no sentido inverso."""
+    rng = np.random.default_rng([random_state, 2])
+    y = pool["no_show"].to_numpy()
+    recorte = cde.mascara_sinal_sexta(pool).to_numpy()
+    sexta = (pd.to_datetime(pool["data_hora_agendada"]).dt.dayofweek == cde.DIA_SEXTA).to_numpy()
+    n_fim, pos_fim = int(recorte.sum()), int(y[recorte].sum())
+    n_resto, pos_resto = len(pool) - n_fim, int(y.sum()) - pos_fim
+    if n_fim == 0 or n_resto == 0:
+        raise ValueError("sinal da sexta: o pool precisa ter sexta 17h-18h e o resto")
+    antes = cde.razao_sinal_sexta(pool)
+    k = round((razao * pos_resto * n_fim / n_resto - pos_fim) / (1 + razao * n_fim / n_resto))
+    desfecho_que_entra = 1 if k > 0 else 0
+    entra = np.flatnonzero(sexta & ~recorte & (y == desfecho_que_entra))
+    sai = np.flatnonzero(recorte & (y == 1 - desfecho_que_entra))
+    if abs(k) > min(len(entra), len(sai)):
+        raise ValueError(
+            f"sinal da sexta: {abs(k)} trocas pedidas, não há consultas de sexta para tanto"
+        )
+    a = rng.choice(entra, size=abs(k), replace=False)
+    b = rng.choice(sai, size=abs(k), replace=False)
+
+    texto = pool["data_hora_agendada"].astype(str)
+    data, hora = texto.str[:10].to_numpy(), texto.str[11:].to_numpy().copy()
+    hora[a], hora[b] = hora[b], hora[a].copy()
+    novo = [f"{d} {h}" for d, h in zip(data, hora, strict=True)]
+    resultado = pool.assign(data_hora_agendada=novo)
+
+    no_recorte = cde.mascara_sinal_sexta(resultado)
+    return resultado, {
+        "razao_alvo": razao,
+        "trocas": int(k),
+        "razao_antes": round(antes, 4),
+        "razao_depois": round(cde.razao_sinal_sexta(resultado), 4),
+        "linhas_sexta_17h_18h": int(no_recorte.sum()),
+        "taxa_sexta_17h_18h": round(float(resultado.loc[no_recorte, "no_show"].mean()), 4),
+        "taxa_resto": round(float(resultado.loc[~no_recorte, "no_show"].mean()), 4),
+    }
+
+
 def particionar(
     pool: pd.DataFrame, n_amostra: int, random_state: int, alvo_reservado: int = ALVO_RESERVADO
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -212,6 +264,7 @@ def montar_manifesto(
     random_state: int,
     reservado: pd.DataFrame | None = None,
     amostra: pd.DataFrame | None = None,
+    sinal_sexta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     def _resumo(df: pd.DataFrame | None) -> dict[str, Any]:
         if df is None:
@@ -242,6 +295,7 @@ def montar_manifesto(
         },
         "reservado": _resumo(reservado),
         "amostra": _resumo(amostra),
+        "sinal_sexta": sinal_sexta or {},
     }
 
 
@@ -251,12 +305,19 @@ def conferir(
     semente: pd.DataFrame,
     especialidades: list[str],
     filtros: dict[str, int],
+    razao_sinal_sexta: float | None = None,
 ) -> list[str]:
-    """As regras do contrato do dataset externo sobre o pool recém-gerado."""
+    """As regras do contrato do dataset externo sobre o pool recém-gerado
+    (com `razao_sinal_sexta`, também o sinal declarado da sexta)."""
     return [
         *cde.verificar_adaptado(pool, semente, especialidades),
         *cde.verificar_imputadas(pool, semente),
         *cde.verificar_fidelidade_ao_bruto(pool, bruto, filtros["quarentena_contrato"]),
+        *(
+            cde.verificar_sinal_sexta(pool, razao_sinal_sexta)
+            if razao_sinal_sexta is not None
+            else []
+        ),
     ]
 
 
@@ -296,6 +357,7 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     externa = params["dados"]["externa"]
     especialidades = list(params["cadastro"]["especialidades"])
     random_state = int(externa["random_state"])
+    razao_sinal_sexta = float(externa["razao_sinal_sexta"])
 
     bruto = ler_bruto(args.bruto)
     violacoes = cde.verificar_bruto(bruto)
@@ -304,7 +366,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     semente = pd.read_csv(args.semente)
 
     pool, filtros = adaptar(bruto, semente, especialidades, ler_sal(), random_state)
-    violacoes = conferir(pool, bruto, semente, especialidades, filtros)
+    pool, sinal_sexta = injetar_sinal_sexta(pool, razao_sinal_sexta, random_state)
+    violacoes = conferir(pool, bruto, semente, especialidades, filtros, razao_sinal_sexta)
     if violacoes:
         for v in violacoes:
             print(f"  [VIOLACAO] {v}")
@@ -327,7 +390,13 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         raise SystemExit("[erro] particao fora do contrato -- nada foi gravado")
 
     manifesto = montar_manifesto(
-        pool, filtros, cde.sha256_do_arquivo(args.bruto), random_state, reservado, amostra
+        pool,
+        filtros,
+        cde.sha256_do_arquivo(args.bruto),
+        random_state,
+        reservado,
+        amostra,
+        sinal_sexta,
     )
     args.saida.mkdir(parents=True, exist_ok=True)
     pool.to_csv(args.saida / cde.CAMINHO_POOL.name, index=False)
@@ -342,6 +411,12 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         f"historico 0 em {p['historico_noshow_zero']:.1%}, lembrete {p['taxa_lembrete']:.1%}"
     )
     print(f"[ok] remocoes por filtro: {filtros}")
+    print(
+        f"[ok] sinal da sexta 17h-18h: razao {sinal_sexta['razao_antes']:.3f} -> "
+        f"{sinal_sexta['razao_depois']:.3f} (alvo {razao_sinal_sexta}), "
+        f"{sinal_sexta['trocas']} trocas de horario; falta {sinal_sexta['taxa_sexta_17h_18h']:.1%} "
+        f"no recorte contra {sinal_sexta['taxa_resto']:.1%} no resto"
+    )
     for nome in ("reservado", "amostra"):
         r = manifesto[nome]
         print(
