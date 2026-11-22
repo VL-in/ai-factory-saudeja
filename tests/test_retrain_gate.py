@@ -29,7 +29,9 @@ A fixture `ambiente` desliga o canário (`canario.habilitado: false`): os
 testes da promoção direta exercitam o caminho que continua valendo no
 bootstrap e com o canário desligado. Os testes do canário o religam.
 """
+
 import json
+import math
 
 import joblib
 import mlflow
@@ -41,6 +43,7 @@ import retrain_gate as gate
 from sanidade_modelo import ResultadoSanidade
 
 METRICAS_CAMPEAO = {
+    "recall_at_fracao": 0.4286,
     "recall_1": 0.4286,
     "f1_1": 0.4186,
     "roc_auc": 0.6433,
@@ -137,7 +140,8 @@ def test_bloqueia_e_nao_toca_no_campeao_quando_regride_alem_da_tolerancia(ambien
     antes = ambiente.champion_path.read_bytes()
     # recall_1 cai 0.19 -- muito além da tolerância de 0.05
     ambiente.semear_run(
-        {"recall_1": 0.2381, "f1_1": 0.2500, "roc_auc": 0.5500}, nome="gate-pior"
+        {"recall_at_fracao": 0.2381, "recall_1": 0.2381, "f1_1": 0.2500, "roc_auc": 0.5500},
+        nome="gate-pior",
     )
 
     codigo = gate.main(["--sem-repro"])
@@ -152,7 +156,13 @@ def test_bloqueia_e_nao_toca_no_campeao_quando_regride_alem_da_tolerancia(ambien
 def test_promove_e_reescreve_o_campeao_quando_melhora(ambiente):
     ambiente.semear_champion()
     run_id = ambiente.semear_run(
-        {"recall_1": 0.5714, "f1_1": 0.5000, "roc_auc": 0.7100, "pr_auc": 0.48},
+        {
+            "recall_at_fracao": 0.5714,
+            "recall_1": 0.5714,
+            "f1_1": 0.5000,
+            "roc_auc": 0.7100,
+            "pr_auc": 0.48,
+        },
         nome="gate-melhor",
     )
 
@@ -176,7 +186,8 @@ def test_promove_e_reescreve_o_campeao_quando_melhora(ambiente):
 def test_bootstrap_sem_campeao_promove_e_cria_o_arquivo(ambiente):
     assert not ambiente.champion_path.exists()
     ambiente.semear_run(
-        {"recall_1": 0.4286, "f1_1": 0.4186, "roc_auc": 0.6433}, nome="gate-bootstrap"
+        {"recall_at_fracao": 0.4286, "recall_1": 0.4286, "f1_1": 0.4186, "roc_auc": 0.6433},
+        nome="gate-bootstrap",
     )
 
     codigo = gate.main(["--sem-repro"])
@@ -195,7 +206,8 @@ def test_regressao_dentro_da_tolerancia_promove(ambiente):
     amostragem, não regressão -- SLO §3.1."""
     ambiente.semear_champion()
     ambiente.semear_run(
-        {"recall_1": 0.3810, "f1_1": 0.4000, "roc_auc": 0.6400}, nome="gate-ruido"
+        {"recall_at_fracao": 0.3810, "recall_1": 0.3810, "f1_1": 0.4000, "roc_auc": 0.6400},
+        nome="gate-ruido",
     )
 
     codigo = gate.main(["--sem-repro"])
@@ -208,33 +220,40 @@ def test_regressao_dentro_da_tolerancia_promove(ambiente):
 def test_o_mesmo_delta_bloqueia_com_tolerancia_zero(ambiente):
     """Prova que o número é lido de params.yaml e não está hardcoded: o
     mesmo desafiante do teste anterior, com tolerância 0.0, bloqueia."""
-    metricas_desafiante = {"recall_1": 0.3810, "f1_1": 0.4000, "roc_auc": 0.6400}
+    metricas_desafiante = {
+        "recall_at_fracao": 0.3810,
+        "recall_1": 0.3810,
+        "f1_1": 0.4000,
+        "roc_auc": 0.6400,
+    }
 
     decisao_frouxa = gate.decidir(
         {"metricas": METRICAS_CAMPEAO},
         metricas_desafiante,
-        tol={"recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02},
+        tol={"recall_at_fracao": 0.05, "recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02},
     )
     decisao_estrita = gate.decidir(
         {"metricas": METRICAS_CAMPEAO},
         metricas_desafiante,
-        tol={"recall_1": 0.0, "f1_1": 0.0, "roc_auc": 0.0},
+        tol={"recall_at_fracao": 0.0, "recall_1": 0.0, "f1_1": 0.0, "roc_auc": 0.0},
     )
 
     assert decisao_frouxa.promover
     assert not decisao_estrita.promover
-    assert "recall_1" in decisao_estrita.motivo
+    assert "recall_at_fracao" in decisao_estrita.motivo
 
 
 def test_tolerancia_ausente_em_params_e_erro_em_vez_de_default_silencioso():
     with pytest.raises(gate.ErroGate, match=r"gate\.tolerancia"):
-        gate.tolerancias({"gate": {"tolerancia": {"recall_1": 0.05}}})
+        gate.tolerancias({"gate": {"tolerancia": {"recall_1": 0.05, "roc_auc": 0.02}}})
 
 
-def test_params_do_repositorio_declaram_as_tres_metricas_do_gate():
+def test_params_do_repositorio_declaram_as_metricas_do_gate_e_as_informativas():
     tol = gate.tolerancias()
-    assert set(tol) == set(gate.METRICAS_DO_GATE)
+    assert set(gate.METRICAS_DO_GATE) == {"recall_at_fracao", "roc_auc"}
+    assert set(tol) == {*gate.METRICAS_DO_GATE, *gate.METRICAS_INFORMATIVAS}
     # SLO §3.1: as de contagem em 0.05 (~1/21 positivos), roc_auc em 0.02
+    assert tol["recall_at_fracao"] == 0.05
     assert tol["recall_1"] == 0.05
     assert tol["f1_1"] == 0.05
     assert tol["roc_auc"] == 0.02
@@ -264,7 +283,8 @@ def test_run_sem_as_metricas_do_gate_levanta_erro(ambiente):
 def test_campeao_corrompido_levanta_erro_em_vez_de_promover(ambiente):
     ambiente.champion_path.write_text("{isto não é json", encoding="utf-8")
     ambiente.semear_run(
-        {"recall_1": 0.9, "f1_1": 0.9, "roc_auc": 0.9}, nome="gate-corrompido"
+        {"recall_at_fracao": 0.9, "recall_1": 0.9, "f1_1": 0.9, "roc_auc": 0.9},
+        nome="gate-corrompido",
     )
 
     with pytest.raises(gate.ErroGate, match="JSON"):
@@ -292,7 +312,8 @@ def test_run_id_vazio_nao_promove(ambiente):
 def test_dataset_inalterado_falha_sem_tocar_no_campeao(ambiente, monkeypatch):
     ambiente.semear_champion()
     ambiente.semear_run(
-        {"recall_1": 0.4286, "f1_1": 0.4186, "roc_auc": 0.6433}, nome="gate-noop"
+        {"recall_at_fracao": 0.4286, "recall_1": 0.4286, "f1_1": 0.4186, "roc_auc": 0.6433},
+        nome="gate-noop",
     )
     antes = ambiente.champion_path.read_bytes()
     # `dvc repro` sem nada a reexecutar: o run_id gravado não muda
@@ -316,7 +337,8 @@ def test_run_id_novo_depois_do_repro_segue_para_a_comparacao(ambiente, monkeypat
 
     def repro_que_treina():
         ambiente.semear_run(
-            {"recall_1": 0.5714, "f1_1": 0.5000, "roc_auc": 0.7100}, nome="gate-novo"
+            {"recall_at_fracao": 0.5714, "recall_1": 0.5714, "f1_1": 0.5000, "roc_auc": 0.7100},
+            nome="gate-novo",
         )
 
     monkeypatch.setattr(gate, "_dvc_repro", repro_que_treina)
@@ -332,7 +354,8 @@ def test_resumo_do_bloqueio_carrega_o_comparativo_e_vai_para_o_step_summary(
 ):
     ambiente.semear_champion()
     ambiente.semear_run(
-        {"recall_1": 0.1000, "f1_1": 0.1500, "roc_auc": 0.5000}, nome="gate-resumo"
+        {"recall_at_fracao": 0.1000, "recall_1": 0.1000, "f1_1": 0.1500, "roc_auc": 0.5000},
+        nome="gate-resumo",
     )
     summary = tmp_path / "step_summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
@@ -346,8 +369,8 @@ def test_resumo_do_bloqueio_carrega_o_comparativo_e_vai_para_o_step_summary(
 
 
 def test_avisa_para_revisar_a_tolerancia_quando_o_fold_cresce():
-    tol = {"recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02}
-    metricas = {"recall_1": 0.5, "f1_1": 0.5, "roc_auc": 0.7}
+    tol = {"recall_at_fracao": 0.05, "recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02}
+    metricas = {"recall_at_fracao": 0.5, "recall_1": 0.5, "f1_1": 0.5, "roc_auc": 0.7}
 
     sem_aviso = gate.decidir({"metricas": METRICAS_CAMPEAO}, metricas, tol, positivos_no_fold=21)
     com_aviso = gate.decidir({"metricas": METRICAS_CAMPEAO}, metricas, tol, positivos_no_fold=80)
@@ -383,15 +406,17 @@ def test_champion_do_repositorio_e_legivel_pelo_gate():
 # Piso absoluto, suíte de sanidade, taxa de disparo, pipeline
 # --------------------------------------------------------------------------
 PISO = {"roc_auc": 0.60}
-TOL = {"recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02}
+TOL = {"recall_at_fracao": 0.05, "recall_1": 0.05, "f1_1": 0.05, "roc_auc": 0.02}
 
 
 def test_piso_absoluto_bloqueia_mesmo_sem_regressao_relativa():
     """Efeito catraca: cada promoção pode regredir até a tolerância em relação
     ao campeão da vez. Aqui o delta (-0.01) cabe na tolerância (0.02), mas o
     desafiante fica abaixo do piso -- e é bloqueado."""
-    campeao = {"metricas": {"recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.605}}
-    desafiante = {"recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.595}
+    campeao = {
+        "metricas": {"recall_at_fracao": 0.43, "recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.605}
+    }
+    desafiante = {"recall_at_fracao": 0.43, "recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.595}
 
     decisao = gate.decidir(campeao, desafiante, TOL, piso=PISO)
 
@@ -401,7 +426,12 @@ def test_piso_absoluto_bloqueia_mesmo_sem_regressao_relativa():
 
 
 def test_piso_absoluto_vale_tambem_no_bootstrap():
-    decisao = gate.decidir(None, {"recall_1": 0.5, "f1_1": 0.5, "roc_auc": 0.55}, TOL, piso=PISO)
+    decisao = gate.decidir(
+        None,
+        {"recall_at_fracao": 0.5, "recall_1": 0.5, "f1_1": 0.5, "roc_auc": 0.55},
+        TOL,
+        piso=PISO,
+    )
 
     assert not decisao.promover
     assert decisao.codigo_saida == gate.SAIDA_BLOQUEADO
@@ -415,7 +445,10 @@ def test_suite_de_sanidade_reprovada_bloqueia_e_nao_toca_no_campeao(ambiente, mo
     ambiente.semear_champion()
     antes = ambiente.champion_path.read_bytes()
     # métricas melhores que o campeão: só a sanidade pode bloquear
-    ambiente.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}, nome="gate-insano")
+    ambiente.semear_run(
+        {"recall_at_fracao": 0.57, "recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71},
+        nome="gate-insano",
+    )
     monkeypatch.setattr(
         gate,
         "verificar_sanidade",
@@ -428,7 +461,10 @@ def test_suite_de_sanidade_reprovada_bloqueia_e_nao_toca_no_campeao(ambiente, mo
 
 def test_taxa_de_disparo_alta_avisa_mas_nao_bloqueia(ambiente, monkeypatch, tmp_path):
     ambiente.semear_champion()
-    ambiente.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}, nome="gate-caro")
+    ambiente.semear_run(
+        {"recall_at_fracao": 0.57, "recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71},
+        nome="gate-caro",
+    )
     monkeypatch.setattr(gate, "taxa_de_disparo_projetada", lambda *_: 0.45)
     relatorio = tmp_path / "relatorio.json"
 
@@ -454,7 +490,8 @@ def test_taxa_de_disparo_projetada_com_o_modelo_real(tmp_path):
 
     taxa = gate.taxa_de_disparo_projetada("data/model.pkl", str(fold))
 
-    esperado = float((inference.predizer(model, X) >= gate.PARAMS["decision"]["threshold"]).mean())
+    regra = gate.decisao_mod.config_de_params(gate.PARAMS)
+    esperado = gate.decisao_mod.taxa_de_disparo(inference.predizer(model, X), regra)
     assert taxa == pytest.approx(esperado)
     assert 0.0 <= taxa <= 1.0
 
@@ -503,7 +540,9 @@ def test_aprovado_com_campeao_abre_canario_sem_tocar_no_campeao_nem_no_lock(com_
     com_canario.semear_champion()
     campeao_antes = com_canario.champion_path.read_bytes()
     lock_antes = com_canario.lock_path.read_bytes()
-    run_id = com_canario.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71})
+    run_id = com_canario.semear_run(
+        {"recall_at_fracao": 0.57, "recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}
+    )
 
     assert gate.main(["--sem-repro"]) == gate.SAIDA_PROMOVIDO
 
@@ -523,7 +562,9 @@ def test_aprovado_com_campeao_abre_canario_sem_tocar_no_campeao_nem_no_lock(com_
 
 def test_resumo_e_relatorio_dizem_que_foi_para_canario(com_canario, monkeypatch, tmp_path):
     com_canario.semear_champion()
-    com_canario.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71})
+    com_canario.semear_run(
+        {"recall_at_fracao": 0.57, "recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}
+    )
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     relatorio = tmp_path / "relatorio.json"
@@ -536,7 +577,9 @@ def test_resumo_e_relatorio_dizem_que_foi_para_canario(com_canario, monkeypatch,
 
 def test_bootstrap_promove_direto_mesmo_com_canario_habilitado(com_canario):
     """Sem campeão não há contra quem comparar o canário na fila."""
-    com_canario.semear_run({"recall_1": 0.5, "f1_1": 0.45, "roc_auc": 0.66})
+    com_canario.semear_run(
+        {"recall_at_fracao": 0.5, "recall_1": 0.5, "f1_1": 0.45, "roc_auc": 0.66}
+    )
 
     assert gate.main(["--sem-repro"]) == gate.SAIDA_PROMOVIDO
     assert com_canario.champion_path.exists()
@@ -563,7 +606,9 @@ def test_canario_ativo_impede_o_re_treino_antes_do_repro(com_canario, monkeypatc
 def test_modelo_ja_revertido_num_canario_e_bloqueado(com_canario):
     com_canario.semear_champion()
     antes = com_canario.champion_path.read_bytes()
-    com_canario.semear_run({"recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71})
+    com_canario.semear_run(
+        {"recall_at_fracao": 0.57, "recall_1": 0.57, "f1_1": 0.50, "roc_auc": 0.71}
+    )
     versao = gate.calcular_model_version(com_canario.model_path)
     (com_canario.tmp_path / "canario_historico.json").write_text(
         json.dumps({"canarios": [{"model_version": versao, "decisao": "revertido"}]}),
@@ -578,3 +623,128 @@ def test_modelo_ja_revertido_num_canario_e_bloqueado(com_canario):
 def test_params_do_repositorio_habilitam_o_canario():
     assert canario.habilitado(gate.PARAMS)
     assert 0 < canario.ler_config(gate.PARAMS)["fracao"] < 1
+
+
+# --------------------------------------------------------------------------
+# Critério por orçamento (recall_at_fracao + roc_auc; recall_1/f1_1 informativos)
+# --------------------------------------------------------------------------
+def test_regressao_so_no_threshold_e_informativa_e_nao_bloqueia():
+    """Um desafiante calibrado quase nunca passa de 0,6: recall_1 e f1_1 vão a
+    zero sem o modelo ordenar pior. Mostrado, não bloqueia."""
+    desafiante = {"recall_at_fracao": 0.62, "roc_auc": 0.71, "recall_1": 0.0, "f1_1": 0.0}
+
+    decisao = gate.decidir({"metricas": METRICAS_CAMPEAO}, desafiante, TOL, piso=PISO)
+
+    assert decisao.promover
+    informativas = {c["metrica"]: c for c in decisao.comparacoes if c["informativa"]}
+    assert set(informativas) == {"recall_1", "f1_1"}
+    assert all(c["regrediu"] for c in informativas.values())
+
+
+def test_regressao_no_recall_at_fracao_bloqueia():
+    desafiante = {"recall_at_fracao": 0.33, "roc_auc": 0.66, "recall_1": 0.6, "f1_1": 0.6}
+
+    decisao = gate.decidir({"metricas": METRICAS_CAMPEAO}, desafiante, TOL, piso=PISO)
+
+    assert not decisao.promover
+    assert "recall_at_fracao" in decisao.motivo
+    assert "recall_1" not in decisao.motivo
+
+
+def test_resumo_marca_as_informativas(ambiente, monkeypatch, tmp_path):
+    ambiente.semear_champion()
+    ambiente.semear_run({"recall_at_fracao": 0.62, "roc_auc": 0.71, "recall_1": 0.0, "f1_1": 0.0})
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    assert gate.main(["--sem-repro"]) == gate.SAIDA_PROMOVIDO
+    assert "informativa (regrediu)" in summary.read_text(encoding="utf-8")
+
+
+def test_campeao_sem_recall_at_fracao_e_erro_em_vez_de_liberar_a_promocao(ambiente):
+    """Risco do critério novo "liberar" a promoção sem mérito: o campeão tem
+    de estar medido no critério novo antes da troca."""
+    ambiente.semear_champion({"recall_1": 0.43, "f1_1": 0.42, "roc_auc": 0.64})
+
+    with pytest.raises(gate.ErroGate, match="recall_at_fracao"):
+        gate.carregar_champion()
+
+
+def test_criterio_novo_reproduz_o_campeao_e_aprova_o_desafiante_por_merito():
+    """O campeão do repositório, comparado com ele mesmo, passa (o critério
+    novo não bloqueia o que está em produção). O desafiante logística +
+    class_weight + sigmoide, medido no mesmo fold oficial, passa por mérito:
+    +0,19 em recall_at_fracao e +0,064 em roc_auc, com recall_1/f1_1 em zero
+    (informativos) porque a probabilidade calibrada não chega a 0,6."""
+    campeao = gate.carregar_champion()
+    tol = gate.tolerancias()
+    piso = gate.pisos()
+
+    assert gate.decidir(campeao, campeao["metricas"], tol, piso=piso).promover
+
+    desafiante = {"recall_at_fracao": 0.6190, "roc_auc": 0.7074, "recall_1": 0.0, "f1_1": 0.0}
+    decisao = gate.decidir(campeao, desafiante, tol, piso=piso)
+    assert decisao.promover
+    delta = {c["metrica"]: c["delta"] for c in decisao.comparacoes}
+    assert delta["recall_at_fracao"] > 0.15 and delta["roc_auc"] > 0.05
+
+
+def test_champion_do_repositorio_tem_o_bloco_cv_do_campeao():
+    cv = gate.carregar_champion()["cv"]["metricas"]
+    assert cv["roc_auc"]["media"] == pytest.approx(0.555, abs=0.001)
+    assert {"roc_auc", "pr_auc", "brier", "recall_at_fracao", "lift_at_fracao"} <= set(cv)
+
+
+def test_promocao_registra_a_regra_de_decisao_do_params(ambiente, monkeypatch):
+    ambiente.semear_champion()
+    ambiente.semear_run({"recall_at_fracao": 0.62, "roc_auc": 0.71, "recall_1": 0.5, "f1_1": 0.5})
+    regra = {**gate.PARAMS["decision"], "modo": "top_fracao"}
+    monkeypatch.setitem(gate.PARAMS, "decision", regra)
+
+    assert gate.main(["--sem-repro"]) == gate.SAIDA_PROMOVIDO
+
+    campeao = json.loads(ambiente.champion_path.read_text(encoding="utf-8"))
+    assert campeao["decisao"]["modo"] == "top_fracao"
+    assert campeao["decisao"]["fracao_da_fila"] == 0.3
+    assert campeao["decisao"]["threshold"] == campeao["decision_threshold"]
+
+
+def test_canario_aberto_pelo_gate_leva_a_regra_de_decisao(com_canario, monkeypatch):
+    com_canario.semear_champion()
+    com_canario.semear_run({"recall_at_fracao": 0.62, "roc_auc": 0.71})
+    monkeypatch.setitem(gate.PARAMS, "decision", {**gate.PARAMS["decision"], "modo": "top_fracao"})
+
+    assert gate.main(["--sem-repro"]) == gate.SAIDA_PROMOVIDO
+    assert canario.carregar()["decisao"]["modo"] == "top_fracao"
+
+
+def test_taxa_projetada_no_top_fracao_e_a_fracao_configurada(tmp_path, monkeypatch):
+    import inference
+    import sanidade_modelo
+
+    _, mapa = inference.carregar_modelo("data/model.pkl")
+    X = inference.construir_features_lote(sanidade_modelo.grade_de_casos(sorted(mapa)), mapa)
+    fold = tmp_path / "test.pkl"
+    joblib.dump({"X": X, "y": np.zeros(len(X))}, fold)
+    regra = {"threshold": 0.6, "modo": "top_fracao", "fracao_da_fila": 0.3}
+    monkeypatch.setitem(gate.PARAMS, "decision", regra)
+
+    taxa = gate.taxa_de_disparo_projetada("data/model.pkl", str(fold))
+
+    assert taxa == pytest.approx(math.ceil(0.3 * len(X)) / len(X))
+
+
+def test_valvulas_sem_calibracao_avisam():
+    params = {
+        "model": {"calibracao": "none"},
+        "decision": {
+            "threshold": 0.6,
+            "modo": "top_fracao",
+            "fracao_da_fila": 0.3,
+            "probabilidade_minima": 0.15,
+        },
+    }
+    assert gate._avisos_da_regra(params)
+    params["model"]["calibracao"] = "sigmoid"
+    assert gate._avisos_da_regra(params) == []
+    assert gate._avisos_da_regra() == []  # params do repositório: modo threshold

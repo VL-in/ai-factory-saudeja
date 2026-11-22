@@ -111,6 +111,7 @@ stages:
       - requirements/base.txt
       - requirements/train.txt
       - src/validate.py
+      - src/decisao.py
       - src/modelo.py
       - src/config_projeto.py
       - data/model.pkl
@@ -118,3 +119,4 @@ stages:
       - data/interim/mlflow_run_id.txt
     params:
       - decision.threshold
+      - decision.fracao_da_fila

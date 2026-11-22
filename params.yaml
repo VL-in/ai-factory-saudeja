@@ -78,21 +78,29 @@ features:
 # contínua e não sofre desse salto. Revisar quando o dataset crescer
 # com desfechos reais: com >=50 positivos no fold cai para 0.02 -- o gate avisa
 # quando esse ponto chegar.
+#
+# Criterio (regra de decisao por orcamento, ADR-016): recall_at_fracao (recall
+# avisando decision.fracao_da_fila do fold, contagem -> mesma regra 1/positivos)
+# e roc_auc. recall_1 e f1_1 sao medidos no threshold e ficam so' INFORMATIVOS
+# (na tabela do resumo, sem bloquear): calibrado, um desafiante quase nunca
+# passa de 0.6 e seria barrado por construcao, nao por merito.
 gate:
   tolerancia:
-    recall_1: 0.05
-    f1_1: 0.05
+    recall_at_fracao: 0.05
     roc_auc: 0.02
+    recall_1: 0.05    # informativa
+    f1_1: 0.05        # informativa
   # Piso ABSOLUTO, alem da comparacao relativa: sem ele, cada
   # promocao pode regredir ate' a tolerancia em relacao ao campeao da vez e,
   # somadas, as regressoes pequenas levam o modelo para perto do acaso (efeito
   # catraca). 0.60 e' decisao da autora; o campeao vigente mede 0.643.
   piso:
     roc_auc: 0.60
-  # Fracao do fold de teste que o desafiante mandaria para lembrete pago no
-  # threshold vigente. So' NOTIFICA acima disto, nao bloqueia (decisao da
-  # autora): 0.30 e' o "cortar 70% do custo de mensageria" do BRIEFING. O
-  # campeao vigente marca 22 de 76 (29%).
+  # Fracao do fold de teste que o desafiante mandaria para lembrete pago pela
+  # regra de decisao vigente. So' NOTIFICA acima disto, nao bloqueia (decisao
+  # da autora): 0.30 e' o "cortar 70% do custo de mensageria" do BRIEFING. O
+  # campeao vigente marca 22 de 76 (29%); no top_fracao, 23 de 76 (30,3%) e'
+  # o orcamento arredondado para cima. Tambem e' o limite do aviso do job D-2.
   taxa_disparo_alerta: 0.30
 
 # Contrato de dados (src/contrato_features.py e src/validate_data.py).

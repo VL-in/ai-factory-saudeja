@@ -110,7 +110,8 @@ def minimo_de_positivos_no_fold(params: dict[str, Any]) -> int:
     """1/tolerância das métricas de contagem, arredondado para cima (SLO
     §3.1). Com 0.05 dá 20; o fold vigente tem 21."""
     tolerancias = params["gate"]["tolerancia"]
-    menor = min(float(tolerancias["recall_1"]), float(tolerancias["f1_1"]))
+    contagem = ("recall_at_fracao", "recall_1", "f1_1")
+    menor = min(float(tolerancias[m]) for m in contagem if m in tolerancias)
     return math.ceil(round(1 / menor, 9))
 
 

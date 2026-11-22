@@ -8,15 +8,29 @@ As métricas são logadas na MESMA run do MLflow aberta por train.py (resumida
 via run_id), para o histórico de uma run continuar completo mesmo com o
 pipeline segregado em stages/containers separados. O MLflow é a única fonte
 de histórico de métricas -- não persistimos um metrics.json em paralelo.
+
+Além das métricas no threshold, mede a pergunta do orçamento:
+`recall_at_fracao` (recall quando se avisa a fração `decision.fracao_da_fila`
+de maior probabilidade do fold, a mesma conta da regra `top_fracao` de
+`src/decisao.py`) e `lift_at_fracao` (esse recall dividido pela fração
+avisada; 1,0 é escolher ao acaso). As duas não dependem de threshold nem de
+calibração, e `recall_at_fracao` é critério do gate (`src/retrain_gate.py`).
+O Brier mede a calibração (0,20 é o do modelo que responde sempre a taxa base).
 """
 import os
 
 import joblib
 import mlflow
 from mlflow.tracking import MlflowClient
-from sklearn.metrics import average_precision_score, classification_report, roc_auc_score
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    classification_report,
+    roc_auc_score,
+)
 
 from config_projeto import caminho_de_env, carregar_params
+from decisao import recall_na_fracao
 
 PARAMS = carregar_params()
 
@@ -27,7 +41,7 @@ RUN_ID_PATH = caminho_de_env("RUN_ID_PATH", "data/interim/mlflow_run_id.txt")
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 
 
-def validar(model, X_test, y_test, threshold=0.5):
+def validar(model, X_test, y_test, threshold=0.5, fracao=0.30):
     """Calcula métricas de negócio/classificação sobre o fold de teste.
     Loga um aviso (tag MLflow) se a classe positiva estiver ausente no fold --
     torna visível uma falha de amostragem em vez de reportar 0.0 como
@@ -55,9 +69,12 @@ def validar(model, X_test, y_test, threshold=0.5):
     if classe_positiva_ausente:
         roc_auc = 0.0
         pr_auc = 0.0
+        recall_k, lift_k = 0.0, 0.0
     else:
         roc_auc = roc_auc_score(y_test, y_proba)
         pr_auc = average_precision_score(y_test, y_proba)  # mais informativa que ROC-AUC aqui
+        recall_k, fracao_avisada = recall_na_fracao(y_test, y_proba, fracao)
+        lift_k = recall_k / fracao_avisada
 
     return {
         "accuracy": report["accuracy"],
@@ -70,6 +87,9 @@ def validar(model, X_test, y_test, threshold=0.5):
         "precision_0": metrics_0["precision"],
         "recall_0": metrics_0["recall"],
         "f1_macro": report["macro avg"]["f1-score"],
+        "recall_at_fracao": float(recall_k),
+        "lift_at_fracao": float(lift_k),
+        "brier": float(brier_score_loss(y_test, y_proba)),
     }
 
 
@@ -118,9 +138,10 @@ def main():
         )
 
     threshold = PARAMS["decision"]["threshold"]
+    fracao = float(PARAMS["decision"]["fracao_da_fila"])
 
     with mlflow.start_run(run_id=run_id):
-        metrics = validar(model, X_test, y_test, threshold=threshold)
+        metrics = validar(model, X_test, y_test, threshold=threshold, fracao=fracao)
         _logar_threshold(run_id, threshold)
         mlflow.log_metrics(metrics)
 

@@ -11,9 +11,16 @@ sobreviveria de um mês para o outro. Mesmo princípio do
 [ADR-006](../docs/adr/adr-006-observabilidade.md): o registro não pode morar
 dentro daquilo que ele mede.
 
-**Regressão relativa, não alvo absoluto.** O gate compara `recall_1`/`f1_1`/
-`roc_auc` contra o campeão, com as tolerâncias de `params.yaml` (`gate.
-tolerancia`, justificadas no SLO §3.1). Os alvos absolutos do SLO §3
+**Regressão relativa, não alvo absoluto.** O gate compara `recall_at_fracao`
+(recall avisando a fração `decision.fracao_da_fila` de maior risco do fold, a
+pergunta do orçamento) e `roc_auc` contra o campeão, com as tolerâncias de
+`params.yaml` (`gate.tolerancia`, justificadas no SLO §3.1). As duas não
+dependem do threshold nem da calibração: um desafiante calibrado, cuja
+probabilidade quase nunca passa de 0,6, é comparado pelo que ordena, não pela
+escala. `recall_1` e `f1_1` (no threshold) continuam na tabela, só
+informativos -- eram o critério até a regra de decisão por orçamento
+(`src/decisao.py`), e bloqueariam por construção qualquer modelo calibrado.
+Os alvos absolutos do SLO §3
 (`recall_1` >= 0.75, `f1_1` >= 0.65) **não** são critério de promoção: o
 modelo vigente já os viola (0.429 / 0.419) e, se fossem, nada jamais seria
 promovido. O gap absoluto é exceção documentada, com decisão prevista
@@ -82,6 +89,7 @@ import yaml
 from mlflow.tracking import MlflowClient
 
 import canario
+import decisao as decisao_mod
 import inference
 import sanidade_modelo
 from config_projeto import REPO_ROOT, caminho_de_env, carregar_params, fuso_da_clinica
@@ -106,10 +114,17 @@ DVC_LOCK_PATH = caminho_de_env("DVC_LOCK_PATH", "dvc.lock")
 # localhost vale tanto na máquina da autora quanto no ubuntu-latest.
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 
-# As três que governam a promoção. Não são todas as que a run loga (accuracy,
-# pr_auc, métricas da classe 0 etc. vão para o arquivo do campeão como
-# registro), são as três que o SLO §3/§3.1 elegeu como critério.
-METRICAS_DO_GATE = ("recall_1", "f1_1", "roc_auc")
+# As que governam a promoção. Não são todas as que a run loga (accuracy,
+# pr_auc, Brier, métricas da classe 0 etc. vão para o arquivo do campeão como
+# registro). `recall_at_fracao` é a pergunta do orçamento; `roc_auc`, a
+# qualidade da ordenação. As duas valem para qualquer regra de decisão.
+METRICAS_DO_GATE = ("recall_at_fracao", "roc_auc")
+# Comparadas e mostradas no resumo, mas sem bloquear: medidas no threshold, que
+# deixou de decidir o lembrete na regra `top_fracao`. Entram na comparação só
+# quando campeão e desafiante as têm e há tolerância para elas.
+METRICAS_INFORMATIVAS = ("recall_1", "f1_1")
+# As de contagem, cuja tolerância segue a regra 1/(positivos no fold).
+METRICAS_DE_CONTAGEM = ("recall_at_fracao", "recall_1", "f1_1")
 
 SAIDA_PROMOVIDO = 0
 SAIDA_BLOQUEADO = 1
@@ -159,7 +174,7 @@ def tolerancias(params: dict[str, Any] | None = None) -> dict[str, float]:
             f"params.yaml não define gate.tolerancia para {faltando} -- "
             "ver SLO §3.1 para a regra que gera esses números"
         )
-    return {m: float(config[m]) for m in METRICAS_DO_GATE}
+    return {m: float(config[m]) for m in (*METRICAS_DO_GATE, *METRICAS_INFORMATIVAS) if m in config}
 
 
 def pisos(params: dict[str, Any] | None = None) -> dict[str, float]:
@@ -256,10 +271,17 @@ def _info_dataset() -> dict[str, Any]:
 def comparar(
     metricas_campeao: dict[str, Any], metricas_desafiante: dict[str, Any], tol: dict[str, float]
 ) -> list[dict[str, Any]]:
-    """Uma linha por métrica do gate. `delta` negativo é piora; só conta
-    como regressão o que piora **além** da tolerância daquela métrica."""
+    """Uma linha por métrica do gate, e uma por métrica informativa que os
+    dois lados tenham. `delta` negativo é piora; só conta como regressão o que
+    piora **além** da tolerância daquela métrica -- e, nas informativas
+    (`informativa: True`), a regressão é mostrada mas não bloqueia."""
     linhas = []
-    for metrica in METRICAS_DO_GATE:
+    informativas = [
+        m
+        for m in METRICAS_INFORMATIVAS
+        if m in tol and m in metricas_campeao and m in metricas_desafiante
+    ]
+    for metrica in (*METRICAS_DO_GATE, *informativas):
         if metrica not in metricas_campeao or metrica not in metricas_desafiante:
             raise ErroGate(f"métrica {metrica} ausente em campeão ou desafiante")
         campeao = float(metricas_campeao[metrica])
@@ -273,6 +295,7 @@ def comparar(
                 "delta": delta,
                 "tolerancia": tol[metrica],
                 "regrediu": delta < -tol[metrica],
+                "informativa": metrica in METRICAS_INFORMATIVAS,
             }
         )
     return linhas
@@ -324,7 +347,7 @@ def decidir(
         )
 
     comparacoes = comparar(champion["metricas"], metricas_desafiante, tol)
-    regressoes = [c for c in comparacoes if c["regrediu"]]
+    regressoes = [c for c in comparacoes if c["regrediu"] and not c["informativa"]]
 
     if regressoes or furos_de_piso:
         motivos = []
@@ -362,7 +385,7 @@ def _avisos_de_tolerancia(tol: dict[str, float], positivos_no_fold: int | None) 
     avisa, sem bloquear (mudar tolerância é decisão humana)."""
     if positivos_no_fold is None or positivos_no_fold < POSITIVOS_PARA_REVISAR_TOLERANCIA:
         return []
-    frouxas = [m for m in ("recall_1", "f1_1") if tol[m] > 0.02]
+    frouxas = [m for m in METRICAS_DE_CONTAGEM if m in tol and tol[m] > 0.02]
     if not frouxas:
         return []
     return [
@@ -400,6 +423,9 @@ def montar_champion(
         "promovido_em": datetime.now(tz=fuso_da_clinica()).isoformat(timespec="seconds"),
         "motivo": decisao.motivo,
         "decision_threshold": PARAMS["decision"]["threshold"],
+        # A regra com que o desafiante foi medido e com que o job D-2 vai
+        # decidir por ele -- não o params.yaml do dia (ver src/decisao.py).
+        "decisao": decisao_mod.config_de_params(PARAMS).como_dict(),
         "taxa_disparo_projetada": decisao.taxa_disparo_projetada,
         "dataset": _info_dataset(),
         "metricas": {k: float(v) for k, v in sorted(metricas.items())},
@@ -456,10 +482,13 @@ def formatar_resumo(
             "|---|---:|---:|---:|---:|:--|",
         ]
         for c in decisao.comparacoes:
+            if c.get("informativa"):
+                veredito = "informativa (regrediu)" if c["regrediu"] else "informativa"
+            else:
+                veredito = "**regrediu**" if c["regrediu"] else "ok"
             linhas.append(
                 f"| `{c['metrica']}` | {c['campeao']:.4f} | {c['desafiante']:.4f} | "
-                f"{c['delta']:+.4f} | {c['tolerancia']:.3f} | "
-                f"{'**regrediu**' if c['regrediu'] else 'ok'} |"
+                f"{c['delta']:+.4f} | {c['tolerancia']:.3f} | {veredito} |"
             )
         linhas.append("")
     elif metricas_desafiante:
@@ -472,7 +501,8 @@ def formatar_resumo(
         linhas += [
             f"Taxa de disparo projetada no fold de teste: "
             f"**{decisao.taxa_disparo_projetada:.1%}** dos agendamentos receberiam "
-            "lembrete pago no threshold vigente.",
+            "lembrete pago pela regra de decisão vigente "
+            f"(`{decisao_mod.config_de_params(PARAMS).modo}`).",
             "",
         ]
 
@@ -556,16 +586,20 @@ def ler_relatorio_de_dados(path: str | None = None) -> dict[str, Any] | None:
 def taxa_de_disparo_projetada(
     model_path: str | None = None, test_path: str | None = None
 ) -> float | None:
-    """Fração do fold de teste que receberia lembrete pago no threshold
-    vigente. `None` se o fold ou o modelo não puderem ser lidos -- é um
-    número de acompanhamento, não pode derrubar a decisão do gate."""
+    """Fração do fold de teste que receberia lembrete pago pela regra de
+    decisão do `params.yaml` (`src/decisao.py`), com o fold inteiro no papel de
+    uma fila. No `top_fracao` ela é a fração configurada (arredondada para
+    cima), mais o que a `probabilidade_certa` forçar e menos o que a
+    `probabilidade_minima` barrar. `None` se o fold ou o modelo não puderem ser
+    lidos -- é um número de acompanhamento, não pode derrubar a decisão do
+    gate."""
     try:
         model, _ = inference.carregar_modelo(model_path or MODEL_PATH)
         X = joblib.load(test_path or TEST_PATH)["X"]
     except Exception:
         return None
-    threshold = float(PARAMS["decision"]["threshold"])
-    return float((inference.predizer(model, X) >= threshold).mean())
+    regra = decisao_mod.config_de_params(PARAMS)
+    return decisao_mod.taxa_de_disparo(inference.predizer(model, X), regra)
 
 
 def verificar_sanidade(model_path: str | None = None) -> sanidade_modelo.ResultadoSanidade:
@@ -589,6 +623,8 @@ def _aplicar_verificacoes_do_desafiante(decisao: Decisao) -> Decisao:
             "orçamento de mensageria prevê (BRIEFING: cortar 70%)"
         )
 
+    decisao.avisos += _avisos_da_regra()
+
     if sanidade.aprovado:
         return decisao
     reprovacao = "suíte de sanidade reprovou o desafiante: " + "; ".join(sanidade.falhas)
@@ -598,6 +634,23 @@ def _aplicar_verificacoes_do_desafiante(decisao: Decisao) -> Decisao:
     decisao.bootstrap = False
     decisao.motivo = motivo
     return decisao
+
+
+def _avisos_da_regra(params: dict[str, Any] | None = None) -> list[str]:
+    """As válvulas do `top_fracao` estão na escala da probabilidade: num
+    modelo sem calibração (balanceado, centrado em 0,5) elas cortam no lugar
+    errado. Avisa, sem bloquear."""
+    params = params or PARAMS
+    regra = decisao_mod.config_de_params(params)
+    calibracao = (params.get("model") or {}).get("calibracao", "none")
+    valvulas = regra.probabilidade_minima is not None or regra.probabilidade_certa is not None
+    if regra.modo == decisao_mod.MODO_TOP_FRACAO and valvulas and calibracao == "none":
+        return [
+            "decision.modo top_fracao com probabilidade_minima/probabilidade_certa e "
+            "model.calibracao none: as válvulas estão na escala da probabilidade, que sem "
+            "calibração não é a frequência real de faltas"
+        ]
+    return []
 
 
 def _bloquear_modelo_ja_revertido(decisao: Decisao) -> Decisao:
@@ -737,6 +790,7 @@ def main(argv: list[str] | None = None) -> int:
                 "mlflow_run_id": run_id,
                 "motivo": decisao.motivo,
                 "decision_threshold": novo["decision_threshold"],
+                "decisao": novo["decisao"],
                 "taxa_disparo_projetada": novo["taxa_disparo_projetada"],
                 "dataset": novo["dataset"],
                 "metricas": novo["metricas"],
